@@ -77,15 +77,15 @@ x86_64_exception_common:
     pushq %r15
 
     /*
-     * BoringKernel currently handles only CPL0 -> CPL0 exceptions. After
-     * the 15 saved GPRs the normalized hardware frame is
-     * vector,error,RIP,CS,RFLAGS. The interrupted RSP is therefore 160
-     * bytes above the current RSP. SS is read explicitly because the CPU
-     * does not push RSP/SS without a privilege transition.
+     * Long-mode exception entry has a hardware return frame containing
+     * RIP, CS, RFLAGS, RSP and SS even for CPL0 -> CPL0 delivery. After the
+     * 15 GPR pushes and normalized vector/error pair, the CPU-saved RSP and
+     * SS are at offsets 160 and 168 from this point. Copy those actual values
+     * to the two C-facing normalized fields while leaving the hardware words
+     * intact at the tail of the complete frame.
      */
-    leaq 160(%rsp), %rax
-    xorl %edx, %edx
-    movw %ss, %dx
+    movq 160(%rsp), %rax
+    movq 168(%rsp), %rdx
     pushq %rdx
     pushq %rax
 
