@@ -184,7 +184,7 @@ if ! grep -Eq '^Code selector: 0x[0-9A-F]{16}$' "${LOG}" ||
     status=1
 fi
 
-if grep -Eiq 'PMM self-test FAILED|Physical memory manager: FAILED|VMM: FAILED|VMM self-test FAILED|Kernel heap: FAILED|Heap self-test FAILED|Exception handling: FAILED|heap corruption|BoringKernel exception|Fatal exception|page fault|general protection fault' "${LOG}"; then
+if grep -Eiq 'PMM self-test FAILED|Physical memory manager: FAILED|VMM: FAILED|VMM self-test FAILED|Kernel heap: FAILED|Heap self-test FAILED|Exception handling: FAILED|heap corruption|Fatal exception: controlled halt|general protection fault' "${LOG}"; then
     echo 'kernel reported a failure during normal boot' >&2
     status=1
 fi
