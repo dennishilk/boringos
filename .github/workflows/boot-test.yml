@@ -18,5 +18,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential binutils curl xorriso qemu-system-x86
 
-      - name: Boot and verify BoringKernel
+      - name: Normal boot and IDT initialization
         run: ./tests/boot-qemu.sh
+
+      - name: Real divide exception
+        run: ./tests/exception-divide-qemu.sh
+
+      - name: Real page fault exception
+        run: ./tests/exception-pagefault-qemu.sh

@@ -15,7 +15,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-make -C "${ROOT}"
+make -C "${ROOT}" TEST_MODE=normal
 
 "${QEMU}" \
     -M q35 \
@@ -31,7 +31,7 @@ PID=$!
 
 attempt=0
 while [ "${attempt}" -lt 100 ]; do
-    if grep -Fqx 'BoringKernel heap test passed.' "${LOG}" 2>/dev/null; then
+    if grep -Fqx 'BoringKernel exception infrastructure test passed.' "${LOG}" 2>/dev/null; then
         break
     fi
 
@@ -46,7 +46,7 @@ done
 status=0
 for line in \
     'BoringOS booting...' \
-    'BoringKernel 0.0.4-dev' \
+    'BoringKernel 0.0.5-dev' \
     'Arch: x86_64' \
     'Hello from BoringKernel.' \
     'Physical memory manager:' \
@@ -92,7 +92,13 @@ for line in \
     '  bookkeeping: PASS' \
     'Allocation sizes tested: 1,16,64,200,6000,4096 bytes' \
     'Final used bytes: 0' \
-    'BoringKernel heap test passed.'
+    'BoringKernel heap test passed.' \
+    'Exception handling:' \
+    'IDT entries: 32' \
+    'IDTR limit: 4095' \
+    'IDT: loaded' \
+    'Exceptions: online' \
+    'BoringKernel exception infrastructure test passed.'
 do
     if ! grep -Fqx "${line}" "${LOG}"; then
         echo "missing serial line: ${line}" >&2
@@ -104,89 +110,82 @@ if ! grep -Eq '^Usable memory: [1-9][0-9]* bytes$' "${LOG}"; then
     echo 'missing or invalid runtime usable-memory value' >&2
     status=1
 fi
-
 if ! grep -Eq '^Usable frames: [1-9][0-9]*$' "${LOG}"; then
     echo 'missing or invalid runtime usable-frame count' >&2
     status=1
 fi
-
 if ! grep -Eq '^Active root table: [1-9][0-9]*$' "${LOG}"; then
     echo 'missing or invalid runtime CR3 root-table value' >&2
     status=1
 fi
-
 if ! grep -Eq '^HHDM offset: [1-9][0-9]*$' "${LOG}"; then
     echo 'missing or invalid runtime HHDM offset' >&2
     status=1
 fi
-
 if ! grep -Eq '^Test virtual address: [1-9][0-9]*$' "${LOG}"; then
     echo 'missing or invalid VMM test virtual address' >&2
     status=1
 fi
-
 if ! grep -Eq '^Page-table frames allocated: [0-9]+$' "${LOG}"; then
     echo 'missing runtime page-table allocation count' >&2
     status=1
 fi
-
 if ! grep -Eq '^Test physical frame: [1-9][0-9]*$' "${LOG}"; then
     echo 'missing runtime VMM test physical frame' >&2
     status=1
 fi
-
 if ! grep -Eq '^Translation result: [1-9][0-9]*$' "${LOG}"; then
     echo 'missing runtime VMM translation result' >&2
     status=1
 fi
-
 if ! grep -Eq '^Virtual base: [1-9][0-9]*$' "${LOG}"; then
     echo 'missing or invalid heap virtual base' >&2
     status=1
 fi
-
 if ! grep -Eq '^Virtual limit: [1-9][0-9]*$' "${LOG}"; then
     echo 'missing or invalid heap virtual limit' >&2
     status=1
 fi
-
 if ! grep -Eq '^Free payload: [1-9][0-9]* bytes$' "${LOG}"; then
     echo 'missing or invalid initial heap free-payload value' >&2
     status=1
 fi
-
 if ! grep -Eq '^Initial PMM frames consumed: [1-9][0-9]*$' "${LOG}"; then
     echo 'missing or invalid initial heap PMM-frame count' >&2
     status=1
 fi
-
 if ! grep -Eq '^Initial page-table frames: [0-9]+$' "${LOG}"; then
     echo 'missing initial heap page-table-frame count' >&2
     status=1
 fi
-
 if ! grep -Eq '^Growth mappings created: [1-9][0-9]*$' "${LOG}"; then
     echo 'heap self-test did not prove mapping growth' >&2
     status=1
 fi
-
 if ! grep -Eq '^Growth PMM frames consumed: [1-9][0-9]*$' "${LOG}"; then
     echo 'heap self-test did not prove PMM-backed growth' >&2
     status=1
 fi
-
 if ! grep -Eq '^Final mapped pages: [3-9][0-9]*$' "${LOG}"; then
     echo 'heap self-test did not retain grown mapped capacity' >&2
     status=1
 fi
-
 if ! grep -Eq '^Final free bytes: [1-9][0-9]*$' "${LOG}"; then
     echo 'missing or invalid final heap free-byte count' >&2
     status=1
 fi
+if ! grep -Eq '^IDTR base: 0x[0-9A-F]{16}$' "${LOG}"; then
+    echo 'missing or invalid loaded IDTR base' >&2
+    status=1
+fi
+if ! grep -Eq '^Code selector: 0x[0-9A-F]{16}$' "${LOG}" ||
+   grep -Fqx 'Code selector: 0x0000000000000000' "${LOG}"; then
+    echo 'missing or invalid kernel code selector' >&2
+    status=1
+fi
 
-if grep -Eiq 'PMM self-test FAILED|Physical memory manager: FAILED|VMM: FAILED|VMM self-test FAILED|Kernel heap: FAILED|Heap self-test FAILED|heap corruption|page fault|general protection fault' "${LOG}"; then
-    echo 'kernel reported a memory-management failure' >&2
+if grep -Eiq 'PMM self-test FAILED|Physical memory manager: FAILED|VMM: FAILED|VMM self-test FAILED|Kernel heap: FAILED|Heap self-test FAILED|Exception handling: FAILED|heap corruption|BoringKernel exception|Fatal exception|page fault|general protection fault' "${LOG}"; then
+    echo 'kernel reported a failure during normal boot' >&2
     status=1
 fi
 

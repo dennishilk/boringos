@@ -58,3 +58,15 @@ void serial_write_u64(uint64_t value) {
         serial_write_char(digits[count]);
     }
 }
+
+void serial_write_hex_u64(uint64_t value) {
+    static const char digits[] = "0123456789ABCDEF";
+    unsigned int nibble_index;
+
+    serial_write_string("0x");
+    for (nibble_index = 0U; nibble_index < 16U; ++nibble_index) {
+        const unsigned int shift = (15U - nibble_index) * 4U;
+        const uint8_t digit = (uint8_t)((value >> shift) & 0x0fULL);
+        serial_write_char(digits[digit]);
+    }
+}

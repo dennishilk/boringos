@@ -13,28 +13,46 @@ QEMU = qemu-system-x86_64
 CURL = curl
 XORRISO = xorriso
 
+TEST_MODE ?= normal
+ifeq ($(TEST_MODE),normal)
+TEST_MODE_VALUE := 0
+else ifeq ($(TEST_MODE),divide)
+TEST_MODE_VALUE := 1
+else ifeq ($(TEST_MODE),pagefault)
+TEST_MODE_VALUE := 2
+else
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, or pagefault)
+endif
+
 LIMINE_VERSION := 12.5.2
 LIMINE_ARCHIVE := $(BUILD_DIR)/deps/limine-binary.tar.gz
 LIMINE_DIR := $(BUILD_DIR)/deps/limine-binary
 LIMINE_SHA256 := 4c760c09c53560d859b362319a3dc63b79cca3d47f35d69ab0106a13b8057055
 LIMINE_URL := https://github.com/Limine-Bootloader/Limine/releases/download/v$(LIMINE_VERSION)/limine-binary.tar.gz
 
-CPPFLAGS := -Ikernel/include
+CPPFLAGS := -Ikernel/include -DBORING_TEST_MODE=$(TEST_MODE_VALUE)
 CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
 	-m64 -mno-80387 -mno-mmx -mno-sse -mno-sse2 \
 	-mno-red-zone -mcmodel=kernel -O2 -g \
 	-Wall -Wextra -Wpedantic -Werror \
 	-Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes
+ASFLAGS := -ffreestanding -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel
 LDFLAGS := -nostdlib -static -z max-page-size=0x1000 -T kernel/linker/x86_64.ld
 
-KERNEL_SOURCES := \
+KERNEL_C_SOURCES := \
 	kernel/core/entry.c \
 	kernel/core/pmm.c \
 	kernel/core/heap.c \
 	kernel/arch/x86_64/vmm.c \
+	kernel/arch/x86_64/exception.c \
 	kernel/arch/x86_64/serial.c \
 	kernel/arch/x86_64/cpu.c
-KERNEL_OBJECTS := $(patsubst %.c,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_SOURCES))
+KERNEL_ASM_SOURCES := \
+	kernel/arch/x86_64/exception_stubs.S
+KERNEL_C_OBJECTS := $(patsubst %.c,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_C_SOURCES))
+KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCES))
+KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
+MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
 
 .PHONY: all kernel run run-headless test clean distclean
 
@@ -42,9 +60,18 @@ all: $(ISO)
 
 kernel: $(KERNEL_ELF)
 
-$(KERNEL_BUILD_DIR)/%.o: %.c
+$(MODE_STAMP):
+	@mkdir -p $(BUILD_DIR)
+	@rm -f $(BUILD_DIR)/.test-mode-*
+	@touch $@
+
+$(KERNEL_BUILD_DIR)/%.o: %.c $(MODE_STAMP)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(KERNEL_BUILD_DIR)/%.o: %.S $(MODE_STAMP)
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(ASFLAGS) -c $< -o $@
 
 $(KERNEL_ELF): $(KERNEL_OBJECTS) kernel/linker/x86_64.ld
 	@mkdir -p $(dir $@)
@@ -87,6 +114,8 @@ run-headless: run
 
 test:
 	./tests/boot-qemu.sh
+	./tests/exception-divide-qemu.sh
+	./tests/exception-pagefault-qemu.sh
 
 clean:
 	rm -rf $(BUILD_DIR)
