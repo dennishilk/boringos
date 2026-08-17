@@ -13,13 +13,13 @@ Es ist **keine Linux-Distribution**, **keine BSD-Distribution** und **basiert we
 
 **Extrem früher Bootstrap-Kernel.**
 
-BoringKernel bootet unter **QEMU x86_64**. Limine bleibt der externe Bootloader. Nach der Übergabe initialisiert BoringKernel die serielle COM1-Ausgabe, verarbeitet Limines Memory Map für seinen 4096-Byte-Physical-Page-Frame-Allocator, kontrolliert ausgewählte x86_64-4-KiB-Virtual-to-Physical-Mappings, besitzt einen begrenzten dynamischen Kernel-Heap, eine eigene x86_64-IDT für CPU-Exception-Vektoren 0–31 und kann jetzt zusätzlich einen echten periodischen Legacy-Hardware-Timer-Interrupt empfangen und aus ihm zurückkehren.
+BoringKernel bootet unter **QEMU x86_64**. Limine bleibt der externe Bootloader. Nach der Übergabe initialisiert BoringKernel die serielle COM1-Ausgabe, verarbeitet Limines Memory Map für seinen 4096-Byte-Physical-Page-Frame-Allocator, kontrolliert ausgewählte x86_64-4-KiB-Virtual-to-Physical-Mappings, besitzt einen begrenzten dynamischen Kernel-Heap, eine eigene x86_64-IDT für CPU-Exceptions und Bootstrap-PIC-IRQs, empfängt echte periodische PIT-Timer-Interrupts und kann jetzt zusätzlich bewusst zwischen unabhängigen Kernel-Ausführungskontexten wechseln.
 
 Die aktuelle serielle Ausgabe beginnt mit:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.6-dev
+BoringKernel 0.0.7-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```
@@ -28,15 +28,21 @@ Der VMM übernimmt bewusst die aktuell aktive, von Limine erzeugte vierstufige P
 
 Der Kernel-Heap reserviert einen endlichen 16-MiB-Virtual-Address-Bereich, mappt initial nur zwei 4-KiB-Seiten, wächst jeweils um eine Seite über PMM + VMM, verwendet deterministisches First-Fit mit 16-Byte-Ausrichtung und führt benachbarte freie Blöcke wieder zusammen. Bereits gemappte Heap-Seiten bleiben in dieser Bootstrap-Phase nach `kfree` bewusst erhalten.
 
-BoringKernel besitzt eine 256 Einträge große x86_64-IDT. Die CPU-Exception-Vektoren 0–31 bleiben DPL0-Interrupt-Gates, und die separaten QEMU-Acceptance-Modi beweisen weiterhin einen **echten CPU-Divide-Error** und einen **echten MMU-Page-Fault** über BoringKernels eigene Entry-Stubs und C-Exception-Diagnostik.
+BoringKernel besitzt eine 256 Einträge große x86_64-IDT. Die CPU-Exception-Vektoren 0–31 bleiben DPL0-Interrupt-Gates, und separate QEMU-Acceptance-Modi beweisen weiterhin einen **echten CPU-Divide-Error** und einen **echten MMU-Page-Fault** über BoringKernels eigene Entry-Stubs und C-Exception-Diagnostik.
 
-Der neue Bootstrap-Hardware-Interrupt-Pfad installiert Gates für die PIC-Vektoren 32–47, remappt den Legacy-8259-PIC auf Vektoren 32–39 / 40–47, maskiert zunächst sämtliche PIC-IRQs, programmiert PIT Channel 0 auf angeforderte 100 Hz und gibt anschließend ausschließlich IRQ0 frei. Der normale QEMU-Test aktiviert Interrupts erst nach der Validierung dieses Zustands und verlangt mindestens zehn echte IRQ0-Auslieferungen. Jeder Timer-IRQ erhöht einen Tick-Zähler, sendet das erforderliche PIC-End-Of-Interrupt und kehrt mit `iretq` zurück; Scheduler oder Task-Switching existieren nicht.
+Der Bootstrap-Hardware-Interrupt-Pfad installiert Gates für die PIC-Vektoren 32–47, remappt den Legacy-8259-PIC auf Vektoren 32–39 / 40–47, maskiert zunächst sämtliche PIC-IRQs, programmiert PIT Channel 0 auf angeforderte 100 Hz und gibt anschließend ausschließlich IRQ0 frei. Der normale QEMU-Test verlangt wiederholte echte IRQ0-Auslieferungen. Jeder Timer-IRQ erhöht einen Tick-Zähler, sendet das erforderliche PIC-End-Of-Interrupt und kehrt mit `iretq` zurück.
 
-Für diesen bewusst historischen PIC/PIT-Nachweis bleibt die QEMU-Referenz `q35`, verwendet aber einen einzelnen Bootstrap-CPU mit explizit deaktiviertem Local-APIC-Feature (`qemu64,apic=off`). Damit wird nicht stillschweigend LAPIC-Konfiguration in einen PIC-only-Meilenstein hineingezogen. PIC/PIT ist temporäre Bootstrap-Infrastruktur und soll später durch eine moderne APIC-basierte Interrupt-Architektur ersetzt werden.
+BoringKernel besitzt jetzt außerdem eine bewusst kleine **kooperative Kernel-Task-Schicht**. Jeder erzeugte Task erhält einen unabhängigen, 16 KiB großen, vom Kernel-Heap bereitgestellten Stack und einen minimalen SysV-AMD64-Kontext aus `RSP`, `RBX`, `RBP` und `R12`–`R15`. Eine kleine architekturspezifische Routine wechselt diese Kontexte ausschließlich dann, wenn Kernelcode explizit `task_yield()` aufruft. Neue Tasks beginnen über einen C-Trampoline; die normale Rückkehr einer Task-Funktion markiert sie automatisch als `FINISHED`, und der Selektor überspringt beendete Tasks, bevor er schließlich den gespeicherten Bootstrap-Kontext wiederherstellt.
 
-BoringKernel besitzt damit **partielle gezielte Virtual-Memory-Kontrolle, einen funktionierenden begrenzten Bootstrap-Kernel-Heap, einen funktionierenden fatalen CPU-Exception-Pfad und einen verifizierten periodischen Hardware-IRQ-Pfad**. Der Kernel besitzt weiterhin nicht den vollständigen Adressraum und bleibt Single-Core-Bootstrap-Software.
+Der normale QEMU-Acceptance-Test erzeugt zwei unabhängige Tasks und beweist echte alternierende Context-Switches, das Überleben task-lokalen Stackzustands, explizite Erhaltung der Callee-Saved-Register, saubere Task-Rückkehr, Stack-Cleanup und weiterlaufende PIT-Ticks. Der akzeptierte Branch-Run beobachtete **7 Context-Switches**, während die Timer-Ticks von **10 auf 16** fortschritten.
 
-Es gibt **noch keinen Scheduler, keine Präemption, Threads, Prozesse, Ring 3, Syscall-Schicht, kein Dateisystem, keinen Storage-Stack, kein Networking, keine grafische Umgebung und keinen Input-Stack**. LAPIC, IOAPIC, HPET, ACPI/MADT und SMP sind ebenfalls nicht implementiert.
+Das ist **ausschließlich kooperatives Multitasking**. Der PIT-Interrupt-Handler ruft den Task-Selektor nicht auf und führt keinen Context-Switch durch. Es gibt keine timergetriebene Präemption und keinen Timeslice-Mechanismus.
+
+Für den bewusst historischen PIC/PIT-Nachweis bleibt die QEMU-Referenz `q35`, verwendet aber einen einzelnen Bootstrap-CPU mit explizit deaktiviertem Local-APIC-Feature (`qemu64,apic=off`). Damit wird nicht stillschweigend LAPIC-Konfiguration in den PIC-only-Bootstrap-Pfad hineingezogen. PIC/PIT ist temporäre Infrastruktur und soll später durch eine moderne APIC-basierte Interrupt-Architektur ersetzt werden.
+
+BoringKernel besitzt damit **partielle gezielte Virtual-Memory-Kontrolle, einen funktionierenden begrenzten Bootstrap-Kernel-Heap, einen funktionierenden fatalen CPU-Exception-Pfad, einen verifizierten periodischen Hardware-IRQ-Pfad und verifiziertes kooperatives Umschalten zwischen unabhängigen Kernel-Ausführungskontexten**. Der Kernel besitzt weiterhin nicht den vollständigen Adressraum und bleibt Single-Core-Bootstrap-Software.
+
+Es gibt **noch keine Präemption, kein User-Prozessmodell, Ring 3, keine Syscall-Schicht, kein Dateisystem, keinen Storage-Stack, kein Networking, keine grafische Umgebung und keinen Input-Stack**. LAPIC, IOAPIC, HPET, ACPI/MADT und SMP sind ebenfalls nicht implementiert. Die kooperative Task-Schicht besitzt keine Sleeping-/Blocking-Zustände, Prioritäten, Synchronisationsprimitive oder FPU/SIMD-Kontextverwaltung.
 
 ## Technische Richtung
 
@@ -57,9 +63,9 @@ make
 make run
 ```
 
-Der aktuelle Bootstrap-QEMU-Befehl hinter `make run` verwendet weiterhin `q35`, deaktiviert für den derzeitigen PIC/PIT-only-Referenzpfad jedoch explizit das Local-APIC-CPU-Feature.
+Der aktuelle Bootstrap-QEMU-Befehl hinter `make run` verwendet weiterhin `q35`, deaktiviert für den derzeitigen PIC/PIT-Referenzpfad jedoch explizit das Local-APIC-CPU-Feature.
 
-Die vollständige Acceptance-Suite baut BoringOS im normalen Modus und in den absichtlichen Fatal-Test-Modi neu. Sie prüft PMM, VMM, Heap, IDT-Initialisierung, wiederholte echte PIT/PIC-IRQ0-Auslieferung, einen echten Divide Error und einen echten Page Fault:
+Die vollständige Acceptance-Suite baut BoringOS im normalen Modus und in den absichtlichen Fatal-Test-Modi neu. Sie prüft PMM, VMM, Heap, IDT-Initialisierung, wiederholte echte PIT/PIC-IRQ0-Auslieferung, kooperatives Kernel-Context-Switching, einen echten Divide Error und einen echten Page Fault:
 
 ```sh
 make test
@@ -67,7 +73,7 @@ make test
 
 Die Exception-Modi sind interne Entwicklungs-/Acceptance-Modi und kein benutzerseitiges Runtime-Testframework.
 
-Siehe [`docs/architecture.md`](docs/architecture.md), [`docs/interrupts.md`](docs/interrupts.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md) und [`docs/boringfs.md`](docs/boringfs.md).
+Siehe [`docs/architecture.md`](docs/architecture.md), [`docs/interrupts.md`](docs/interrupts.md), [`docs/tasks.md`](docs/tasks.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md) und [`docs/boringfs.md`](docs/boringfs.md).
 
 ## Bewusst keine frühen Ziele
 
