@@ -13,20 +13,24 @@ Es ist **keine Linux-Distribution**, **keine BSD-Distribution** und **basiert we
 
 **Extrem früher Bootstrap-Kernel.**
 
-BoringKernel bootet unter **QEMU x86_64**. Limine dient ausschließlich als externer Bootloader; nach der Übergabe erreicht die Ausführung den freestanding BoringKernel-Einstiegspunkt. BoringKernel initialisiert die serielle COM1-Ausgabe und verarbeitet jetzt zusätzlich die von Limine gelieferte Memory Map für einen minimalen 4096-Byte-Physical-Page-Frame-Allocator mit Allocate/Free und einem In-Kernel-Selbsttest unter QEMU.
+BoringKernel bootet unter **QEMU x86_64**. Limine bleibt der externe Bootloader. Nach der Übergabe initialisiert BoringKernel die serielle COM1-Ausgabe, verarbeitet Limines Memory Map für seinen 4096-Byte-Physical-Page-Frame-Allocator und kontrolliert jetzt zusätzlich ausgewählte x86_64-4-KiB-Virtual-to-Physical-Mappings.
 
 Die aktuelle serielle Ausgabe beginnt mit:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.2-dev
+BoringKernel 0.0.3-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```
 
-Der Boot-Acceptance-Test prüft zusätzlich die PMM-Initialisierung, die zur Laufzeit ermittelten Werte für nutzbaren Speicher und Frames, eindeutige ausgerichtete Allocations innerhalb gültiger usable-RAM-Bereiche, Free/Reuse sowie konsistente Buchhaltung.
+Der VMM übernimmt bewusst die aktuell aktive, von Limine erzeugte vierstufige Page-Table-Root-Struktur, statt sofort den gesamten Adressraum zu ersetzen. Fehlende Page-Table-Frames kommen aus dem PMM, physischer Page-Table-Speicher wird über Limines gemeldete HHDM-Abbildung erreicht, normale 4-KiB-Kernel-Seiten können gemappt, zurückübersetzt und wieder entfernt werden, und geänderte Übersetzungen werden mit `invlpg` invalidiert.
 
-Das System bleibt absichtlich winzig. Es gibt **noch keinen allgemeinen Kernel-Heap, keinen BoringKernel-eigenen Virtual-Memory-Manager, Userspace, Scheduler, kein Dateisystem, Networking, keine grafische Umgebung, keinen Input-Stack, Interrupt-Unterbau oder Prozessmodell**.
+Der automatisierte QEMU-Acceptance-Test prüft weiterhin alle PMM-Invarianten und zusätzlich einen echten VMM-Mapping-Test, der Daten durch ein neu erzeugtes virtuelles Mapping schreibt und wieder liest, bevor das Mapping entfernt und alle test-eigenen Frames zurückgegeben werden.
+
+BoringKernel besitzt damit **partielle, gezielte Kontrolle über virtuellen Speicher**, aber noch nicht den vollständigen Adressraum. Kernel-Ausführung, aktueller Stack, HHDM und Boot-Strukturen hängen weiterhin von geerbten Limine-Mappings ab.
+
+Das System bleibt absichtlich winzig. Es gibt **noch keinen allgemeinen Kernel-Heap, Userspace, Scheduler, kein Dateisystem, Networking, keine grafische Umgebung, keinen Input-Stack, Exception-/Interrupt-Unterbau oder Prozessmodell**.
 
 ## Technische Richtung
 
@@ -47,7 +51,7 @@ make
 make run
 ```
 
-Der automatisierte Acceptance-Test baut BoringOS neu, startet QEMU headless, erfasst die serielle Konsole und prüft sowohl die Boot-Identität als auch den Physical-Memory-Selbsttest:
+Der automatisierte Acceptance-Test baut BoringOS neu, startet QEMU headless, erfasst die serielle Konsole und prüft Boot-Identität, PMM sowie den ausgewählten VMM-Mapping-Selbsttest:
 
 ```sh
 make test
