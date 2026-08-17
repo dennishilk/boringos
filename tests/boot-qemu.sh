@@ -31,7 +31,7 @@ PID=$!
 
 attempt=0
 while [ "${attempt}" -lt 100 ]; do
-    if grep -Fqx 'BoringKernel physical memory test passed.' "${LOG}" 2>/dev/null; then
+    if grep -Fqx 'BoringKernel virtual memory test passed.' "${LOG}" 2>/dev/null; then
         break
     fi
 
@@ -46,7 +46,7 @@ done
 status=0
 for line in \
     'BoringOS booting...' \
-    'BoringKernel 0.0.2-dev' \
+    'BoringKernel 0.0.3-dev' \
     'Arch: x86_64' \
     'Hello from BoringKernel.' \
     'Physical memory manager:' \
@@ -60,7 +60,20 @@ for line in \
     '  free: PASS' \
     '  invalid-free: PASS' \
     '  bookkeeping: PASS' \
-    'BoringKernel physical memory test passed.'
+    'BoringKernel physical memory test passed.' \
+    'Virtual memory manager:' \
+    'Paging: x86_64 4-level' \
+    'VMM: online' \
+    'VMM self-test:' \
+    '  frame-allocation: PASS' \
+    '  unmapped-check: PASS' \
+    '  map: PASS' \
+    '  translate: PASS' \
+    '  write-read: PASS' \
+    '  unmap: PASS' \
+    '  frame-release: PASS' \
+    'Test pattern: 0x424F52494E474F53' \
+    'BoringKernel virtual memory test passed.'
 do
     if ! grep -Fqx "${line}" "${LOG}"; then
         echo "missing serial line: ${line}" >&2
@@ -78,13 +91,38 @@ if ! grep -Eq '^Usable frames: [1-9][0-9]*$' "${LOG}"; then
     status=1
 fi
 
-if grep -Fq 'PMM self-test FAILED' "${LOG}"; then
-    echo 'kernel reported a PMM self-test failure' >&2
+if ! grep -Eq '^Active root table: [1-9][0-9]*$' "${LOG}"; then
+    echo 'missing or invalid runtime CR3 root-table value' >&2
     status=1
 fi
 
-if grep -Fq 'Physical memory manager: FAILED' "${LOG}"; then
-    echo 'kernel reported PMM initialization failure' >&2
+if ! grep -Eq '^HHDM offset: [1-9][0-9]*$' "${LOG}"; then
+    echo 'missing or invalid runtime HHDM offset' >&2
+    status=1
+fi
+
+if ! grep -Eq '^Test virtual address: [1-9][0-9]*$' "${LOG}"; then
+    echo 'missing or invalid VMM test virtual address' >&2
+    status=1
+fi
+
+if ! grep -Eq '^Page-table frames allocated: [0-9]+$' "${LOG}"; then
+    echo 'missing runtime page-table allocation count' >&2
+    status=1
+fi
+
+if ! grep -Eq '^Test physical frame: [1-9][0-9]*$' "${LOG}"; then
+    echo 'missing runtime VMM test physical frame' >&2
+    status=1
+fi
+
+if ! grep -Eq '^Translation result: [1-9][0-9]*$' "${LOG}"; then
+    echo 'missing runtime VMM translation result' >&2
+    status=1
+fi
+
+if grep -Eiq 'PMM self-test FAILED|Physical memory manager: FAILED|VMM: FAILED|VMM self-test FAILED|page fault|general protection fault' "${LOG}"; then
+    echo 'kernel reported a memory-management failure' >&2
     status=1
 fi
 
