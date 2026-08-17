@@ -15,7 +15,7 @@ COM1 serial output
     ↓
 PMM
     ↓
-selected 4-KiB VMM mappings
+selected bootstrap VMM mappings
     ↓
 bounded kernel heap
     ↓
@@ -26,30 +26,47 @@ legacy PIC + PIT IRQ0
 cooperative kernel contexts
     ↓
 real timer-driven preemptive kernel scheduling
+    ↓
+process identity + independent x86_64 address spaces
+    ↓
+scheduler-integrated CR3 switching
 ```
 
-BoringKernel currently runs only in ring 0. It owns a bounded PMM, selected VMM mappings in the inherited Limine address space, a bounded kernel heap, its own x86_64 IDT, real Divide Error and Page Fault diagnostics, a real PIT/PIC timer path, cooperative kernel contexts, and a verified timer-driven preemptive scheduler for independent kernel tasks.
+BoringKernel **0.0.9-dev** still executes only in CPL0, but it now has a real distinction between tasks and processes. A task is an execution/scheduling entity; a process is an identity plus address-space owner.
 
-The current preemptive path uses a complete 192-byte x86_64 interrupt frame retained on each task's own 16-KiB stack, deterministic one-tick round robin, EOI-before-frame-restore ordering, and `iretq` to resume either a fresh or previously preempted task. The merged-main acceptance test proves repeated hardware-triggered preemption without `task_yield()` in either CPU-bound stress task.
+PID 0 represents the inherited bootstrap/kernel address space. New process roots are allocated from PMM. PML4 slots 0–255 are process-private in the current bootstrap model, while slots 256–511 are shared from the bootstrap root so kernel code/data, HHDM, heap, task stacks, interrupt code and scheduler state remain available in every current process address space.
 
-The accepted merged-main proof observed:
+The process layer owns only page-table frames allocated specifically for that process. It never frees the inherited bootstrap/Limine root, shared higher-half tables, VMM-owned shared tables, or page tables belonging to another process.
+
+The merged-main acceptance proof creates PID 1 and PID 2, maps the same lower-half virtual address to different physical frames, performs real CR3 switches, dereferences the same VA through each active address space, and then lets the real PIT scheduler switch between two process-owned CPU-bound tasks with no `task_yield()` calls.
+
+The accepted process-isolation values were:
 
 ```text
-Timer ticks during test: 7
-Scheduler ticks: 7
-Preemptions: 7
-Task A slices: 3
-Task B slices: 3
-Task A resumes: 2
-Task B resumes: 2
-Cooperative yields during test: 0
+Test virtual address:     0x0000004000000000
+Process A PID:            1
+Process B PID:            2
+Process A root:           0x0000000000078000
+Process B root:           0x0000000000079000
+Process A physical frame: 0x000000000007A000
+Process B physical frame: 0x000000000007B000
+Address-space switches:   18
+Preemptive CR3 switches:   7
+Process A slices:           3
+Process B slices:           3
 ```
 
-Task-local stack state, full integer GPR state, stack sentinels, finished-task skipping, bootstrap return, stack cleanup, heap bookkeeping, the cooperative scheduler regression, real Divide Error and real Page Fault tests all remained green.
+PID 1 writes and later rereads `0xAAAAAAAAAAAAAAAA` at the shared test VA. PID 2 independently writes and later rereads `0xBBBBBBBBBBBBBBBB` at the same VA. The scheduler restores PID 0/bootstrap CR3 afterward, and process-owned mappings, page tables and data frames are reclaimed with PMM bookkeeping verified.
 
-For the deliberately legacy bootstrap timer proof, QEMU remains `q35` with one `qemu64,apic=off` CPU. No LAPIC/IOAPIC configuration is implemented. The active page-table root and boot-critical mappings remain inherited from Limine.
+All earlier PMM, VMM, heap, IRQ/EOI, cooperative task, full-GPR preemption, Divide Error and Page Fault acceptance checks remain green.
 
-There is still **no process model, separate per-process address space, ring 3, syscall layer, userspace loader, VFS, RAMFS, block-device stack, BoringFS implementation, init, or shell**.
+For the deliberately legacy bootstrap timer proof, QEMU remains:
+
+```text
+-M q35 -cpu qemu64,apic=off -m 128M
+```
+
+There is still **no ring 3, syscall layer, userspace loader, VFS, RAMFS, block-device stack, BoringFS implementation, init, shell, networking, SMP or modern APIC timer path**.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -86,7 +103,7 @@ Implemented and accepted in QEMU:
 - reclaim only VMM-owned empty tables;
 - restore PMM/VMM bookkeeping after the self-test.
 
-This is selected mapping control, not complete address-space ownership.
+This original VMM remains the selected-mapping manager for the inherited PID-0/bootstrap root. Milestone 8 adds separate process address-space roots without rewriting that established bootstrap VMM.
 
 ## Milestone 3: kernel heap — COMPLETE
 
@@ -171,55 +188,26 @@ The accepted cooperative proof observed seven real cooperative context switches 
 
 Implemented, merged and accepted on `main` in QEMU:
 
-- retain the existing cooperative call-boundary context as a separate mechanism;
-- use a complete **192-byte x86_64 interrupt frame** for arbitrary-instruction preemption;
-- preserve all integer GPRs plus `RIP`, `CS`, `RFLAGS`, `RSP` and `SS` required by the current ring-0 restore path;
+- keep cooperative call-boundary context separate from interrupt-time context;
+- use a complete 192-byte x86_64 interrupt frame for arbitrary-instruction preemption;
+- preserve all integer GPRs plus `RIP`, `CS`, `RFLAGS`, `RSP` and `SS`;
 - retain an interrupted task's frame on that task's own 16-KiB stack;
 - let C scheduling policy select the frame that IRQ assembly restores;
-- acknowledge the PIC **before** assembly abandons the interrupted IRQ stack;
+- acknowledge the PIC before assembly abandons the interrupted IRQ stack;
 - restore the selected context through full GPR restore + `iretq`;
-- use deterministic fixed-table round robin;
-- use **one PIT tick per scheduling quantum**;
-- prepare never-run preemptive tasks with a complete synthetic restore/`iretq` frame on their own stack;
-- preserve correct SysV AMD64 task-trampoline stack alignment;
-- save the bootstrap kernel's genuine PIT interrupt frame and later restore it rather than copying/recreating the boot stack;
-- use short IF-off critical sections around task/scheduler metadata mutation and stack destruction;
-- perform no allocation, freeing, PMM/VMM work or serial logging in the timer scheduling path;
-- keep normal task-entry return as `FINISHED` and never reschedule finished tasks;
-- clean up finished stacks only after safely returning to bootstrap;
-- add two CPU-bound preemption stress tasks containing no `task_yield()` calls;
-- prove both tasks make repeated progress only because of real PIT preemption;
-- prove task-local counters/checksums survive repeated interrupt-time suspension/resumption;
-- prove stack isolation and sentinel integrity;
-- prove full integer GPR preservation with an assembly-assisted live-register probe;
-- track timer ticks, scheduler ticks and actual preemptions separately;
-- retain and pass the cooperative scheduler, PMM, VMM, heap, IRQ/EOI, Divide Error and Page Fault regression suites.
+- deterministic fixed-table round robin;
+- one PIT tick per scheduling quantum;
+- synthetic full restore frames for never-run preemptive tasks;
+- clean bootstrap IRQ-frame restoration;
+- no allocation or serial logging in the timer scheduling path;
+- CPU-bound stress tasks with no `task_yield()`;
+- full integer GPR preservation proof;
+- stack/local-state/cleanup/bookkeeping validation;
+- retained PMM/VMM/heap/IRQ/#DE/#PF regressions.
 
-The merged-main acceptance proof reported:
+The accepted preemption proof observed:
 
 ```text
-Preemptive scheduler:
-Policy: round-robin
-Timer source: PIT IRQ0
-Timer vector: 32
-Quantum: 1 tick
-Preemption: enabled during test
-
-Preemption self-test:
-  task-a-progress: PASS
-  task-b-progress: PASS
-  no-cooperative-yield: PASS
-  repeated-preemption: PASS
-  stack-isolation: PASS
-  local-state: PASS
-  register-state: PASS
-  timer-delivery: PASS
-  bootstrap-return: PASS
-  finished-task-skip: PASS
-  stack-sentinel: PASS
-  stack-cleanup: PASS
-  heap-bookkeeping: PASS
-
 Timer ticks during test: 7
 Scheduler ticks: 7
 Preemptions: 7
@@ -230,31 +218,103 @@ Task B resumes: 2
 Cooperative yields during test: 0
 ```
 
-This milestone proves that BoringKernel can preempt one running **kernel task** with a real PIT hardware interrupt, schedule another independent kernel task, and later resume the original task at its interrupted execution point.
+Milestone 7 proves timer-driven switching between kernel tasks. Milestone 8 extends that scheduler so a selected task may also carry an independent process address space.
 
-It does **not** prove processes, userspace multitasking, separate address spaces, SMP scheduling, or modern APIC timer support.
+## Milestone 8: process and address-space model — COMPLETE
 
-## Milestone 8: process and address-space model — NEXT
+Implemented, merged and accepted on `main` in QEMU:
 
-Define the smallest real process object and independent address-space ownership model.
+- keep **task** and **process** as separate concepts;
+- introduce a bounded minimal process object with PID, state and address-space ownership;
+- reserve PID 0 for the bootstrap/kernel process;
+- allocate deterministic PID 1 and PID 2 test processes;
+- represent the inherited active CR3 root explicitly as PID 0's non-destroyable bootstrap address space;
+- introduce an explicit x86_64 `address_space` object with root physical address and owned page-table-frame tracking;
+- create new PMM-backed process PML4 roots;
+- keep PML4 slots 0–255 private to each process in the current bootstrap model;
+- share/copy PML4 entries 256–511 from PID 0 so required higher-half kernel mappings remain executable;
+- explicitly protect inherited/shared kernel page tables from process destruction;
+- provide explicit create/activate/map/translate/unmap/destroy address-space operations;
+- add a tiny architecture-specific CR3 write operation and avoid unnecessary reload when a requested root is already active;
+- use real CR3 loads as the broad TLB invalidation mechanism for this bootstrap model;
+- centrally reserve process test VA `0x0000004000000000`;
+- map that same VA to distinct PMM data frames in PID 1 and PID 2;
+- prove same-VA/different-PA translation;
+- activate each real root and dereference the test VA through the CPU rather than through an HHDM physical alias;
+- write/retain `0xAAAAAAAAAAAAAAAA` in PID 1 and `0xBBBBBBBBBBBBBBBB` in PID 2;
+- extend tasks with an owning-process pointer;
+- make the scheduler activate the selected task's process root before returning the selected interrupt frame;
+- preserve PIC EOI before the assembly task-stack/frame switch;
+- bind one non-yielding CPU-bound task to PID 1 and one to PID 2;
+- prove real PIT preemption repeatedly switches both task context and CR3;
+- prove each process-owned task observes only its own pattern at the identical VA;
+- restore task 0 + PID 0/bootstrap CR3 after the test;
+- free finished task stacks before process destruction;
+- unmap private process pages and reclaim only process-owned empty PT/PD/PDPT/root frames;
+- free process test data frames back to PMM;
+- verify process/address-space cleanup and PMM/heap/VMM bookkeeping;
+- retain and pass all existing PMM, VMM, heap, exception, IRQ, cooperative-task, full-GPR preemption, Divide Error and Page Fault regressions.
+
+The merged-main process/address-space proof reported:
+
+```text
+Process subsystem:
+Bootstrap PID: 0
+Processes created: 2
+Address spaces created: 2
+Process model: online
+
+Address-space test:
+Test virtual address: 0x0000004000000000
+Process A PID: 1
+Process B PID: 2
+Process A root: 0x0000000000078000
+Process B root: 0x0000000000079000
+Process A physical frame: 0x000000000007A000
+Process B physical frame: 0x000000000007B000
+
+Process/address-space self-test:
+  process-create: PASS
+  unique-pid: PASS
+  address-space-create: PASS
+  distinct-root: PASS
+  same-va-different-pa: PASS
+  cr3-switch: PASS
+  kernel-mappings: PASS
+  process-a-isolation: PASS
+  process-b-isolation: PASS
+  preemptive-address-space-switch: PASS
+  bootstrap-return: PASS
+  address-space-cleanup: PASS
+  pmm-bookkeeping: PASS
+
+Address-space switches: 18
+Preemptive CR3 switches: 7
+Process A slices: 3
+Process B slices: 3
+```
+
+This proves that BoringKernel can maintain distinct process identities with independent x86_64 address-space roots and safely switch those roots while scheduling CPL0 kernel tasks.
+
+It does **not** prove userspace execution or isolation from privileged kernel code. Every current task still runs at CPL0 and can therefore execute privileged instructions. Ring 3 is required before untrusted userspace exists.
+
+## Milestone 9: ring 3 transition — NEXT
+
+Enter real x86_64 CPL 3 code and prove that user-mode code cannot directly execute privileged kernel operations.
 
 A future implementation must explicitly address at least:
 
-- process identity and lifetime;
-- a BoringKernel-owned address-space root rather than treating all tasks as one shared ring-0 address space;
-- mappings/resources owned by one process;
-- address-space creation and destruction;
-- safe switching of the active address space where required;
-- clean reclamation on process exit;
-- preserving the already verified kernel task/interrupt invariants.
+- appropriate user code/data selectors;
+- a valid TSS and privilege-stack transition path where required;
+- a deliberately constrained user address/mapping setup;
+- controlled transition from kernel CPL0 to user CPL3;
+- a real user-mode instruction stream verified by CPL/segment state;
+- a deliberate privileged operation from CPL3 that faults rather than succeeding;
+- preservation of the already verified process/address-space, interrupt and scheduler invariants.
 
-This milestone has **not** been started and requires a separate instruction.
+Milestone 9 has **not** been started and requires a separate instruction.
 
-It must not silently expand into ring 3, syscalls, ELF userspace, VFS, storage, or networking unless those later milestones are separately requested.
-
-## Milestone 9: ring 3 transition
-
-Enter real x86_64 CPL 3 code and prove user code cannot directly perform privileged kernel operations.
+It must not silently expand into a syscall ABI, ELF loader, userspace runtime, VFS, storage, networking, or other later milestones.
 
 ## Milestone 10: syscall mechanism and safe user-memory crossing
 
@@ -402,15 +462,14 @@ Networking remains unrelated and deferred.
 
 # Exact next implementation milestone
 
-## Process and address-space model
+## Ring 3 transition
 
-The next roadmap item is **Milestone 8**.
+The next roadmap item is **Milestone 9**.
 
 It has **not** been started and requires a separate instruction.
 
 Do not jump ahead to:
 
-- ring 3;
 - syscalls;
 - userspace loading;
 - VFS/RAMFS;
