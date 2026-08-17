@@ -4,7 +4,7 @@
 
 BoringOS is an experimental independent desktop operating-system project.
 
-It is **not a Linux distribution**, **not a BSD distribution**, and **not based on Redox or another existing operating-system kernel**. BoringOS develops its own kernel, **BoringKernel**, together with a future native BoringOS userspace and desktop stack.
+It is **not a Linux distribution**, **not a BSD distribution**, and **not based on another existing operating-system kernel**. BoringOS develops its own kernel, **BoringKernel**, together with a future native BoringOS userspace and desktop stack.
 
 > boring is not a bug.  
 > it's the entire operating system now.
