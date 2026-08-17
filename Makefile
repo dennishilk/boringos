@@ -45,10 +45,13 @@ KERNEL_C_SOURCES := \
 	kernel/core/heap.c \
 	kernel/arch/x86_64/vmm.c \
 	kernel/arch/x86_64/exception.c \
+	kernel/arch/x86_64/irq.c \
+	kernel/arch/x86_64/timer.c \
 	kernel/arch/x86_64/serial.c \
 	kernel/arch/x86_64/cpu.c
 KERNEL_ASM_SOURCES := \
-	kernel/arch/x86_64/exception_stubs.S
+	kernel/arch/x86_64/exception_stubs.S \
+	kernel/arch/x86_64/irq_stubs.S
 KERNEL_C_OBJECTS := $(patsubst %.c,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_C_SOURCES))
 KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCES))
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
