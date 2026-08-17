@@ -31,7 +31,7 @@ PID=$!
 
 attempt=0
 while [ "${attempt}" -lt 100 ]; do
-    if grep -Fqx 'BoringKernel exception infrastructure test passed.' "${LOG}" 2>/dev/null; then
+    if grep -Fqx 'BoringKernel hardware interrupt test passed.' "${LOG}" 2>/dev/null; then
         break
     fi
 
@@ -46,7 +46,7 @@ done
 status=0
 for line in \
     'BoringOS booting...' \
-    'BoringKernel 0.0.5-dev' \
+    'BoringKernel 0.0.6-dev' \
     'Arch: x86_64' \
     'Hello from BoringKernel.' \
     'Physical memory manager:' \
@@ -98,7 +98,33 @@ for line in \
     'IDTR limit: 4095' \
     'IDT: loaded' \
     'Exceptions: online' \
-    'BoringKernel exception infrastructure test passed.'
+    'BoringKernel exception infrastructure test passed.' \
+    'Hardware interrupts:' \
+    'Controller: 8259 PIC' \
+    'PIC: remapped' \
+    'Master vectors: 32-39' \
+    'Slave vectors: 40-47' \
+    'Initial master mask: 255' \
+    'Initial slave mask: 255' \
+    'IRQ0 vector: 32' \
+    'Master mask: 254' \
+    'Slave mask: 255' \
+    'Timer:' \
+    'Source: PIT channel 0' \
+    'Input frequency: 1193182 Hz' \
+    'Requested frequency: 100 Hz' \
+    'Divisor: 11932' \
+    'Effective frequency: 99998 mHz' \
+    'IRQ: 0' \
+    'Vector: 32' \
+    'Timer: online' \
+    'Interrupts: enabled' \
+    'IRQ self-test:' \
+    '  timer-delivery: PASS' \
+    '  repeated-irqs: PASS' \
+    '  acknowledgement: PASS' \
+    'Unexpected IRQs: 0' \
+    'BoringKernel hardware interrupt test passed.'
 do
     if ! grep -Fqx "${line}" "${LOG}"; then
         echo "missing serial line: ${line}" >&2
@@ -106,85 +132,45 @@ do
     fi
 done
 
-if ! grep -Eq '^Usable memory: [1-9][0-9]* bytes$' "${LOG}"; then
-    echo 'missing or invalid runtime usable-memory value' >&2
+for pattern in \
+    '^Usable memory: [1-9][0-9]* bytes$' \
+    '^Usable frames: [1-9][0-9]*$' \
+    '^Active root table: [1-9][0-9]*$' \
+    '^HHDM offset: [1-9][0-9]*$' \
+    '^Test virtual address: [1-9][0-9]*$' \
+    '^Page-table frames allocated: [0-9]+$' \
+    '^Test physical frame: [1-9][0-9]*$' \
+    '^Translation result: [1-9][0-9]*$' \
+    '^Virtual base: [1-9][0-9]*$' \
+    '^Virtual limit: [1-9][0-9]*$' \
+    '^Free payload: [1-9][0-9]* bytes$' \
+    '^Initial PMM frames consumed: [1-9][0-9]*$' \
+    '^Initial page-table frames: [0-9]+$' \
+    '^Growth mappings created: [1-9][0-9]*$' \
+    '^Growth PMM frames consumed: [1-9][0-9]*$' \
+    '^Final mapped pages: [3-9][0-9]*$' \
+    '^Final free bytes: [1-9][0-9]*$' \
+    '^IDTR base: 0x[0-9A-F]{16}$' \
+    '^Code selector: 0x[0-9A-F]{16}$'
+do
+    if ! grep -Eq "${pattern}" "${LOG}"; then
+        echo "missing runtime value matching: ${pattern}" >&2
+        status=1
+    fi
+done
+
+TICKS=$(sed -n 's/^Ticks observed: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
+DELIVERIES=$(sed -n 's/^IRQ0 deliveries: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
+if [ -z "${TICKS}" ] || [ "${TICKS}" -lt 10 ]; then
+    echo 'timer self-test did not observe at least 10 ticks' >&2
     status=1
 fi
-if ! grep -Eq '^Usable frames: [1-9][0-9]*$' "${LOG}"; then
-    echo 'missing or invalid runtime usable-frame count' >&2
-    status=1
-fi
-if ! grep -Eq '^Active root table: [1-9][0-9]*$' "${LOG}"; then
-    echo 'missing or invalid runtime CR3 root-table value' >&2
-    status=1
-fi
-if ! grep -Eq '^HHDM offset: [1-9][0-9]*$' "${LOG}"; then
-    echo 'missing or invalid runtime HHDM offset' >&2
-    status=1
-fi
-if ! grep -Eq '^Test virtual address: [1-9][0-9]*$' "${LOG}"; then
-    echo 'missing or invalid VMM test virtual address' >&2
-    status=1
-fi
-if ! grep -Eq '^Page-table frames allocated: [0-9]+$' "${LOG}"; then
-    echo 'missing runtime page-table allocation count' >&2
-    status=1
-fi
-if ! grep -Eq '^Test physical frame: [1-9][0-9]*$' "${LOG}"; then
-    echo 'missing runtime VMM test physical frame' >&2
-    status=1
-fi
-if ! grep -Eq '^Translation result: [1-9][0-9]*$' "${LOG}"; then
-    echo 'missing runtime VMM translation result' >&2
-    status=1
-fi
-if ! grep -Eq '^Virtual base: [1-9][0-9]*$' "${LOG}"; then
-    echo 'missing or invalid heap virtual base' >&2
-    status=1
-fi
-if ! grep -Eq '^Virtual limit: [1-9][0-9]*$' "${LOG}"; then
-    echo 'missing or invalid heap virtual limit' >&2
-    status=1
-fi
-if ! grep -Eq '^Free payload: [1-9][0-9]* bytes$' "${LOG}"; then
-    echo 'missing or invalid initial heap free-payload value' >&2
-    status=1
-fi
-if ! grep -Eq '^Initial PMM frames consumed: [1-9][0-9]*$' "${LOG}"; then
-    echo 'missing or invalid initial heap PMM-frame count' >&2
-    status=1
-fi
-if ! grep -Eq '^Initial page-table frames: [0-9]+$' "${LOG}"; then
-    echo 'missing initial heap page-table-frame count' >&2
-    status=1
-fi
-if ! grep -Eq '^Growth mappings created: [1-9][0-9]*$' "${LOG}"; then
-    echo 'heap self-test did not prove mapping growth' >&2
-    status=1
-fi
-if ! grep -Eq '^Growth PMM frames consumed: [1-9][0-9]*$' "${LOG}"; then
-    echo 'heap self-test did not prove PMM-backed growth' >&2
-    status=1
-fi
-if ! grep -Eq '^Final mapped pages: [3-9][0-9]*$' "${LOG}"; then
-    echo 'heap self-test did not retain grown mapped capacity' >&2
-    status=1
-fi
-if ! grep -Eq '^Final free bytes: [1-9][0-9]*$' "${LOG}"; then
-    echo 'missing or invalid final heap free-byte count' >&2
-    status=1
-fi
-if ! grep -Eq '^IDTR base: 0x[0-9A-F]{16}$' "${LOG}"; then
-    echo 'missing or invalid loaded IDTR base' >&2
-    status=1
-fi
-if ! grep -Eq '^Code selector: 0x[0-9A-F]{16}$' "${LOG}" ||
-   grep -Fqx 'Code selector: 0x0000000000000000' "${LOG}"; then
-    echo 'missing or invalid kernel code selector' >&2
+if [ -z "${DELIVERIES}" ] || [ "${DELIVERIES}" -lt 10 ]; then
+    echo 'IRQ self-test did not observe at least 10 IRQ0 deliveries' >&2
     status=1
 fi
 
-if grep -Eiq 'PMM self-test FAILED|Physical memory manager: FAILED|VMM: FAILED|VMM self-test FAILED|Kernel heap: FAILED|Heap self-test FAILED|Exception handling: FAILED|heap corruption|Fatal exception: controlled halt|general protection fault' "${LOG}"; then
+if grep -Eiq 'PMM self-test FAILED|Physical memory manager: FAILED|VMM: FAILED|VMM self-test FAILED|Kernel heap: FAILED|Heap self-test FAILED|Exception handling: FAILED|Hardware interrupts: FAILED|Timer: FAILED|Hardware interrupt self-test FAILED|heap corruption|Fatal exception: controlled halt|general protection fault|triple fault|reboot' "${LOG}"; then
     echo 'kernel reported a failure during normal boot' >&2
     status=1
 fi
