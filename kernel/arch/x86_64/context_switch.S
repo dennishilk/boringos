@@ -108,7 +108,7 @@ x86_64_preemption_probe_release:
 x86_64_preemption_probe_is_armed:
     xorl %eax, %eax
     cmpb $0, x86_64_preemption_probe_armed_flag(%rip)
-    sete %al
+    setne %al
     ret
 .size x86_64_preemption_probe_is_armed, .-x86_64_preemption_probe_is_armed
 
