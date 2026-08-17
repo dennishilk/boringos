@@ -117,9 +117,9 @@ static void idt_set_gate(uint8_t vector, uintptr_t handler,
     entry->reserved = 0U;
 }
 
-static bool idt_entry_valid(uint8_t vector, uint16_t selector) {
+static bool idt_entry_matches(uint8_t vector, uint16_t selector,
+                              uintptr_t expected) {
     const struct x86_64_idt_entry *const entry = &idt[vector];
-    const uintptr_t expected = x86_64_exception_stub_table[vector];
 
     return (expected != (uintptr_t)0U) &&
            (entry->selector == selector) &&
@@ -127,6 +127,11 @@ static bool idt_entry_valid(uint8_t vector, uint16_t selector) {
            (entry->type_attributes == (uint8_t)IDT_GATE_INTERRUPT) &&
            (entry->reserved == 0U) &&
            (idt_entry_offset(entry) == expected);
+}
+
+static bool idt_exception_entry_valid(uint8_t vector, uint16_t selector) {
+    return idt_entry_matches(vector, selector,
+                             x86_64_exception_stub_table[vector]);
 }
 
 bool exception_init(void) {
@@ -165,7 +170,7 @@ bool exception_init(void) {
     }
 
     for (index = 0U; index < (size_t)X86_64_EXCEPTION_VECTOR_COUNT; ++index) {
-        if (!idt_entry_valid((uint8_t)index, selector)) {
+        if (!idt_exception_entry_valid((uint8_t)index, selector)) {
             return false;
         }
     }
@@ -199,6 +204,17 @@ bool exception_get_stats(struct exception_stats *stats) {
 
     *stats = exception_state;
     return true;
+}
+
+bool exception_install_interrupt_gate(uint8_t vector, uintptr_t handler) {
+    if ((!exception_initialized) ||
+        (vector < (uint8_t)X86_64_EXCEPTION_VECTOR_COUNT) ||
+        (handler == (uintptr_t)0U)) {
+        return false;
+    }
+
+    idt_set_gate(vector, handler, exception_state.code_selector);
+    return idt_entry_matches(vector, exception_state.code_selector, handler);
 }
 
 static const char *exception_name(uint64_t vector) {
