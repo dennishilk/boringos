@@ -97,6 +97,7 @@ $(KERNEL_BUILD_DIR)/%.o: %.S $(MODE_STAMP)
 $(KERNEL_ELF): $(KERNEL_OBJECTS) kernel/linker/x86_64.ld
 	@mkdir -p $(dir $@)
 	$(LD) $(LDFLAGS) $(KERNEL_OBJECTS) -o $@
+	@nm -n $(KERNEL_ELF) | grep -E ' kernel_task_trampoline$$| x86_64_irq_common$$' || true
 
 $(LIMINE_ARCHIVE):
 	@mkdir -p $(dir $@)
