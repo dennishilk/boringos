@@ -30,15 +30,25 @@ PIT channel 0 → IRQ0 → vector 32
 C timer tick + PIC EOI
     ↓
 restore + iretq
+    ↓
+cooperative kernel task selector
+    ↓
+independent 16-KiB task stacks
+    ↓
+SysV callee-saved context switch
+    ↓
+explicit yield / clean task return
 ```
 
-BoringKernel currently runs in ring 0, owns a minimal physical page-frame allocator, can create/remove selected 4-KiB mappings in the active x86_64 four-level address space, has a bounded dynamic kernel heap, installs its own x86_64 IDT, diagnoses real CPU Divide Error and MMU Page Fault exceptions, and now receives repeated real PIT-generated IRQ0 interrupts through a remapped 8259-compatible PIC.
+BoringKernel currently runs in ring 0, owns a minimal physical page-frame allocator, can create/remove selected 4-KiB mappings in the active x86_64 four-level address space, has a bounded dynamic kernel heap, installs its own x86_64 IDT, diagnoses real CPU Divide Error and MMU Page Fault exceptions, receives repeated real PIT-generated IRQ0 interrupts through a remapped 8259-compatible PIC, and can now switch cooperatively between independent kernel execution contexts.
 
-The verified bootstrap timer path maps IRQ0 to vector 32, increments a `uint64_t` tick counter only from the IRQ handler, sends PIC End Of Interrupt and returns with `iretq`. The accepted merged-main QEMU run required at least ten timer deliveries, proving repeated acknowledgement/return rather than accepting a single first interrupt.
+The verified bootstrap timer path maps IRQ0 to vector 32, increments a `uint64_t` tick counter only from the IRQ handler, sends PIC End Of Interrupt and returns with `iretq`. IRQ0 does **not** invoke the cooperative task selector and does not switch tasks.
 
-For this deliberately legacy bootstrap proof, the QEMU `q35` reference uses one `qemu64,apic=off` CPU. No LAPIC/IOAPIC configuration is implemented yet. The active page-table root and boot-critical mappings remain inherited from Limine.
+The verified cooperative task path uses separate 16-KiB heap-backed stacks and a minimal SysV AMD64 saved context containing `RSP`, `RBX`, `RBP` and `R12`–`R15`. The accepted merged-main QEMU run created two tasks, observed seven real context switches, preserved task-local stack state and the required callee-saved register state, returned safely to bootstrap, freed both task stacks, restored heap allocation bookkeeping, and observed timer ticks progress from 10 to 16 while tasks executed.
 
-There is still no scheduler, preemption, task switching, threads, processes, ring 3, syscalls, userspace loader, VFS, RAMFS, block devices, storage drivers, BoringFS implementation, init or shell.
+For the deliberately legacy timer proof, the QEMU `q35` reference uses one `qemu64,apic=off` CPU. No LAPIC/IOAPIC configuration is implemented yet. The active page-table root and boot-critical mappings remain inherited from Limine.
+
+There is still no timer-driven preemption, timeslicing, user process model, ring 3, syscalls, userspace loader, VFS, RAMFS, block devices, storage drivers, BoringFS implementation, init or shell.
 
 Every milestone should keep all earlier QEMU acceptance checks green and add a focused proof for the new capability.
 
@@ -166,31 +176,108 @@ Unexpected IRQs: 0
 BoringKernel hardware interrupt test passed.
 ```
 
-The current QEMU reference uses `-M q35 -cpu qemu64,apic=off` specifically so this milestone remains an isolated PIC/PIT bootstrap rather than silently introducing LAPIC setup. PIC/PIT is temporary bootstrap infrastructure, not the intended final modern interrupt architecture.
+The current QEMU reference uses `-M q35 -cpu qemu64,apic=off` specifically so this bootstrap remains isolated PIC/PIT work rather than silently introducing LAPIC setup. PIC/PIT is temporary bootstrap infrastructure, not the intended final modern interrupt architecture.
 
-This milestone proves that BoringKernel can receive, acknowledge and return from repeated real periodic hardware interrupts. It does **not** implement scheduling, preemption, task switching, LAPIC, IOAPIC, HPET, ACPI/MADT or SMP.
+This milestone proves that BoringKernel can receive, acknowledge and return from repeated real periodic hardware interrupts. It does **not** implement scheduling, preemption, LAPIC, IOAPIC, HPET, ACPI/MADT or SMP.
 
 ---
 
 # Stage 3 — execution and process foundations
 
-## Milestone 6: kernel execution contexts / scheduler — NEXT
+## Milestone 6: kernel execution contexts + cooperative context switching — COMPLETE
 
-Implement the smallest scheduler capable of switching between independent kernel execution contexts.
+Implemented, merged and accepted on `main` in QEMU:
 
-Required properties include explicit task state, dedicated stacks, deterministic runnable ordering and a minimal isolated context-switch boundary.
+- represent the already-running kernel as bootstrap task ID 0 without copying its active stack;
+- define ordinary kernel tasks with only `READY`, `RUNNING` and `FINISHED` states;
+- keep task metadata in a bounded fixed table rather than introducing speculative scheduler infrastructure;
+- allocate each created task an independent 16-KiB stack through the existing kernel heap;
+- validate stack alignment/ranges, reject overlapping live stacks and keep a low-end stack sentinel;
+- define a minimal SysV AMD64 saved context containing `RSP`, `RBX`, `RBP`, `R12`, `R13`, `R14` and `R15`;
+- deliberately leave caller-saved registers outside the cooperative context object;
+- isolate the architecture context save/restore in `kernel/arch/x86_64/context_switch.S`;
+- construct the first task stack so initial restore returns into a C trampoline with correct SysV stack alignment;
+- call `task->entry(task->arg)` from the trampoline;
+- treat normal task-function return as `RUNNING → FINISHED` automatically;
+- never select a `FINISHED` task again;
+- use deterministic cooperative round robin only when code explicitly calls `task_yield()` or a task returns;
+- save the bootstrap context naturally on the first switch away and restore it when no ordinary `READY` task remains;
+- keep interrupts disabled only across task-state/current-context mutation and the tiny save/restore boundary, then restore the resumed context's intended IF state;
+- leave the PIT IRQ path free of task-selection/context-switch calls;
+- explicitly test preservation of `RBX`, `RBP`, `R12`–`R15` and `RSP` across a real yield/resume cycle;
+- prove task-local stack variables survive multiple yields and reside on distinct task stacks;
+- require two tasks to execute the real alternating sequence A1/B1/A2/B2/A3/B3;
+- verify the PIT continues progressing while cooperative tasks run;
+- return safely to bootstrap after both entry functions return;
+- validate and free both finished task stacks through `kfree` from the bootstrap context;
+- verify heap allocation count/used-byte bookkeeping returns to its pre-task state;
+- preserve all previous PMM, VMM, heap, hardware-IRQ, real Divide Error and real Page Fault acceptance checks.
 
-The timer now exists as a real interrupt source, but this milestone must not assume that timer-driven preemption is automatically required. Context switching and scheduling policy need their own narrow design and acceptance proof.
+The accepted merged-main QEMU path reported:
 
-## Milestone 7: process and address-space model
+```text
+Kernel tasks:
+Mode: cooperative
+Tasks created: 2
+Task stack size: 16384 bytes
+Bootstrap task ID: 0
+Scheduler: online
+
+Task A:
+  iterations: 3
+  local-state: PASS
+
+Task B:
+  iterations: 3
+  local-state: PASS
+
+Context switch self-test:
+  task-a-start: PASS
+  task-b-start: PASS
+  alternating-switch: PASS
+  stack-isolation: PASS
+  register-state: PASS
+  task-return: PASS
+  timer-coexistence: PASS
+  stack-cleanup: PASS
+  heap-bookkeeping: PASS
+Context switches: 7
+Ticks before task test: 10
+Ticks after task test: 16
+Task stacks freed: 2
+Task heap allocations after cleanup: 0
+
+BoringKernel cooperative task test passed.
+```
+
+This milestone proves that BoringKernel can preserve and resume independent kernel execution contexts **cooperatively**. It does **not** prove that BoringKernel can preempt a running task.
+
+## Milestone 7: timer-driven preemption — NEXT
+
+Connect the existing periodic timer to a deliberately designed preemptive scheduling boundary without weakening the already verified IRQ acknowledgement, exception path or cooperative context invariants.
+
+A future implementation must explicitly define how interrupt-frame state becomes schedulable task state, how the interrupted task resumes correctly after a timer-driven switch, and how scheduler critical sections prevent unsafe nested/preemptive mutation.
+
+This milestone has **not** been started. The current IRQ0 path remains:
+
+```text
+IRQ0
+→ tick++
+→ PIC EOI
+→ iretq
+```
+
+It does not call the task selector or context switch.
+
+## Milestone 8: process and address-space model
 
 Define a small process object with a separate virtual address space and clean resource reclamation.
 
-## Milestone 8: ring 3 transition
+## Milestone 9: ring 3 transition
 
 Enter real x86_64 CPL 3 code and prove that user code cannot directly perform privileged kernel operations.
 
-## Milestone 9: syscall mechanism and safe user-memory crossing
+## Milestone 10: syscall mechanism and safe user-memory crossing
 
 Create the first controlled userspace/kernel API with checked arguments, bounded user copies and explicit error returns.
 
@@ -200,17 +287,17 @@ The stable public syscall ABI should not be declared finished at this point.
 
 # Stage 4 — load and run native BoringOS programs
 
-## Milestone 10: ELF userspace loader
+## Milestone 11: ELF userspace loader
 
 Load a deliberately constrained x86_64 userspace ELF with strict validation of class, machine, segments, ranges and permissions.
 
 The first executable may arrive as a boot module rather than pretending a filesystem exists.
 
-## Milestone 11: minimal native userspace runtime
+## Milestone 12: minimal native userspace runtime
 
 Provide BoringOS-owned C entry glue, syscall wrappers and tiny string/memory helpers. No host libc.
 
-## Milestone 12: serial console / TTY path for userspace
+## Milestone 13: serial console / TTY path for userspace
 
 Expose real console input/output through the kernel API so early native programs can use the QEMU serial terminal.
 
@@ -218,7 +305,7 @@ Expose real console input/output through the kernel API so early native programs
 
 # Stage 5 — VFS and RAMFS
 
-## Milestone 13: VFS core
+## Milestone 14: VFS core
 
 Introduce filesystem-independent kernel objects and path walking.
 
@@ -239,7 +326,7 @@ readdir
 
 VFS owns paths, mount relationships, open handles and process working directories. Filesystem backends do not own process or terminal policy.
 
-## Milestone 14: RAMFS backend
+## Milestone 15: RAMFS backend
 
 Implement a tiny real in-memory filesystem supporting nested directories and ordinary file operations through the VFS interface.
 
@@ -249,7 +336,7 @@ RAMFS remains strongly recommended before persistent BoringFS because it separat
 
 # Stage 6 — native init and shell
 
-## Milestone 15: `boring-init`
+## Milestone 16: `boring-init`
 
 Run a real first userspace process:
 
@@ -261,7 +348,7 @@ boring-init
 
 Keep it intentionally small.
 
-## Milestone 16: `boring-shell`
+## Milestone 17: `boring-shell`
 
 Launch a native C shell from `boring-init` in userspace.
 
@@ -290,15 +377,15 @@ Filesystem commands must operate through real VFS/syscall state. No simulated di
 
 # Stage 7 — BoringFS host tooling before kernel writes
 
-## Milestone 17: pure BoringFS format codec and validator
+## Milestone 18: pure BoringFS format codec and validator
 
 Implement the documented BoringFS v0 encoding/decoding rules in small C modules suitable for host tests and later kernel reuse where practical.
 
-## Milestone 18: `mkboringfs`
+## Milestone 19: `mkboringfs`
 
 Create deterministic valid BoringFS images containing an empty root directory.
 
-## Milestone 19: `boringfsck`
+## Milestone 20: `boringfsck`
 
 Create a read-only structural validator/inspector. Initial versions report corruption and return non-zero; they do not attempt aggressive repair.
 
@@ -306,7 +393,7 @@ Create a read-only structural validator/inspector. Initial versions report corru
 
 # Stage 8 — persistent block I/O
 
-## Milestone 20: generic block-device layer
+## Milestone 21: generic block-device layer
 
 Create a filesystem-independent interface conceptually providing:
 
@@ -321,7 +408,7 @@ flush()
 
 BoringFS must depend only on this boundary, never directly on VirtIO, NVMe or AHCI.
 
-## Milestone 21: QEMU VirtIO-block driver
+## Milestone 22: QEMU VirtIO-block driver
 
 Use VirtIO block as the first QEMU storage target unless implementation analysis finds a concrete blocker.
 
@@ -331,7 +418,7 @@ Prove bounded device capacity, read, write to a disposable test image and read-b
 
 # Stage 9 — BoringFS kernel integration
 
-## Milestone 22: read-only BoringFS mount
+## Milestone 23: read-only BoringFS mount
 
 Mount a host-formatted BoringFS volume through:
 
@@ -347,11 +434,11 @@ VFS
 
 Start read-only and reject invalid metadata before exposing files.
 
-## Milestone 23: BoringFS mutation support
+## Milestone 24: BoringFS mutation support
 
 Add create, mkdir, write, truncate, unlink, rmdir, rename/move and block allocation/free only after read-only mounting is solid.
 
-## Milestone 24: persistent native root filesystem
+## Milestone 25: persistent native root filesystem
 
 Boot with BoringFS as the persistent root and launch native userspace from it:
 
@@ -381,15 +468,15 @@ Networking remains unrelated and deferred.
 
 # Exact next implementation milestone
 
-## Kernel execution contexts / scheduler
+## Timer-driven preemption
 
-The next roadmap item is Milestone 6: define and prove the smallest kernel execution-context and scheduler mechanism.
+The next roadmap item is Milestone 7: prove a safe timer-driven preemptive switch between kernel tasks.
 
 It has **not** been started and requires a separate instruction.
 
 A future implementation must remain narrow and must not jump ahead to:
 
-- process/address-space semantics;
+- user process/address-space semantics;
 - ring 3;
 - syscalls;
 - userspace loading;
@@ -398,4 +485,4 @@ A future implementation must remain narrow and must not jump ahead to:
 - storage drivers;
 - networking.
 
-The next proof, only when separately requested, should establish that BoringKernel can switch between explicitly defined independent kernel execution contexts with deterministic scheduling behavior and clean stack/state ownership.
+The next proof, only when separately requested, should establish that a real PIT IRQ can cause a controlled task switch and later resume the preempted kernel task correctly, while preserving the existing cooperative task, interrupt acknowledgement and exception guarantees.
