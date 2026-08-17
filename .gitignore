@@ -1,0 +1,38 @@
+# Build output
+/build/
+/out/
+/dist/
+
+# Native build artifacts
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.elf
+*.exe
+*.bin
+*.img
+*.iso
+*.map
+*.d
+
+# Coverage / profiling
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+
+# Tooling
+compile_commands.json
+.cache/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
