@@ -8,6 +8,11 @@ uint64_t x86_64_read_cr3(void) {
     return value;
 }
 
+void x86_64_write_cr3(uint64_t physical_root) {
+    /* Loading CR3 switches address spaces and broadly invalidates the TLB. */
+    __asm__ volatile ("mov %0, %%cr3" : : "r" (physical_root) : "memory");
+}
+
 uint64_t x86_64_read_rflags(void) {
     uint64_t value;
 

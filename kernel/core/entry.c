@@ -11,6 +11,8 @@
 #include <boring/kernel.h>
 #include <boring/pmm.h>
 #include <boring/preemption_test.h>
+#include <boring/process.h>
+#include <boring/process_test.h>
 #include <boring/serial.h>
 #include <boring/task.h>
 #include <boring/timer.h>
@@ -914,7 +916,7 @@ void boring_kernel_entry(void) {
 
     serial_init();
     serial_write_string("BoringOS booting...\n");
-    serial_write_string("BoringKernel 0.0.8-dev\n");
+    serial_write_string("BoringKernel 0.0.9-dev\n");
     serial_write_string("Arch: x86_64\n");
     serial_write_string("Hello from BoringKernel.\n\n");
 
@@ -1039,8 +1041,13 @@ void boring_kernel_entry(void) {
 
 #if BORING_TEST_MODE == BORING_TEST_MODE_NORMAL
     run_hardware_irq_test();
+    if (!process_init()) {
+        serial_write_string("Process subsystem: FAILED\n");
+        x86_64_halt_forever();
+    }
     run_cooperative_task_test();
     run_preemptive_task_test();
+    run_process_address_space_test();
     x86_64_halt_forever();
 #else
     run_exception_test_mode();

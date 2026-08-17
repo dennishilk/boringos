@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 uint64_t x86_64_read_cr3(void);
+void x86_64_write_cr3(uint64_t physical_root);
 uint64_t x86_64_read_rflags(void);
 uint16_t x86_64_read_ss(void);
 void x86_64_invalidate_page(uintptr_t virtual_address);

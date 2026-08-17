@@ -1,10 +1,22 @@
 # BoringKernel kernel tasks and scheduling
 
-This document describes the currently implemented **kernel-only execution-context layer**. BoringKernel now supports both explicit cooperative switching and real PIT-timer-driven preemption between independent ring-0 kernel tasks. This is still not a process model and not userspace multitasking.
+This document describes the implemented **kernel-only execution-context layer**. BoringKernel supports explicit cooperative switching, real PIT-timer-driven preemption, and now task ownership by explicit process/address-space objects. All task execution is still CPL0.
 
-## Two deliberately different context boundaries
+A task is not a process:
 
-BoringKernel keeps the two mechanisms conceptually separate:
+```text
+task
+→ execution context / scheduling entity
+
+process
+→ identity + address-space ownership
+```
+
+A process may eventually own multiple tasks. The 0.0.9-dev acceptance needs only one preemptive task per test process and does not introduce a thread abstraction.
+
+## Two context boundaries
+
+BoringKernel keeps the two switching mechanisms separate:
 
 ```text
 cooperative context
@@ -14,31 +26,11 @@ preemptive context
 → arbitrary x86_64 hardware-interrupt boundary
 ```
 
-A cooperative switch only has to preserve the state a normal C caller may require to survive a call. A timer interrupt may arrive at any instruction, so preemption must preserve the complete integer register and interrupt-return state required to resume that exact instruction stream.
-
-## Cooperative context
-
-The cooperative architecture context remains intentionally small:
-
-```c
-struct x86_64_kernel_context {
-    uint64_t rsp;
-    uint64_t rbx;
-    uint64_t rbp;
-    uint64_t r12;
-    uint64_t r13;
-    uint64_t r14;
-    uint64_t r15;
-};
-```
-
-`x86_64_context_switch()` saves/restores `RSP`, `RBX`, `RBP`, and `R12`–`R15`, then returns through the selected task stack. There is no explicit cooperative `RIP`: the ordinary return address already lives on that saved stack.
-
-The SysV caller-saved registers (`RAX`, `RCX`, `RDX`, `RSI`, `RDI`, `R8`–`R11`) deliberately remain outside this cooperative object.
+The cooperative object preserves only `RSP`, `RBX`, `RBP`, and `R12`-`R15`. Timer preemption must preserve the complete integer state needed to resume an arbitrary interrupted instruction stream.
 
 ## Preemptive interrupt context
 
-Timer preemption uses the normalized x86_64 trap frame stored on the interrupted task's own stack. The complete current structure is **192 bytes**:
+Timer preemption uses the normalized x86_64 trap frame stored on the interrupted task's own stack. The complete current structure remains **192 bytes**:
 
 ```text
 offset   field
@@ -68,22 +60,11 @@ offset   field
 0xB8     hardware SS
 ```
 
-The IRQ stub preserves all 15 general-purpose registers:
-
-```text
-RAX RBX RCX RDX RBP RDI RSI
-R8 R9 R10 R11 R12 R13 R14 R15
-```
-
-and the interrupt-return state contains `RIP`, `CS`, `RFLAGS`, `RSP`, and `SS`. Hardware IRQs have no CPU error code, so the vector stub supplies normalized `error_code = 0` plus the vector number before the common GPR save.
-
-The first two fields are convenient C-facing copies of the interrupted `RSP` and `SS`. The original hardware return words remain at the tail of the frame and are consumed by `iretq`.
-
-This full frame is the state that belongs to a preempted task. It is not copied into a global scratch frame. `kernel_task.preempt_frame` points at the frame residing on that task's own stack until that task is selected again.
+The IRQ stub preserves all 15 general-purpose registers plus the interrupt-return state. A task's `preempt_frame` points at the saved frame on that task's stack until the task is selected again.
 
 ## Task model
 
-The fixed bootstrap task table still supports at most four ordinary kernel tasks. The states remain:
+The bounded task table still supports at most four ordinary kernel tasks. States remain:
 
 ```text
 READY
@@ -95,6 +76,7 @@ Each task records, as applicable:
 
 ```text
 id
+owning process pointer
 state
 cooperative context
 preemptive trap-frame pointer
@@ -106,94 +88,80 @@ slot ownership
 intended interrupt state
 ```
 
-There are no priorities, blocked/sleeping states, wait queues, realtime classes, fairness framework, or per-CPU run queues.
+The bootstrap task is task ID 0 and belongs to the bootstrap process PID 0.
+
+The legacy helpers `task_create()` and `task_create_preemptive()` create PID-0 tasks, preserving the existing cooperative and preemption regression behavior. The process milestone adds a narrow `task_create_preemptive_for_process()` path for binding a preemptive task to an explicit live process.
+
+There are no priorities, blocked/sleeping states, wait queues, realtime classes, fairness framework, thread groups, or per-CPU run queues.
 
 ## Per-task stacks
 
-Every created ordinary task receives a separate **16 KiB** stack from the existing kernel heap:
+Every ordinary task receives a separate **16 KiB** stack from the shared higher-half kernel heap:
 
 ```text
 kmalloc(16384)
 ```
 
-Task metadata is static; stack memory is heap-owned. Current checks include:
+Because current process roots share the kernel higher half, these stacks remain mapped while PID 0, PID 1, or PID 2 is active.
+
+Existing checks remain:
 
 - 16-byte-aligned stack allocation and top;
 - no overlap among live task stacks;
-- a low-end sentinel `0x424f52494e475354`;
-- the low 16 bytes excluded from accepted task-local storage;
-- cooperative saved `RSP` inside its stack;
-- preemptive saved frame and resumed `RSP` inside its stack;
+- low-end sentinel `0x424f52494e475354`;
+- low 16 bytes excluded from accepted task-local storage;
+- saved cooperative `RSP` inside its stack;
+- saved preemptive frame and resumed `RSP` inside its stack;
 - sentinel revalidation before finished stacks are freed.
 
-There are no guard pages or automatic stack growth yet.
+There are no guard pages or automatic stack growth.
 
-## Fresh cooperative task entry
+## Fresh task entry
 
-A new cooperative task receives a small synthetic return frame at the top of its stack. Restoring that task through `x86_64_context_switch()` executes `ret` into `kernel_task_trampoline()`, which then calls the task entry function with normal SysV AMD64 stack alignment.
+A new cooperative task still receives a synthetic normal return frame targeting `kernel_task_trampoline()`.
 
-## Fresh preemptive task entry
+A never-run preemptive task receives a synthetic complete 192-byte restore frame containing zeroed GPRs, vector 32, error code 0, the task trampoline RIP, current kernel CS/SS, IF-enabled RFLAGS, and a correctly aligned resumed RSP. Fresh and already-preempted tasks therefore share the same IRQ restore/`iretq` path.
 
-A never-run preemptive task has no previous timer frame, so BoringKernel constructs a valid **synthetic 192-byte restore frame** on that task's own stack.
+The trampoline verifies that the current task owns a live process and that the globally active process matches `task->process` before calling the task entry function.
 
-The fresh frame contains:
+## Bootstrap task and process
 
-```text
-all GPRs                 = 0
-vector                   = 32
-error code               = 0
-RIP                      = kernel_task_trampoline
-CS                       = current kernel code selector
-RFLAGS                   = reserved bit + IF
-hardware RSP             = stack_top - 8
-hardware SS              = current kernel SS
-C-facing RSP / SS copies = same RSP / SS values
-```
+The already-running kernel remains task ID 0 in process PID 0. Its boot stack and inherited root page table are never copied.
 
-A defensive return address to `x86_64_halt_forever` is placed at the resumed stack pointer. The synthetic `hardware RSP = stack_top - 8` gives `kernel_task_trampoline()` the SysV AMD64 function-entry alignment expected after `iretq`.
+For preemption, `task_preemption_start()` leaves bootstrap executing until the next real PIT IRQ0 creates an authentic interrupt frame on the bootstrap stack. The scheduler saves that frame and may select another task.
 
-Fresh and already-preempted tasks therefore use the same IRQ restore/`iretq` mechanics once selected.
-
-## Bootstrap context
-
-The already-running kernel remains special task ID **0**. Its existing boot stack is never copied or recreated.
-
-For cooperative switching, the bootstrap call-boundary context is saved naturally on the first explicit `task_yield()`.
-
-For preemption, `task_preemption_start()` leaves bootstrap running until the next real PIT IRQ0. That interrupt creates a genuine IRQ frame on the bootstrap stack. `task_scheduler_tick()` keeps a pointer to that frame, selects the first READY preemptive task, and assembly restores that task's frame instead.
-
-When all preemptive test tasks have become `FINISHED`, the scheduler selects the saved bootstrap IRQ frame. `iretq` therefore resumes the exact interrupted bootstrap instruction stream. Only after that return does bootstrap disable preemptive scheduling, validate finished stacks, and free them.
+When all preemptive tasks finish, the scheduler selects the saved bootstrap frame and activates PID 0's bootstrap address space before restoration if a different process root is currently active. `iretq` then resumes the exact interrupted bootstrap instruction stream.
 
 ## Cooperative scheduling
 
-Cooperative selection remains deterministic fixed-table round robin. A RUNNING cooperative task becomes READY only when it explicitly calls `task_yield()`.
+Cooperative selection remains deterministic fixed-table round robin. A RUNNING task becomes READY only when it explicitly calls `task_yield()`.
 
-The existing acceptance sequence remains:
+Before switching to a selected cooperative task, the scheduler activates the selected task's owning process. The existing cooperative acceptance tasks all belong to PID 0, so this normally leaves CR3 unchanged.
+
+The accepted sequence remains:
 
 ```text
 bootstrap → A → B → A → B → A → B → bootstrap
 ```
 
-with seven cooperative context switches and normal task-function return marking tasks `FINISHED`.
+with seven cooperative context switches.
 
 ## Timer-driven preemptive scheduling
 
-Preemptive scheduling is also deterministic fixed-table round robin, but selection begins only from real PIT IRQ0 delivery while preemption is enabled.
-
-The current quantum is deliberately simple:
+Preemptive scheduling remains deterministic fixed-table round robin with:
 
 ```text
 1 PIT tick = 1 scheduling quantum
 ```
 
-The PIT request remains 100 Hz with divisor 11932, approximately 99.998491 Hz, so the nominal quantum is roughly 10 ms. This is not a precise realtime timing guarantee.
+The PIT request remains 100 Hz with divisor 11932, approximately 99.998491 Hz. This is not a realtime timing guarantee.
 
-Conceptually the IRQ0 scheduling path is:
+The 0.0.9-dev IRQ0 scheduling path is now:
 
 ```text
 real PIT IRQ0
     ↓
-full interrupt state on current stack
+full interrupt state on current task stack
     ↓
 timer tick++
     ↓
@@ -203,7 +171,11 @@ save current task's frame pointer
     ↓
 choose next READY preemptive task
     ↓
-PIC EOI on the current IRQ stack
+process_activate(next->process)
+    ↓
+load next process CR3 if root differs
+    ↓
+PIC EOI while still on the current shared kernel IRQ stack
     ↓
 return selected frame pointer to assembly
     ↓
@@ -214,83 +186,48 @@ restore all GPRs
 iretq
 ```
 
-The scheduler never calls `task_yield()` from IRQ0 and does not use the cooperative call-boundary context for arbitrary interrupt-time state.
+The scheduler never calls `task_yield()` from IRQ0 and never uses the cooperative call-boundary object for arbitrary interrupt-time state.
 
-## EOI ordering
+## Address-space switch ordering
 
-The C IRQ dispatcher asks `task_scheduler_tick()` which complete frame should be restored, but **the stack has not changed yet**. The PIC is acknowledged before the C dispatcher returns the selected frame pointer to assembly.
+The scheduler changes CR3 before returning the selected frame to `irq.c`. This is safe for the current bootstrap model because kernel code, IRQ stack, scheduler metadata and task stacks all live in higher-half mappings shared identically by every current process root.
 
-Only after EOI does `irq_stubs.S` replace `RSP` with the selected frame and execute the restore/`iretq` path. Therefore interrupt acknowledgement never depends on later returning to the abandoned task's C stack.
+`irq.c` then sends PIC EOI while still executing on the current IRQ stack. Only after EOI does `irq_stubs.S` replace `RSP` with the selected task frame.
 
-## Critical sections and preemption control
+This preserves the established EOI-before-stack-switch invariant while allowing a different process root to already be active.
 
-This milestone uses the smallest mechanism required for the single-CPU bootstrap:
+If a selected task belongs to the already active process, `address_space_activate()` avoids an unnecessary CR3 reload.
 
-- task creation disables maskable interrupts while task-table and stack ownership are changing;
-- preemption start/stop disables interrupts while scheduler mode/current-task state is changed;
-- finished-stack validation and destruction run with interrupts disabled and only from bootstrap;
-- the IRQ scheduler itself runs with IF already cleared by the interrupt-gate entry semantics.
+## Critical sections
 
-There is no general synchronization framework and no SMP locking. Timer ticks continue normally outside these short IF-off regions.
+The current single-CPU bootstrap uses short interrupt-disabled regions around task/process metadata changes, process activation bookkeeping, preemption start/stop, and finished-stack/process cleanup.
 
-No `kmalloc`, `kfree`, PMM allocation, VMM mapping, or serial output occurs in the timer scheduling path. Tasks and stacks already exist before they become schedulable.
+There is no general synchronization framework and no SMP locking.
+
+The timer scheduling path performs no `kmalloc`, `kfree`, PMM allocation, page-table allocation, VMM mapping, or serial output. Process roots, mappings, tasks and stacks exist before they become schedulable. A scheduler CR3 load is the only new address-space operation in the hot path.
 
 ## Task completion
 
-Returning from either task entry function still marks the task `FINISHED`.
+Returning from a task entry function marks the **task** `FINISHED`; it does not automatically destroy or finish its owning process.
 
-A cooperative finished task switches away through the existing cooperative path. A preemptive finished task waits with `sti; hlt` for the next real timer IRQ; that IRQ sees it as `FINISHED`, never makes it READY again, and selects another READY task or the saved bootstrap frame.
+A preemptive finished task waits for the next real timer IRQ. The scheduler never makes it READY again and chooses another READY task or the saved bootstrap frame. Stacks are freed only later from bootstrap.
 
-The acceptance test records any impossible resume of a finished preemptive task and fails if that count is non-zero.
+For the process acceptance, the two process objects remain `ALIVE` until bootstrap has safely returned and both finished task stacks have been cleaned. Only then are PID 1 and PID 2 marked `FINISHED`, their private mappings removed, and their inactive address spaces destroyed.
 
-Stacks are never freed while executing on them. Cleanup occurs later from bootstrap.
+## Existing full-GPR preemption proof
 
-## Full-GPR preemption probe
-
-The preemption acceptance path includes an isolated assembly-assisted probe specifically because callee-saved cooperative testing is not enough for arbitrary interrupt-time preemption.
-
-Task A loads known values into:
+The independent 0.0.8-style regression remains in 0.0.9-dev. An assembly-assisted probe keeps known values live in:
 
 ```text
 RAX RBX RCX RDX RSI RDI RBP
 R8 R9 R10 R11 R12 R13 R14 R15
 ```
 
-and records `RSP`. It then spins using only RIP-relative memory operations while those register values stay live. The probe marks itself armed only after all patterns are loaded.
+plus `RSP`, lets a real PIT interrupt preempt Task A, runs Task B, then verifies every value after A resumes.
 
-Task B cannot release the probe until the real PIT scheduler has preempted A and run B. When A is later selected again by another real PIT interrupt, the probe verifies every listed GPR plus `RSP` before returning PASS.
-
-Kernel C is still built with implicit x87/MMX/SSE/SSE2 generation disabled. There is no FXSAVE, XSAVE, lazy FPU switching, or SIMD task context in this milestone.
-
-## Preemption acceptance proof
-
-The verified QEMU branch run uses two CPU-bound tasks whose task bodies contain **no call to `task_yield()`**. Each keeps a `volatile uint64_t` counter and checksum on its own stack and repeatedly validates the addresses and prior state after resumption.
-
-The verified run reported:
+The accepted regression still reports:
 
 ```text
-Preemptive scheduler:
-Policy: round-robin
-Timer source: PIT IRQ0
-Timer vector: 32
-Quantum: 1 tick
-Preemption: enabled during test
-
-Preemption self-test:
-  task-a-progress: PASS
-  task-b-progress: PASS
-  no-cooperative-yield: PASS
-  repeated-preemption: PASS
-  stack-isolation: PASS
-  local-state: PASS
-  register-state: PASS
-  timer-delivery: PASS
-  bootstrap-return: PASS
-  finished-task-skip: PASS
-  stack-sentinel: PASS
-  stack-cleanup: PASS
-  heap-bookkeeping: PASS
-
 Timer ticks during test: 7
 Scheduler ticks: 7
 Preemptions: 7
@@ -299,39 +236,59 @@ Task B slices: 3
 Task A resumes: 2
 Task B resumes: 2
 Cooperative yields during test: 0
-Task stacks freed: 2
-Task heap allocations after preemption cleanup: 0
-
-BoringKernel preemptive scheduling test passed.
 ```
 
-The counters are deliberately separate concepts:
+Kernel C remains compiled with implicit x87/MMX/SSE/SSE2 generation disabled. There is no FPU/SIMD task-state switching.
 
-- **timer ticks**: PIT time-source progress;
-- **scheduler ticks**: IRQ0 entries observed while preemption mode is enabled;
-- **preemptions**: actual restore-frame changes to a different execution context.
+## Process-owned preemption proof
 
-They happened to all equal seven in this acceptance run; the implementation does not define them as permanently identical.
+The 0.0.9-dev acceptance creates:
 
-The existing cooperative test also remains green, including its independent task stacks, seven cooperative switches, callee-saved register probe, cleanup, and timer coexistence.
+```text
+Task A → PID 1 → root A
+Task B → PID 2 → root B
+```
+
+Both are CPL0 CPU-bound tasks and neither calls `task_yield()`.
+
+Each repeatedly dereferences the same lower-half virtual address:
+
+```text
+0x0000004000000000
+```
+
+Task A must always see/write `0xAAAAAAAAAAAAAAAA`. Task B must always see/write `0xBBBBBBBBBBBBBBBB`.
+
+A verified clean-source QEMU run reported:
+
+```text
+Preemptive CR3 switches: 7
+Process A slices:         3
+Process B slices:         3
+```
+
+The test additionally verifies current task PID against the active process object, stack isolation, local progress, zero cooperative yields, real scheduler preemption, return to bootstrap PID 0/root, finished-stack cleanup, process address-space cleanup, and PMM bookkeeping.
+
+See [`processes.md`](processes.md) for root ownership and same-VA/different-PA details.
 
 ## Current limitations
 
-This milestone proves **single-address-space, single-CPU kernel-task preemption only**.
+The task scheduler now proves **single-CPU preemption across independent process address spaces**, but execution remains entirely CPL0.
 
 It does not implement:
 
-- user processes or ring 3;
-- per-process address spaces or CR3 switching;
-- TSS user-stack switching;
+- ring 3 or untrusted user execution;
+- user CS/SS or TSS privilege-stack switching;
 - syscalls or user-memory crossing;
 - ELF userspace loading;
+- a general threads-within-process model;
 - FPU/SIMD state switching;
 - sleeping, blocking, wait queues, or wakeups;
 - mutexes, semaphores, condition variables, or other synchronization primitives;
 - priorities or realtime scheduling;
-- SMP or per-CPU scheduler state;
+- SMP or per-CPU scheduler/process state;
+- PCID;
 - LAPIC, IOAPIC, APIC timer, HPET, or ACPI/MADT;
 - guard pages or automatic task-stack growth.
 
-All current tasks execute in CPL0 and share the same inherited kernel address space. The next execution-model work must be separately scoped; this milestone does not start a process or userspace model.
+BoringKernel 0.0.9-dev has process identities and separate CR3 roots, but these are exercised only by trusted kernel-mode tasks. A real Ring 3 transition is a separate future milestone.

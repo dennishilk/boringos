@@ -13,95 +13,93 @@ It is **not a Linux distribution**, **not a BSD distribution**, and **not based 
 
 **Extremely early bootstrap kernel.**
 
-BoringKernel boots under **QEMU x86_64**. Limine remains the external bootloader. BoringKernel currently provides COM1 serial output, a physical page-frame allocator, selected 4-KiB virtual mappings, a bounded dynamic kernel heap, its own x86_64 IDT, real CPU exception diagnostics, repeated PIT/PIC hardware IRQ0 delivery, cooperative kernel contexts, and now **real hardware-timer-driven preemptive switching between independent kernel tasks**.
+BoringKernel boots under **QEMU x86_64**. Limine remains the external bootloader. BoringKernel currently provides COM1 serial output, a physical page-frame allocator, selected 4-KiB virtual mappings, a bounded dynamic kernel heap, its own x86_64 IDT, real CPU exception diagnostics, repeated PIT/PIC hardware IRQ0 delivery, cooperative and real hardware-timer-preemptive kernel tasks, and now a deliberately small **process identity plus independent address-space model**.
 
 Current serial output begins with:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.8-dev
+BoringKernel 0.0.9-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```
 
-The VMM deliberately adopts the active Limine-created x86_64 four-level page-table root rather than replacing the entire address space. BoringKernel therefore has selected virtual-memory control but does not yet own a complete independent address space.
+The original VMM still adopts the active Limine-created x86_64 four-level root for PID 0. BoringKernel 0.0.9-dev additionally creates PMM-backed process roots with an empty private lower half and shared higher-half kernel mappings.
 
-The bounded kernel heap reserves a finite 16-MiB virtual range, grows through PMM + VMM, uses deterministic first-fit allocation with 16-byte alignment, and coalesces adjacent free blocks. Mapped heap pages are currently retained after `kfree`.
-
-BoringKernel owns a 256-entry x86_64 IDT. Dedicated QEMU modes continue to prove a **real CPU Divide Error** and a **real MMU Page Fault** through BoringKernel's own exception entry path and controlled fatal diagnostics.
-
-The bootstrap hardware path remaps the legacy 8259 PIC to vectors 32–47, programs PIT channel 0 for a requested 100 Hz rate, and unmasks only IRQ0. The actual divisor is 11932, approximately 99.998491 Hz; serial output reports `99998 mHz` rather than claiming exact timing.
-
-## Kernel tasks
-
-Each ordinary kernel task receives an independent **16-KiB heap-backed stack**. Task state remains deliberately small:
+The current process split is:
 
 ```text
-READY
-RUNNING
-FINISHED
+PML4 slots   0-255   process-private lower half
+PML4 slots 256-511   shared kernel higher half
 ```
 
-BoringKernel supports two distinct switching boundaries.
+The shared higher half preserves the mappings needed for the kernel image, HHDM, heap, task stacks, PMM/VMM metadata, IDT, IRQ/exception code, scheduler state and still-required bootstrap structures. Shared page tables are never treated as process-owned frames and are never reclaimed by process destruction.
 
-### Cooperative switching
+## Tasks and processes
 
-Explicit `task_yield()` uses the small SysV AMD64 call-boundary context:
+A **task** is an execution/scheduling entity. A **process** is an identity plus address-space owner. They are intentionally separate concepts.
+
+The bootstrap/kernel process is PID 0. The current acceptance test creates PID 1 and PID 2, each with a distinct PMM-backed root PML4. Process states remain deliberately small: `ALIVE` and `FINISHED`.
+
+Each ordinary kernel task still receives an independent **16-KiB heap-backed stack**. Cooperative switching retains the small SysV AMD64 call-boundary context. Timer preemption retains the separate complete **192-byte** interrupt frame required to resume arbitrary integer execution state.
+
+A task now references its owning process. When the scheduler selects a task owned by a different process, it activates that process root with a real CR3 load before returning the selected interrupt frame to assembly. The PIC EOI still occurs before assembly abandons the current IRQ stack.
+
+## Independent address-space proof
+
+The central process-isolation address is:
 
 ```text
-RSP RBX RBP R12 R13 R14 R15
+0x0000004000000000
 ```
 
-The existing QEMU acceptance test still proves alternating cooperative execution, task-local stack state, callee-saved register preservation, clean task return, stack cleanup, bootstrap return, and continued PIT tick progress.
-
-### Timer-driven preemption
-
-Preemption is a separate interrupt-time mechanism. A PIT IRQ may arrive at an arbitrary instruction, so the IRQ path preserves the complete integer register and interrupt-return state on the interrupted task's own stack.
-
-The current normalized x86_64 preemption frame is **192 bytes** and contains:
+The QEMU acceptance creates two process address spaces and maps the same VA to different physical frames:
 
 ```text
-RAX RBX RCX RDX RSI RDI RBP
-R8 R9 R10 R11 R12 R13 R14 R15
-vector error-code
-RIP CS RFLAGS RSP SS
+PID 1: TEST_VA -> frame A
+PID 2: TEST_VA -> frame B
+frame A != frame B
 ```
 
-The scheduler policy is intentionally simple:
+It then activates the real roots and dereferences `TEST_VA` through the CPU:
 
 ```text
-deterministic round-robin
-1 PIT tick = 1 quantum
+PID 1 writes 0xAAAAAAAAAAAAAAAA
+PID 2 writes 0xBBBBBBBBBBBBBBBB
+PID 1 still reads 0xAAAAAAAAAAAAAAAA
+PID 2 still reads 0xBBBBBBBBBBBBBBBB
 ```
 
-When preemption is enabled, IRQ0 advances the timer, enters the scheduler, retains the interrupted frame on the current task's stack, selects the next READY task, sends PIC EOI **before abandoning the current IRQ stack**, and returns the selected frame pointer to assembly. The assembly restore path then switches `RSP`, restores the full integer state, and resumes the selected task through `iretq`.
+The test does not fake isolation through HHDM physical aliases.
 
-Fresh preemptive tasks receive a deliberate synthetic IRQ/`iretq` frame on their own stack and enter the same C task trampoline used for normal task-entry handling. The bootstrap kernel stack is not copied: its real PIT interrupt frame is retained and later restored so normal initialization continues at the interrupted bootstrap instruction stream.
+The stronger acceptance binds one CPU-bound preemptive task to each process. Neither task calls `task_yield()`. Real PIT IRQ0 scheduling alternates both the task and CR3, while each task repeatedly accesses the same virtual address and must see only its own pattern.
 
-The verified CPU-bound preemption test contains **no `task_yield()` call in either stress task**. One accepted QEMU branch run reported:
+One verified clean-source QEMU run reported:
 
 ```text
-Timer ticks during test: 7
-Scheduler ticks: 7
-Preemptions: 7
-Task A slices: 3
-Task B slices: 3
-Task A resumes: 2
-Task B resumes: 2
-Cooperative yields during test: 0
+Process A root:           0x0000000000078000
+Process B root:           0x0000000000079000
+Process A physical frame: 0x000000000007A000
+Process B physical frame: 0x000000000007B000
+Address-space switches:   18
+Preemptive CR3 switches:   7
+Process A slices:           3
+Process B slices:           3
 ```
 
-The same test verifies task-local counters/checksums, independent stack addresses, stack sentinels, finished-task skipping, bootstrap return, cleanup, heap bookkeeping, and an assembly-assisted **full integer GPR preservation probe** across genuine hardware-timer preemption.
+After the test BoringKernel restores PID 0/bootstrap CR3, frees the two task stacks, unmaps the private test pages, reclaims only process-owned page-table frames, frees the two data frames and verifies PMM/heap/VMM bookkeeping.
 
-Kernel C remains built with implicit x87/MMX/SSE/SSE2 generation disabled. There is no FPU/SIMD task-state switching yet.
+See [`docs/processes.md`](docs/processes.md) for the exact model and ownership rules.
 
 ## Current execution-model boundary
 
-This is **kernel-task preemption only**. All current tasks run at CPL0 in the same kernel address space.
+This is **still CPL0-only**. Independent process address spaces do not imply userspace.
 
-There is still **no user process model, ring 3, syscall layer, separate process address spaces, CR3 task switching, userspace loader, filesystem, storage stack, networking, graphical environment, or input stack**. There is also no sleeping/blocking scheduler, wait queues, priorities, realtime policy, synchronization framework, SMP scheduler, LAPIC/IOAPIC timer architecture, or FPU/SIMD context switching.
+There is **no Ring 3, user CS/SS, TSS privilege-stack transition, syscall mechanism, userspace runtime, ELF loader, fork/exec/wait/signals, user-memory-copy API, VFS, storage stack, networking, graphical environment, input stack, SMP, PCID, copy-on-write, demand paging, swap, or FPU/SIMD context switching**.
 
-For the current legacy timer proof, QEMU remains:
+The next execution-boundary work is a separately scoped real Ring 3 transition. It has not been started.
+
+For the current bootstrap proof, QEMU remains:
 
 ```text
 -M q35 -cpu qemu64,apic=off -m 128M
@@ -126,15 +124,19 @@ Required host tools include GNU Make, GCC/binutils, `curl`, `xorriso`, and QEMU.
 ```sh
 make
 make run
-```
-
-The full acceptance suite rebuilds BoringOS in the normal and deliberate fatal-test modes. It verifies PMM, VMM, heap, IDT, repeated real PIT/PIC IRQ0 delivery, cooperative kernel switching, timer-driven preemptive kernel scheduling, a real Divide Error, and a real Page Fault:
-
-```sh
 make test
 ```
 
-See [`docs/architecture.md`](docs/architecture.md), [`docs/interrupts.md`](docs/interrupts.md), [`docs/tasks.md`](docs/tasks.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md), and [`docs/boringfs.md`](docs/boringfs.md).
+The full acceptance suite performs real QEMU boots for the normal kernel plus deliberate real Divide Error and Page Fault modes. It preserves all previous PMM, VMM, heap, IRQ, cooperative-task and timer-preemption checks and additionally verifies process creation, distinct roots, same-VA/different-PA isolation, real CR3 switching, kernel mapping continuity, PIT-preemptive address-space switching, bootstrap restoration and cleanup.
+
+A successful normal run ends with:
+
+```text
+BoringKernel process/address-space test passed.
+BoringKernel QEMU boot verification passed.
+```
+
+See [`docs/architecture.md`](docs/architecture.md), [`docs/interrupts.md`](docs/interrupts.md), [`docs/tasks.md`](docs/tasks.md), [`docs/processes.md`](docs/processes.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md), and [`docs/boringfs.md`](docs/boringfs.md).
 
 ## Native desktop direction
 

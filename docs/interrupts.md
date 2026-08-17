@@ -1,6 +1,6 @@
 # BoringKernel bootstrap hardware interrupts
 
-This document describes the deliberately narrow x86_64 hardware-interrupt path used by the current QEMU bootstrap target. It now provides both the periodic timer source and the architecture boundary for **single-CPU kernel-task preemption**. It is not a modern APIC architecture and not a physical-PC compatibility claim.
+This document describes the deliberately narrow x86_64 hardware-interrupt path used by the current QEMU bootstrap target. It provides the periodic timer source and architecture boundary for **single-CPU CPL0 task preemption**, including preemptive switches between tasks owned by different process address spaces. It is not a modern APIC architecture and not a physical-PC compatibility claim.
 
 ## Verified hardware path
 
@@ -26,12 +26,16 @@ timer tick++
 
 When preemption is disabled, the dispatcher acknowledges the PIC and the stub restores the same frame with `iretq`.
 
-When preemption is enabled, the path continues:
+When preemption is enabled, the path can now continue across process roots:
 
 ```text
 task_scheduler_tick(current frame)
     ↓
 select current or another task frame
+    ↓
+activate selected task's process root if needed
+    ↓
+real CR3 load while shared kernel mappings remain active
     ↓
 PIC End Of Interrupt on current IRQ stack
     ↓
@@ -44,7 +48,7 @@ restore all GPRs
 iretq
 ```
 
-The scheduling decision therefore originates from a genuine PIT IRQ0. The acceptance test never calls the scheduler tick directly and never manually increments the timer tick counter.
+The scheduling decision originates from a genuine PIT IRQ0. The acceptance test never calls the scheduler tick directly and never manually increments the timer tick counter.
 
 ## QEMU reference configuration
 
@@ -54,7 +58,7 @@ The verified bootstrap reference remains:
 -M q35 -cpu qemu64,apic=off -m 128M
 ```
 
-The local APIC CPU feature remains explicitly disabled so this milestone does not silently expand into LAPIC/IOAPIC configuration. PIC/PIT is temporary bootstrap infrastructure.
+The local APIC CPU feature remains explicitly disabled so this work does not silently expand into LAPIC/IOAPIC configuration. PIC/PIT is temporary bootstrap infrastructure.
 
 No SMP, LAPIC, IOAPIC, APIC timer, HPET, ACPI/MADT parsing, or interrupt affinity exists yet.
 
@@ -63,8 +67,8 @@ No SMP, LAPIC, IOAPIC, APIC timer, HPET, ACPI/MADT parsing, or interrupt affinit
 The PIC pair remains in 8086 mode and remapped away from CPU exceptions:
 
 ```text
-master IRQ0–7  → vectors 32–39
-slave  IRQ8–15 → vectors 40–47
+master IRQ0-7  → vectors 32-39
+slave  IRQ8-15 → vectors 40-47
 ```
 
 Initialization masks all IRQs:
@@ -128,13 +132,13 @@ IF=0
 → sti
 ```
 
-Preemption itself is enabled only later, after the ordinary repeated-IRQ test and cooperative-context test have succeeded and the preemptive task stacks/initial frames have already been created.
+Preemption is enabled only after the ordinary repeated-IRQ test and after required tasks/stacks/process mappings already exist.
 
-Task creation, scheduler-mode changes, and finished-stack destruction use short IF-off critical sections so IRQ0 cannot observe half-updated task metadata. This is a single-CPU bootstrap technique, not an SMP synchronization design.
+Task creation, process/address-space bookkeeping, scheduler-mode changes, and finished-stack/process cleanup use short IF-off critical sections so IRQ0 cannot observe half-updated metadata. This is a single-CPU bootstrap technique, not an SMP synchronization design.
 
 ## Complete IRQ frame
 
-The IRQ and fatal-exception entry code now share one **192-byte** normalized ring-0 frame:
+The IRQ and fatal-exception entry code share one **192-byte** normalized ring-0 frame:
 
 ```text
 offset   field
@@ -164,7 +168,7 @@ offset   field
 0xB8     hardware SS
 ```
 
-For a hardware IRQ, the CPU provides the long-mode interrupt-return state and the per-vector stub supplies normalized `error_code = 0` plus the vector number. The common stub then saves all 15 integer GPRs. It copies the CPU-saved stack state into the first two fields for convenient C inspection while retaining the original return words at the tail for `iretq`.
+For a hardware IRQ, the CPU provides the long-mode return state and the per-vector stub supplies normalized `error_code = 0` plus the vector number. The common stub saves all 15 integer GPRs. The first RSP/SS pair is a convenient C-facing copy; the original hardware return words remain at the tail for `iretq`.
 
 The complete integer state preserved across timer preemption is:
 
@@ -174,40 +178,32 @@ R8 R9 R10 R11 R12 R13 R14 R15
 RIP CS RFLAGS RSP SS
 ```
 
-There is no FPU/SIMD context. Kernel C continues to be compiled with accidental x87/MMX/SSE/SSE2 generation disabled.
+There is no FPU/SIMD context. Kernel C remains compiled with accidental x87/MMX/SSE/SSE2 generation disabled.
 
-## Selected-frame return
+## Selected-frame return and CR3 ownership
 
 `x86_64_irq_dispatch()` returns a pointer to the complete frame that assembly should restore.
 
-Conceptually:
+If scheduling is inactive, this is normally the same pointer. If timer preemption selects another task, `task_scheduler_tick()` may first activate the selected task's owning process address space. The selected frame still belongs to that task's stack.
 
-```c
-struct x86_64_trap_frame *x86_64_irq_dispatch(
-    struct x86_64_trap_frame *current);
-```
+Current process roots share the complete required kernel higher half, including the running IRQ code/stack and all ordinary task stacks. A CR3 change can therefore occur before leaving the old IRQ stack without making the currently executing kernel state disappear.
 
-If scheduling is inactive, this is normally the same pointer. If a timer preemption selects another task, the returned pointer belongs to that other task's stack.
-
-Assembly contains no scheduling policy. It only:
-
-1. loads the returned frame pointer into `RSP`;
-2. skips the two C-facing stack copies;
-3. restores all saved GPRs;
-4. skips vector/error;
-5. executes `iretq` using the selected frame's hardware return state.
+Assembly contains no scheduling or process policy. It only loads the selected frame, restores saved GPRs, skips normalized vector/error data, and executes `iretq`.
 
 ## EOI ordering and abandoning an IRQ stack
 
-EOI ordering is critical once the interrupted task might not resume immediately.
+EOI ordering remains critical.
 
-BoringKernel first asks the scheduler which frame should be restored **without changing stacks**. While still executing on the current IRQ stack, `irq.c` sends the required PIC EOI. Only then does it return the selected frame pointer to assembly.
+The scheduler may choose another task and may already switch to that task's CR3, but **the CPU is still executing on the original IRQ stack**, which remains mapped identically through the shared higher half.
 
-Therefore the path is:
+`irq.c` then sends the required PIC EOI. Only after EOI does it return the selected frame pointer to assembly, which changes `RSP` and restores the target task.
+
+Therefore the ordering is:
 
 ```text
 scheduler decision
-→ PIC EOI
+→ optional process CR3 switch
+→ PIC EOI on current shared kernel IRQ stack
 → return selected frame
 → assembly changes RSP
 → restore
@@ -216,16 +212,17 @@ scheduler decision
 
 The kernel never depends on eventually returning through the old task's C call stack to acknowledge the PIC.
 
-## Timer, scheduler and preemption counters
+## Timer, scheduler, preemption and address-space counters
 
 The implementation tracks distinct concepts:
 
 - `timer_ticks`: PIT time-source progress;
 - `timer_irq_count`: accepted IRQ0 deliveries;
-- `scheduler_ticks`: IRQ0 deliveries while preemption mode is active;
-- `preemptions`: actual restore-frame changes to another execution context.
+- `scheduler_ticks`: IRQ0 deliveries while preemption is active;
+- `preemptions`: actual restore-frame changes to another execution context;
+- `address_space_switches`: actual root changes that caused a CR3 load.
 
-A one-tick round-robin test often makes these values close, but they are not defined to be permanently identical.
+Existing PID-0 preemption can switch task frames without changing CR3. The process-isolation acceptance instead uses different roots and verifies repeated actual CR3 loads.
 
 ## No allocation or logging in the scheduling IRQ path
 
@@ -235,15 +232,16 @@ The timer/preemption IRQ path performs no:
 kmalloc
 kfree
 PMM allocation
+page-table allocation
 VMM mapping
 per-tick serial logging
 ```
 
-Task structures and stacks already exist before preemption begins. The IRQ path is intentionally bounded and small.
+Task/process structures, stacks, roots, and private test mappings already exist before preemption begins. The only address-space operation required in the hot path is activating an already prepared root when the selected process differs.
 
 ## Acceptance proof
 
-The normal QEMU test first retains the earlier hardware proof:
+The normal QEMU test retains the earlier hardware proof:
 
 ```text
 IRQ self-test:
@@ -253,37 +251,30 @@ IRQ self-test:
 Ticks observed: 10
 IRQ0 deliveries: 10
 Unexpected IRQs: 0
-
-BoringKernel hardware interrupt test passed.
 ```
 
-It then retains the cooperative task test and finally enables timer-driven scheduling for two CPU-bound tasks that contain no `task_yield()` calls.
+It retains the existing cooperative and full-GPR PIT-preemption regressions. The independent preemption regression still reports seven scheduler entries/preemptions, three slices for both tasks, two resumes each, and zero cooperative yields.
 
-A verified preemptive branch run reported:
+The 0.0.9-dev process acceptance additionally binds one CPU-bound preemptive task to PID 1 and one to PID 2. Both repeatedly access the same lower-half VA while real PIT IRQ0 switches task context and CR3 together.
+
+A verified clean-source run reported:
 
 ```text
-Timer ticks during test: 7
-Scheduler ticks: 7
-Preemptions: 7
-Task A slices: 3
-Task B slices: 3
-Task A resumes: 2
-Task B resumes: 2
-Cooperative yields during test: 0
+Preemptive CR3 switches: 7
+Process A slices:         3
+Process B slices:         3
 ```
 
-Both task-local state and the full integer register preservation probe passed, bootstrap returned through its saved IRQ frame, finished tasks were not selected again, and both task stacks were freed afterward.
-
-The separate real Divide Error and Page Fault acceptance modes remain green and continue to prove vectors 0 and 14 respectively.
+Both process-isolation patterns survived every resume, the scheduler restored PID 0/bootstrap root, process-owned page tables/data frames were reclaimed, and the separate real Divide Error and Page Fault acceptance modes remained green.
 
 ## Limitations
 
-The current preemptive IRQ path is verified only for:
+The current IRQ/preemption path is verified only for:
 
 - one x86_64 bootstrap CPU;
 - CPL0 kernel tasks;
-- one shared kernel address space;
+- independent process roots whose required kernel higher-half mappings are shared;
 - QEMU `q35` with `qemu64,apic=off`;
 - the legacy PIT/PIC timer route.
 
-It does not provide processes, ring 3, separate address spaces, CR3 task switching, TSS user-stack switching, FPU/SIMD switching, sleeping/blocking, synchronization primitives, priorities, realtime scheduling, SMP, or modern APIC timer routing.
+It does not provide ring 3, user privilege transitions, syscalls, TSS user stacks, PCID, FPU/SIMD switching, sleeping/blocking, synchronization primitives, priorities, realtime scheduling, SMP, or modern APIC timer routing.
