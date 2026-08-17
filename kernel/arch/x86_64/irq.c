@@ -6,6 +6,7 @@
 #include <boring/exception.h>
 #include <boring/io.h>
 #include <boring/irq.h>
+#include <boring/task.h>
 #include <boring/timer.h>
 
 enum {
@@ -174,7 +175,9 @@ bool irq_get_stats(struct irq_stats *stats) {
     return true;
 }
 
-void x86_64_irq_dispatch(const struct x86_64_trap_frame *frame) {
+struct x86_64_trap_frame *x86_64_irq_dispatch(
+    struct x86_64_trap_frame *frame) {
+    struct x86_64_trap_frame *restore_frame = frame;
     uint8_t irq_number;
     bool expected;
 
@@ -184,7 +187,7 @@ void x86_64_irq_dispatch(const struct x86_64_trap_frame *frame) {
          ((uint64_t)X86_64_PIC_MASTER_VECTOR_BASE +
           (uint64_t)X86_64_PIC_IRQ_COUNT))) {
         ++unexpected_irq_count;
-        return;
+        return frame;
     }
 
     irq_number =
@@ -193,13 +196,13 @@ void x86_64_irq_dispatch(const struct x86_64_trap_frame *frame) {
     if (irq_number == 7U) {
         if ((pic_read_isr((uint16_t)PIC_MASTER_COMMAND) & 0x80U) == 0U) {
             ++spurious_irq7_count;
-            return;
+            return frame;
         }
     } else if (irq_number == 15U) {
         if ((pic_read_isr((uint16_t)PIC_SLAVE_COMMAND) & 0x80U) == 0U) {
             ++spurious_irq15_count;
             x86_64_out8((uint16_t)PIC_MASTER_COMMAND, (uint8_t)PIC_EOI);
-            return;
+            return frame;
         }
     }
 
@@ -213,9 +216,20 @@ void x86_64_irq_dispatch(const struct x86_64_trap_frame *frame) {
     if ((irq_number == (uint8_t)X86_64_TIMER_IRQ) && expected &&
         timer_handle_irq()) {
         ++timer_irq_count;
+        restore_frame = task_scheduler_tick(frame);
+        if (restore_frame == NULL) {
+            ++unexpected_irq_count;
+            restore_frame = frame;
+        }
     } else {
         ++unexpected_irq_count;
     }
 
+    /*
+     * Scheduling policy only chooses a frame; the assembly restore has not
+     * switched stacks yet. Acknowledge the PIC here, on the current IRQ
+     * stack, before returning a possibly different task frame to assembly.
+     */
     pic_send_eoi(irq_number);
+    return restore_frame;
 }

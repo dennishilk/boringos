@@ -25,6 +25,7 @@ bool irq_init(void);
 bool irq_unmask_timer(void);
 bool irq_enable(void);
 bool irq_get_stats(struct irq_stats *stats);
-void x86_64_irq_dispatch(const struct x86_64_trap_frame *frame);
+struct x86_64_trap_frame *x86_64_irq_dispatch(
+    struct x86_64_trap_frame *frame);
 
 #endif

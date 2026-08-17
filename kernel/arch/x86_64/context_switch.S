@@ -88,4 +88,127 @@ x86_64_context_test_callee_saved:
     ret
 .size x86_64_context_test_callee_saved, .-x86_64_context_test_callee_saved
 
+.global x86_64_preemption_probe_reset
+.type x86_64_preemption_probe_reset, @function
+x86_64_preemption_probe_reset:
+    movb $0, x86_64_preemption_probe_release_flag(%rip)
+    movb $0, x86_64_preemption_probe_armed_flag(%rip)
+    ret
+.size x86_64_preemption_probe_reset, .-x86_64_preemption_probe_reset
+
+.global x86_64_preemption_probe_release
+.type x86_64_preemption_probe_release, @function
+x86_64_preemption_probe_release:
+    movb $1, x86_64_preemption_probe_release_flag(%rip)
+    ret
+.size x86_64_preemption_probe_release, .-x86_64_preemption_probe_release
+
+.global x86_64_preemption_probe_is_armed
+.type x86_64_preemption_probe_is_armed, @function
+x86_64_preemption_probe_is_armed:
+    xorl %eax, %eax
+    cmpb $0, x86_64_preemption_probe_armed_flag(%rip)
+    setne %al
+    ret
+.size x86_64_preemption_probe_is_armed, .-x86_64_preemption_probe_is_armed
+
+/*
+ * This probe deliberately keeps every integer caller-saved register live
+ * while waiting for a different kernel task to run. After all register
+ * patterns are loaded it marks itself armed using a RIP-relative byte store;
+ * the wait loop likewise uses no GPR. Task B releases the loop only after it
+ * observes the armed flag, proving the live register set crossed a real
+ * timer-driven task handoff before validation.
+ */
+.global x86_64_context_test_preemptive_gprs
+.type x86_64_context_test_preemptive_gprs, @function
+x86_64_context_test_preemptive_gprs:
+    pushq %rbx
+    pushq %rbp
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
+    subq $8, %rsp
+    movq %rsp, (%rsp)
+
+    movq $0x11111111, %rax
+    movq $0x12222222, %rbx
+    movq $0x13333333, %rcx
+    movq $0x14444444, %rdx
+    movq $0x15555555, %rsi
+    movq $0x16666666, %rdi
+    movq $0x17777777, %rbp
+    movq $0x18888888, %r8
+    movq $0x19999999, %r9
+    movq $0x1aaaaaaa, %r10
+    movq $0x1bbbbbbb, %r11
+    movq $0x1ccccccc, %r12
+    movq $0x1ddddddd, %r13
+    movq $0x1eeeeeee, %r14
+    movq $0x1fffffff, %r15
+
+    movb $1, x86_64_preemption_probe_armed_flag(%rip)
+
+.Lpreemption_probe_wait:
+    cmpb $0, x86_64_preemption_probe_release_flag(%rip)
+    je .Lpreemption_probe_wait
+
+    cmpq $0x11111111, %rax
+    jne .Lpreemption_probe_fail
+    cmpq $0x12222222, %rbx
+    jne .Lpreemption_probe_fail
+    cmpq $0x13333333, %rcx
+    jne .Lpreemption_probe_fail
+    cmpq $0x14444444, %rdx
+    jne .Lpreemption_probe_fail
+    cmpq $0x15555555, %rsi
+    jne .Lpreemption_probe_fail
+    cmpq $0x16666666, %rdi
+    jne .Lpreemption_probe_fail
+    cmpq $0x17777777, %rbp
+    jne .Lpreemption_probe_fail
+    cmpq $0x18888888, %r8
+    jne .Lpreemption_probe_fail
+    cmpq $0x19999999, %r9
+    jne .Lpreemption_probe_fail
+    cmpq $0x1aaaaaaa, %r10
+    jne .Lpreemption_probe_fail
+    cmpq $0x1bbbbbbb, %r11
+    jne .Lpreemption_probe_fail
+    cmpq $0x1ccccccc, %r12
+    jne .Lpreemption_probe_fail
+    cmpq $0x1ddddddd, %r13
+    jne .Lpreemption_probe_fail
+    cmpq $0x1eeeeeee, %r14
+    jne .Lpreemption_probe_fail
+    cmpq $0x1fffffff, %r15
+    jne .Lpreemption_probe_fail
+    cmpq (%rsp), %rsp
+    jne .Lpreemption_probe_fail
+
+    movl $1, %eax
+    jmp .Lpreemption_probe_restore
+
+.Lpreemption_probe_fail:
+    xorl %eax, %eax
+
+.Lpreemption_probe_restore:
+    addq $8, %rsp
+    popq %r15
+    popq %r14
+    popq %r13
+    popq %r12
+    popq %rbp
+    popq %rbx
+    ret
+.size x86_64_context_test_preemptive_gprs, .-x86_64_context_test_preemptive_gprs
+
+.bss
+.align 1
+x86_64_preemption_probe_release_flag:
+    .byte 0
+x86_64_preemption_probe_armed_flag:
+    .byte 0
+
 .section .note.GNU-stack,"",@progbits

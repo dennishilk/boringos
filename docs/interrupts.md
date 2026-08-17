@@ -1,210 +1,251 @@
 # BoringKernel bootstrap hardware interrupts
 
-This document describes the deliberately narrow hardware-interrupt path currently used by the x86_64 QEMU bootstrap target. It is not a general interrupt-controller architecture and it is not a scheduler.
+This document describes the deliberately narrow x86_64 hardware-interrupt path used by the current QEMU bootstrap target. It now provides both the periodic timer source and the architecture boundary for **single-CPU kernel-task preemption**. It is not a modern APIC architecture and not a physical-PC compatibility claim.
 
-## Verified bootstrap path
+## Verified hardware path
 
-The current QEMU acceptance path is:
+The source remains real legacy hardware as emulated by QEMU:
 
 ```text
 PIT channel 0
     ↓
-legacy IRQ0
+IRQ0
     ↓
 8259-compatible master PIC
     ↓
 IDT vector 32
     ↓
-x86_64 IRQ assembly stub
+x86_64 IRQ entry stub
     ↓
-BoringKernel C IRQ dispatcher
+complete normalized interrupt frame on current stack
     ↓
-timer tick increment
+C IRQ dispatcher
     ↓
-PIC End Of Interrupt
-    ↓
-register restore + iretq
+timer tick++
 ```
 
-A successful QEMU acceptance run observed ten distinct IRQ0 deliveries and ten timer ticks before declaring the interrupt path operational. The tick counter is incremented only by the IRQ0 handler; the acceptance loop never increments it directly and never calls the IRQ dispatcher directly.
+When preemption is disabled, the dispatcher acknowledges the PIC and the stub restores the same frame with `iretq`.
+
+When preemption is enabled, the path continues:
+
+```text
+task_scheduler_tick(current frame)
+    ↓
+select current or another task frame
+    ↓
+PIC End Of Interrupt on current IRQ stack
+    ↓
+return selected frame pointer to assembly
+    ↓
+RSP = selected frame
+    ↓
+restore all GPRs
+    ↓
+iretq
+```
+
+The scheduling decision therefore originates from a genuine PIT IRQ0. The acceptance test never calls the scheduler tick directly and never manually increments the timer tick counter.
 
 ## QEMU reference configuration
 
-The bootstrap interrupt reference remains QEMU `q35`, but the current PIC-only test CPU is explicitly started with its local APIC feature disabled:
+The verified bootstrap reference remains:
 
 ```text
--M q35 -cpu qemu64,apic=off
+-M q35 -cpu qemu64,apic=off -m 128M
 ```
 
-This is intentional. With QEMU's normal local APIC present, legacy PIC output is delivered through the local APIC LINT0 path. The local APIC's LVT entries start masked after reset, and configuring that LAPIC path would expand this milestone into APIC work. BoringKernel therefore uses a single-CPU, APIC-disabled QEMU reference configuration for this legacy PIC/PIT bootstrap proof.
+The local APIC CPU feature remains explicitly disabled so this milestone does not silently expand into LAPIC/IOAPIC configuration. PIC/PIT is temporary bootstrap infrastructure.
 
-This does **not** mean `q35` lacks APIC hardware, and it does not claim that the current bootstrap path is appropriate for modern physical PCs. It means only that this milestone proves the simplest isolated legacy interrupt path without introducing LAPIC, IOAPIC, HPET, ACPI or MADT support simultaneously.
+No SMP, LAPIC, IOAPIC, APIC timer, HPET, ACPI/MADT parsing, or interrupt affinity exists yet.
 
-A later interrupt architecture is expected to replace this bootstrap arrangement with a modern APIC-based design.
+## PIC mapping and masks
 
-## 8259 PIC configuration
-
-The master and slave 8259-compatible PICs are initialized in 8086 mode and remapped away from CPU exception vectors:
+The PIC pair remains in 8086 mode and remapped away from CPU exceptions:
 
 ```text
-master IRQ0–7   → vectors 32–39
-slave  IRQ8–15  → vectors 40–47
+master IRQ0–7  → vectors 32–39
+slave  IRQ8–15 → vectors 40–47
 ```
 
-The kernel installs DPL0 64-bit interrupt gates for all sixteen vectors before enabling maskable interrupts.
-
-Initialization starts with both interrupt masks at `0xff`:
+Initialization masks all IRQs:
 
 ```text
-master mask = 0xff
-slave mask  = 0xff
+master = 0xff
+slave  = 0xff
 ```
 
-After the PIT is configured and the interrupt path is ready, only IRQ0 is unmasked:
+After PIT setup only IRQ0 is unmasked:
 
 ```text
-master mask = 0xfe
-slave mask  = 0xff
+master = 0xfe
+slave  = 0xff
 ```
 
-No keyboard, mouse, storage or other legacy device IRQ is deliberately enabled.
+No other device IRQ is deliberately enabled.
 
-### EOI behavior
+Ordinary master IRQs receive master EOI. Ordinary slave IRQs receive slave EOI followed by master cascade EOI. Spurious IRQ7/IRQ15 continue to use ISR checks and the existing lightweight acknowledgement rules.
 
-For a normal master-PIC IRQ, BoringKernel sends an End Of Interrupt command to the master PIC after dispatch.
+## PIT source
 
-For a normal slave-PIC IRQ, it acknowledges the slave first and then the master cascade path.
-
-The bootstrap handler also implements the standard lightweight spurious checks for IRQ7 and IRQ15:
-
-- a spurious IRQ7 receives no EOI because the master ISR bit is not set;
-- a spurious IRQ15 receives an EOI only on the master cascade path because the slave ISR bit is not set.
-
-Unexpected non-spurious IRQs are counted separately from timer ticks and are still acknowledged so the PIC is not left in-service indefinitely.
-
-## PIT channel 0
-
-The periodic source is the legacy PIT channel 0 in rate-generator mode.
-
-The documented bootstrap input clock is:
+Channel 0 remains in rate-generator mode with bootstrap input clock:
 
 ```text
 1,193,182 Hz
 ```
 
-The requested frequency is:
+Requested rate:
 
 ```text
 100 Hz
 ```
 
-BoringKernel calculates the integer reload divisor from the input clock instead of embedding an unexplained timer constant. The nearest valid divisor for this request is:
+Calculated integer divisor:
 
 ```text
 11932
 ```
 
-The resulting rate is approximately:
+Approximate resulting rate:
 
 ```text
 99.998491 Hz
 ```
 
-The serial diagnostic reports this rounded to integer millihertz as:
-
-```text
-99998 mHz
-```
-
-The PIT therefore should not be described as an exact 100.000000 Hz time source.
+Serial output reports the rounded value as `99998 mHz`. Preemptive scheduling currently uses **one PIT tick per quantum**, so the nominal timeslice is approximately 10 ms, not a precision realtime guarantee.
 
 ## Interrupt enable ordering
 
-Maskable interrupts remain disabled while the kernel establishes the path. The relevant ordering is:
+The initial hardware path still follows:
 
 ```text
-cli / IF=0
-    ↓
-existing IDT valid
-    ↓
-install IRQ gates 32–47
-    ↓
-remap PICs
-    ↓
-mask both PICs completely
-    ↓
-program PIT channel 0
-    ↓
-unmask only IRQ0
-    ↓
-read back and validate masks/state
-    ↓
-sti / IF=1
+IF=0
+→ install exception and IRQ gates
+→ remap PIC
+→ mask PICs
+→ program PIT
+→ unmask IRQ0 only
+→ validate masks/state
+→ sti
 ```
 
-`sti` is executed only by `irq_enable()` after the IRQ subsystem has been initialized, IRQ0 has been deliberately unmasked, and the expected PIC masks have been verified.
+Preemption itself is enabled only later, after the ordinary repeated-IRQ test and cooperative-context test have succeeded and the preemptive task stacks/initial frames have already been created.
 
-## IRQ entry frame and return
+Task creation, scheduler-mode changes, and finished-stack destruction use short IF-off critical sections so IRQ0 cannot observe half-updated task metadata. This is a single-CPU bootstrap technique, not an SMP synchronization design.
 
-`kernel/arch/x86_64/irq_stubs.S` contains the architecture-specific entry/return mechanics. Each PIC vector pushes a synthetic zero error code and the vector number, saves the general-purpose registers, constructs the same current CPL0 176-byte trap-frame shape used by the exception path, calls the C IRQ dispatcher, restores the interrupted state and returns with `iretq`.
+## Complete IRQ frame
 
-Hardware IRQs and fatal CPU exceptions intentionally diverge after entry:
+The IRQ and fatal-exception entry code now share one **192-byte** normalized ring-0 frame:
 
 ```text
-fatal CPU exception → diagnose → cli/hlt forever
-hardware timer IRQ  → tick → EOI → restore → iretq
+offset   field
+0x00     RSP copy
+0x08     SS copy
+0x10     R15
+0x18     R14
+0x20     R13
+0x28     R12
+0x30     R11
+0x38     R10
+0x40     R9
+0x48     R8
+0x50     RSI
+0x58     RDI
+0x60     RBP
+0x68     RDX
+0x70     RCX
+0x78     RBX
+0x80     RAX
+0x88     vector
+0x90     error code
+0x98     RIP
+0xA0     CS
+0xA8     RFLAGS
+0xB0     hardware RSP
+0xB8     hardware SS
 ```
 
-The IRQ assembly does not schedule, switch stacks, create tasks or choose runnable work.
+For a hardware IRQ, the CPU provides the long-mode interrupt-return state and the per-vector stub supplies normalized `error_code = 0` plus the vector number. The common stub then saves all 15 integer GPRs. It copies the CPU-saved stack state into the first two fields for convenient C inspection while retaining the original return words at the tail for `iretq`.
 
-## Timer tick semantics
+The complete integer state preserved across timer preemption is:
 
-The timer exposes a `uint64_t` tick count. In the current single-core bootstrap, the counter is `volatile` because it is modified asynchronously by IRQ0 while normal kernel code polls it.
+```text
+RAX RBX RCX RDX RSI RDI RBP
+R8 R9 R10 R11 R12 R13 R14 R15
+RIP CS RFLAGS RSP SS
+```
 
-This is not a claim of general SMP or thread safety. There is no scheduler, no second CPU, no preemption model and no locking infrastructure in this milestone.
+There is no FPU/SIMD context. Kernel C continues to be compiled with accidental x87/MMX/SSE/SSE2 generation disabled.
 
-The IRQ handler performs no dynamic allocation and emits no serial line per tick.
+## Selected-frame return
+
+`x86_64_irq_dispatch()` returns a pointer to the complete frame that assembly should restore.
+
+Conceptually:
+
+```c
+struct x86_64_trap_frame *x86_64_irq_dispatch(
+    struct x86_64_trap_frame *current);
+```
+
+If scheduling is inactive, this is normally the same pointer. If a timer preemption selects another task, the returned pointer belongs to that other task's stack.
+
+Assembly contains no scheduling policy. It only:
+
+1. loads the returned frame pointer into `RSP`;
+2. skips the two C-facing stack copies;
+3. restores all saved GPRs;
+4. skips vector/error;
+5. executes `iretq` using the selected frame's hardware return state.
+
+## EOI ordering and abandoning an IRQ stack
+
+EOI ordering is critical once the interrupted task might not resume immediately.
+
+BoringKernel first asks the scheduler which frame should be restored **without changing stacks**. While still executing on the current IRQ stack, `irq.c` sends the required PIC EOI. Only then does it return the selected frame pointer to assembly.
+
+Therefore the path is:
+
+```text
+scheduler decision
+→ PIC EOI
+→ return selected frame
+→ assembly changes RSP
+→ restore
+→ iretq
+```
+
+The kernel never depends on eventually returning through the old task's C call stack to acknowledge the PIC.
+
+## Timer, scheduler and preemption counters
+
+The implementation tracks distinct concepts:
+
+- `timer_ticks`: PIT time-source progress;
+- `timer_irq_count`: accepted IRQ0 deliveries;
+- `scheduler_ticks`: IRQ0 deliveries while preemption mode is active;
+- `preemptions`: actual restore-frame changes to another execution context.
+
+A one-tick round-robin test often makes these values close, but they are not defined to be permanently identical.
+
+## No allocation or logging in the scheduling IRQ path
+
+The timer/preemption IRQ path performs no:
+
+```text
+kmalloc
+kfree
+PMM allocation
+VMM mapping
+per-tick serial logging
+```
+
+Task structures and stacks already exist before preemption begins. The IRQ path is intentionally bounded and small.
 
 ## Acceptance proof
 
-The normal QEMU acceptance test requires all earlier PMM, VMM, heap and exception-infrastructure checks to pass first. It then verifies:
-
-1. both PICs begin fully masked;
-2. PIT setup succeeds and the timer count is still zero before `sti`;
-3. only IRQ0 becomes unmasked;
-4. IF is deliberately enabled;
-5. real asynchronous IRQ0 delivery advances the timer count;
-6. at least ten separate IRQ0 deliveries occur;
-7. continued delivery proves that End Of Interrupt handling is working in practice;
-8. no unexpected IRQ is counted;
-9. the final hardware-interrupt success marker is printed.
-
-One verified run reported:
+The normal QEMU test first retains the earlier hardware proof:
 
 ```text
-Hardware interrupts:
-Controller: 8259 PIC
-PIC: remapped
-Master vectors: 32-39
-Slave vectors: 40-47
-Initial master mask: 255
-Initial slave mask: 255
-IRQ0 vector: 32
-Master mask: 254
-Slave mask: 255
-
-Timer:
-Source: PIT channel 0
-Input frequency: 1193182 Hz
-Requested frequency: 100 Hz
-Divisor: 11932
-Effective frequency: 99998 mHz
-IRQ: 0
-Vector: 32
-Timer: online
-
-Interrupts: enabled
-
 IRQ self-test:
   timer-delivery: PASS
   repeated-irqs: PASS
@@ -212,16 +253,37 @@ IRQ self-test:
 Ticks observed: 10
 IRQ0 deliveries: 10
 Unexpected IRQs: 0
-Spurious IRQ7: 0
-Spurious IRQ15: 0
 
 BoringKernel hardware interrupt test passed.
 ```
 
-The separate real Divide Error and Page Fault acceptance modes remain independent and continue to use vectors 0 and 14 respectively.
+It then retains the cooperative task test and finally enables timer-driven scheduling for two CPU-bound tasks that contain no `task_yield()` calls.
 
-## Explicit limitations
+A verified preemptive branch run reported:
 
-This bootstrap implementation has no LAPIC, IOAPIC, x2APIC, APIC timer, HPET, ACPI/MADT parsing, SMP, interrupt affinity, scheduler, preemption, threads, task switching, processes, ring 3, keyboard IRQ driver or other device-driver framework.
+```text
+Timer ticks during test: 7
+Scheduler ticks: 7
+Preemptions: 7
+Task A slices: 3
+Task B slices: 3
+Task A resumes: 2
+Task B resumes: 2
+Cooperative yields during test: 0
+```
 
-Only IRQ0 is intentionally unmasked. PIC/PIT exists here only to prove that BoringKernel can receive, acknowledge and return from a real periodic hardware interrupt before more modern interrupt hardware is introduced in a separate milestone.
+Both task-local state and the full integer register preservation probe passed, bootstrap returned through its saved IRQ frame, finished tasks were not selected again, and both task stacks were freed afterward.
+
+The separate real Divide Error and Page Fault acceptance modes remain green and continue to prove vectors 0 and 14 respectively.
+
+## Limitations
+
+The current preemptive IRQ path is verified only for:
+
+- one x86_64 bootstrap CPU;
+- CPL0 kernel tasks;
+- one shared kernel address space;
+- QEMU `q35` with `qemu64,apic=off`;
+- the legacy PIT/PIC timer route.
+
+It does not provide processes, ring 3, separate address spaces, CR3 task switching, TSS user-stack switching, FPU/SIMD switching, sleeping/blocking, synchronization primitives, priorities, realtime scheduling, SMP, or modern APIC timer routing.

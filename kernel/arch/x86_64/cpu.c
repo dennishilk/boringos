@@ -8,6 +8,20 @@ uint64_t x86_64_read_cr3(void) {
     return value;
 }
 
+uint64_t x86_64_read_rflags(void) {
+    uint64_t value;
+
+    __asm__ volatile ("pushfq; popq %0" : "=r" (value));
+    return value;
+}
+
+uint16_t x86_64_read_ss(void) {
+    uint16_t value;
+
+    __asm__ volatile ("mov %%ss, %0" : "=r" (value));
+    return value;
+}
+
 void x86_64_invalidate_page(uintptr_t virtual_address) {
     /* invlpg invalidates the current address-space translation for one page. */
     __asm__ volatile ("invlpg (%0)" : : "r" (virtual_address) : "memory");
@@ -22,14 +36,15 @@ void x86_64_interrupts_enable(void) {
 }
 
 bool x86_64_interrupts_enabled(void) {
-    uint64_t rflags;
-
-    __asm__ volatile ("pushfq; popq %0" : "=r" (rflags));
-    return (rflags & (1ULL << 9)) != 0ULL;
+    return (x86_64_read_rflags() & (1ULL << 9)) != 0ULL;
 }
 
 void x86_64_pause(void) {
     __asm__ volatile ("pause");
+}
+
+void x86_64_enable_and_halt(void) {
+    __asm__ volatile ("sti; hlt" : : : "memory");
 }
 
 void x86_64_halt_forever(void) {
