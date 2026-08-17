@@ -33,20 +33,26 @@ _Static_assert(sizeof(struct x86_64_idt_entry) == 16U,
                "x86_64 IDT entry must be 16 bytes");
 _Static_assert(sizeof(struct x86_64_idtr) == 10U,
                "x86_64 IDTR image must be 10 bytes");
-_Static_assert(sizeof(struct x86_64_trap_frame) == 176U,
-               "trap-frame layout must match exception_stubs.S");
+_Static_assert(sizeof(struct x86_64_trap_frame) == 192U,
+               "trap-frame layout must match x86_64 entry stubs");
 _Static_assert(offsetof(struct x86_64_trap_frame, rsp) == 0U,
-               "trap-frame RSP offset mismatch");
+               "trap-frame RSP copy offset mismatch");
 _Static_assert(offsetof(struct x86_64_trap_frame, ss) == 8U,
-               "trap-frame SS offset mismatch");
+               "trap-frame SS copy offset mismatch");
 _Static_assert(offsetof(struct x86_64_trap_frame, vector) == 136U,
                "trap-frame vector offset mismatch");
 _Static_assert(offsetof(struct x86_64_trap_frame, error_code) == 144U,
                "trap-frame error-code offset mismatch");
 _Static_assert(offsetof(struct x86_64_trap_frame, rip) == 152U,
                "trap-frame RIP offset mismatch");
+_Static_assert(offsetof(struct x86_64_trap_frame, cs) == 160U,
+               "trap-frame CS offset mismatch");
 _Static_assert(offsetof(struct x86_64_trap_frame, rflags) == 168U,
                "trap-frame RFLAGS offset mismatch");
+_Static_assert(offsetof(struct x86_64_trap_frame, hardware_rsp) == 176U,
+               "trap-frame hardware RSP offset mismatch");
+_Static_assert(offsetof(struct x86_64_trap_frame, hardware_ss) == 184U,
+               "trap-frame hardware SS offset mismatch");
 
 extern const uintptr_t x86_64_exception_stub_table[X86_64_EXCEPTION_VECTOR_COUNT];
 void x86_64_load_idt(const struct x86_64_idtr *idtr);
