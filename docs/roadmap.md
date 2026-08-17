@@ -21,16 +21,24 @@ bounded kernel heap
     ↓
 BoringKernel x86_64 IDT
     ↓
-exception stubs + normalized trap frame
+CPU exception diagnostics
     ↓
-C exception diagnostics
+legacy PIC remapped to vectors 32–47
     ↓
-controlled fatal halt
+PIT channel 0 → IRQ0 → vector 32
+    ↓
+C timer tick + PIC EOI
+    ↓
+restore + iretq
 ```
 
-BoringKernel currently runs in ring 0, owns a minimal physical page-frame allocator, can create/remove selected 4-KiB mappings in the active x86_64 four-level address space, has a bounded dynamic kernel heap, and installs its own x86_64 IDT for CPU exception vectors 0–31. Real QEMU acceptance tests have reached BoringKernel through both a CPU-generated Divide Error and an MMU-generated Page Fault, including correct Page Fault `CR2` reporting and controlled fatal halt.
+BoringKernel currently runs in ring 0, owns a minimal physical page-frame allocator, can create/remove selected 4-KiB mappings in the active x86_64 four-level address space, has a bounded dynamic kernel heap, installs its own x86_64 IDT, diagnoses real CPU Divide Error and MMU Page Fault exceptions, and now receives repeated real PIT-generated IRQ0 interrupts through a remapped 8259-compatible PIC.
 
-The active page-table root and boot-critical mappings remain inherited from Limine. There is still no hardware IRQ delivery, interrupt-controller setup, timer, scheduler, processes, ring 3, syscalls, userspace loader, VFS, RAMFS, block devices, storage drivers, BoringFS implementation, init or shell.
+The verified bootstrap timer path maps IRQ0 to vector 32, increments a `uint64_t` tick counter only from the IRQ handler, sends PIC End Of Interrupt and returns with `iretq`. The accepted merged-main QEMU run required at least ten timer deliveries, proving repeated acknowledgement/return rather than accepting a single first interrupt.
+
+For this deliberately legacy bootstrap proof, the QEMU `q35` reference uses one `qemu64,apic=off` CPU. No LAPIC/IOAPIC configuration is implemented yet. The active page-table root and boot-critical mappings remain inherited from Limine.
+
+There is still no scheduler, preemption, task switching, threads, processes, ring 3, syscalls, userspace loader, VFS, RAMFS, block devices, storage drivers, BoringFS implementation, init or shell.
 
 Every milestone should keep all earlier QEMU acceptance checks green and add a focused proof for the new capability.
 
@@ -105,7 +113,7 @@ This milestone proves a functioning small dynamic kernel heap. It does **not** c
 Implemented and accepted in QEMU:
 
 - allocate a BoringKernel-owned 256-entry x86_64 IDT;
-- install valid exception gates for vectors 0–31 while leaving hardware IRQ vectors unconfigured;
+- install valid exception gates for vectors 0–31;
 - use DPL0 64-bit interrupt gates with the currently executing kernel code selector;
 - validate the configured descriptors before loading the table;
 - execute `lidt` and verify the active IDTR with `sidt`;
@@ -116,48 +124,63 @@ Implemented and accepted in QEMU:
 - provide a dedicated minimal Double Fault diagnostic while documenting that it still uses the normal kernel stack and has no IST hardening;
 - never return from a fatal exception; end through the existing controlled `cli`/`hlt` halt loop;
 - add separate normal, divide and pagefault build/test modes rather than crashing the ordinary successful boot;
-- preserve all previous PMM, VMM and heap acceptance checks in the normal path and before each deliberate fatal test.
+- preserve all previous PMM, VMM and heap acceptance checks.
 
-Verified real exception proofs:
+Verified real exception proofs include CPU-generated Divide Error on vector 0 and MMU-generated Page Fault on vector 14 with `CR2` matching the deliberately unmapped test address.
+
+This milestone proves a working fatal CPU-exception path through BoringKernel's own IDT. It does **not** provide recoverable faults, demand paging or a hardened Double Fault IST stack.
+
+## Milestone 5: hardware interrupt controller and periodic timer — COMPLETE
+
+Implemented, merged and accepted on `main` in QEMU:
+
+- retain CPU exception vectors 0–31 unchanged;
+- install DPL0 IDT interrupt gates for legacy PIC vectors 32–47;
+- initialize the 8259-compatible master/slave PICs in 8086 mode;
+- remap master IRQ0–7 to vectors 32–39 and slave IRQ8–15 to vectors 40–47;
+- mask all hardware IRQs initially;
+- program PIT channel 0 in rate-generator mode from the 1,193,182 Hz input clock;
+- request 100 Hz and calculate divisor 11932, producing approximately 99.998491 Hz;
+- unmask only IRQ0, leaving master/slave masks at `0xfe` / `0xff`;
+- execute `sti` only after IDT/PIC/PIT/mask state has been validated;
+- preserve GPRs in small x86_64 IRQ stubs, dispatch policy in C and return from normal IRQs with `iretq`;
+- increment the timer tick counter only from real IRQ0 dispatch;
+- send master EOI for master IRQs and slave-before-master EOI for slave IRQs;
+- handle the straightforward spurious IRQ7/IRQ15 acknowledgement rules;
+- avoid dynamic allocation and per-tick serial output in the IRQ handler;
+- require at least ten asynchronous timer IRQ deliveries before success;
+- verify repeated delivery, practical EOI correctness, zero unexpected IRQs and normal return from interrupt;
+- preserve the existing real Divide Error and Page Fault QEMU tests.
+
+The accepted normal path reported:
 
 ```text
-Divide Error:
-Vector: 0
-Name: Divide Error
-RIP: 0xFFFFFFFF8000450F
-Fatal exception: controlled halt.
+IRQ self-test:
+  timer-delivery: PASS
+  repeated-irqs: PASS
+  acknowledgement: PASS
+Ticks observed: 10
+IRQ0 deliveries: 10
+Unexpected IRQs: 0
 
-Page Fault:
-Vector: 14
-Name: Page Fault
-Error code: 0x0000000000000000
-RIP: 0xFFFFFFFF80004544
-CR2: 0xFFFFFF0000000000
-Page fault mapping: non-present
-Page fault access: read
-Page fault privilege: supervisor
-Fatal exception: controlled halt.
+BoringKernel hardware interrupt test passed.
 ```
 
-The normal QEMU path also verified the loaded table at runtime with IDTR limit 4095 and kernel code selector `0x28`.
+The current QEMU reference uses `-M q35 -cpu qemu64,apic=off` specifically so this milestone remains an isolated PIC/PIT bootstrap rather than silently introducing LAPIC setup. PIC/PIT is temporary bootstrap infrastructure, not the intended final modern interrupt architecture.
 
-This milestone proves a working fatal CPU-exception path through BoringKernel's own IDT. It does **not** provide hardware IRQ routing, recoverable faults, demand paging, a hardened Double Fault IST stack or a general interrupt subsystem.
-
-## Milestone 5: interrupt controller and timer — NEXT
-
-Establish one deliberately narrow tested hardware interrupt path and one timer source under QEMU.
-
-This is a separate future milestone. It has **not** been started. A later implementation must choose and initialize the required interrupt-controller/timer mechanism deliberately, prove interrupt acknowledgement and timer progress, and avoid serial flooding.
+This milestone proves that BoringKernel can receive, acknowledge and return from repeated real periodic hardware interrupts. It does **not** implement scheduling, preemption, task switching, LAPIC, IOAPIC, HPET, ACPI/MADT or SMP.
 
 ---
 
 # Stage 3 — execution and process foundations
 
-## Milestone 6: kernel execution contexts / scheduler
+## Milestone 6: kernel execution contexts / scheduler — NEXT
 
 Implement the smallest scheduler capable of switching between independent kernel execution contexts.
 
 Required properties include explicit task state, dedicated stacks, deterministic runnable ordering and a minimal isolated context-switch boundary.
+
+The timer now exists as a real interrupt source, but this milestone must not assume that timer-driven preemption is automatically required. Context switching and scheduling policy need their own narrow design and acceptance proof.
 
 ## Milestone 7: process and address-space model
 
@@ -358,23 +381,21 @@ Networking remains unrelated and deferred.
 
 # Exact next implementation milestone
 
-## Interrupt controller and timer
+## Kernel execution contexts / scheduler
 
-The next roadmap item is Milestone 5: establish the first controlled hardware interrupt path and one timer source under QEMU.
+The next roadmap item is Milestone 6: define and prove the smallest kernel execution-context and scheduler mechanism.
 
-It has **not** been started. It requires a separate instruction and must not be conflated with the now-complete CPU-exception milestone.
+It has **not** been started and requires a separate instruction.
 
 A future implementation must remain narrow and must not jump ahead to:
 
-- scheduler/preemption;
-- threads or processes;
+- process/address-space semantics;
 - ring 3;
 - syscalls;
+- userspace loading;
 - VFS/RAMFS;
 - BoringFS implementation;
-- shell code;
-- storage drivers.
+- storage drivers;
+- networking.
 
-The next proof, only when separately requested, is:
-
-> BoringKernel can receive and acknowledge one deliberately configured hardware interrupt source and demonstrate timer progress under QEMU without compromising the existing exception path.
+The next proof, only when separately requested, should establish that BoringKernel can switch between explicitly defined independent kernel execution contexts with deterministic scheduling behavior and clean stack/state ownership.
