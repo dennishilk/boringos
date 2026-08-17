@@ -33,7 +33,7 @@ PID=$!
 
 attempt=0
 while [ "${attempt}" -lt 150 ]; do
-    if grep -Fqx 'BoringKernel preemptive scheduling test passed.' "${LOG}" 2>/dev/null; then
+    if grep -Fqx 'BoringKernel process/address-space test passed.' "${LOG}" 2>/dev/null; then
         break
     fi
 
@@ -171,7 +171,32 @@ for line in \
     'Cooperative yields during test: 0' \
     'Task stacks freed: 2' \
     'Task heap allocations after preemption cleanup: 0' \
-    'BoringKernel preemptive scheduling test passed.'
+    'BoringKernel preemptive scheduling test passed.' \
+    'Process A kernel mappings active.' \
+    'Process B kernel mappings active.' \
+    'Process subsystem:' \
+    'Bootstrap PID: 0' \
+    'Processes created: 2' \
+    'Address spaces created: 2' \
+    'Process model: online' \
+    'Address-space test:' \
+    'Process A PID: 1' \
+    'Process B PID: 2' \
+    'Process/address-space self-test:' \
+    '  process-create: PASS' \
+    '  unique-pid: PASS' \
+    '  address-space-create: PASS' \
+    '  distinct-root: PASS' \
+    '  same-va-different-pa: PASS' \
+    '  cr3-switch: PASS' \
+    '  kernel-mappings: PASS' \
+    '  process-a-isolation: PASS' \
+    '  process-b-isolation: PASS' \
+    '  preemptive-address-space-switch: PASS' \
+    '  bootstrap-return: PASS' \
+    '  address-space-cleanup: PASS' \
+    '  pmm-bookkeeping: PASS' \
+    'BoringKernel process/address-space test passed.'
 do
     if ! grep -Fqx "${line}" "${LOG}"; then
         echo "missing serial line: ${line}" >&2
@@ -208,7 +233,16 @@ for pattern in \
     '^Task A slices: [1-9][0-9]*$' \
     '^Task B slices: [1-9][0-9]*$' \
     '^Task A resumes: [1-9][0-9]*$' \
-    '^Task B resumes: [1-9][0-9]*$'
+    '^Task B resumes: [1-9][0-9]*$' \
+    '^Test virtual address: 0x[0-9A-F]{16}$' \
+    '^Process A root: 0x[0-9A-F]{16}$' \
+    '^Process B root: 0x[0-9A-F]{16}$' \
+    '^Process A physical frame: 0x[0-9A-F]{16}$' \
+    '^Process B physical frame: 0x[0-9A-F]{16}$' \
+    '^Address-space switches: [1-9][0-9]*$' \
+    '^Preemptive CR3 switches: [1-9][0-9]*$' \
+    '^Process A slices: [1-9][0-9]*$' \
+    '^Process B slices: [1-9][0-9]*$'
 do
     if ! grep -Eq "${pattern}" "${LOG}"; then
         echo "missing runtime value matching: ${pattern}" >&2
@@ -228,6 +262,9 @@ TASK_A_SLICES=$(sed -n 's/^Task A slices: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail
 TASK_B_SLICES=$(sed -n 's/^Task B slices: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
 TASK_A_RESUMES=$(sed -n 's/^Task A resumes: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
 TASK_B_RESUMES=$(sed -n 's/^Task B resumes: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
+PROCESS_CR3_SWITCHES=$(sed -n 's/^Preemptive CR3 switches: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
+PROCESS_A_SLICES=$(sed -n 's/^Process A slices: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
+PROCESS_B_SLICES=$(sed -n 's/^Process B slices: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
 ITERATION_LINES=$(grep -Fxc '  iterations: 3' "${LOG}" || true)
 LOCAL_STATE_LINES=$(grep -Fxc '  local-state: PASS' "${LOG}" || true)
 
@@ -274,8 +311,17 @@ if [ -z "${TASK_A_RESUMES}" ] || [ "${TASK_A_RESUMES}" -lt 2 ] ||
     echo 'both preemptive tasks did not resume repeatedly after timer preemption' >&2
     status=1
 fi
+if [ -z "${PROCESS_CR3_SWITCHES}" ] || [ "${PROCESS_CR3_SWITCHES}" -lt 6 ]; then
+    echo 'process test did not perform repeated real CR3 switches' >&2
+    status=1
+fi
+if [ -z "${PROCESS_A_SLICES}" ] || [ "${PROCESS_A_SLICES}" -lt 3 ] ||
+   [ -z "${PROCESS_B_SLICES}" ] || [ "${PROCESS_B_SLICES}" -lt 3 ]; then
+    echo 'both process-owned tasks did not receive at least 3 preemptive slices' >&2
+    status=1
+fi
 
-if grep -Eiq 'PMM self-test FAILED|Physical memory manager: FAILED|VMM: FAILED|VMM self-test FAILED|Kernel heap: FAILED|Heap self-test FAILED|Exception handling: FAILED|Hardware interrupts: FAILED|Timer: FAILED|Hardware interrupt self-test FAILED|Kernel tasks: FAILED|Cooperative task self-test FAILED|Preemptive scheduler: FAILED|Preemptive scheduling self-test FAILED|heap corruption|Fatal exception: controlled halt|general protection fault|triple fault|reboot' "${LOG}"; then
+if grep -Eiq 'PMM self-test FAILED|Physical memory manager: FAILED|VMM: FAILED|VMM self-test FAILED|Kernel heap: FAILED|Heap self-test FAILED|Exception handling: FAILED|Hardware interrupts: FAILED|Timer: FAILED|Hardware interrupt self-test FAILED|Kernel tasks: FAILED|Cooperative task self-test FAILED|Preemptive scheduler: FAILED|Preemptive scheduling self-test FAILED|Process subsystem: FAILED|Process/address-space self-test FAILED|heap corruption|Fatal exception: controlled halt|general protection fault|triple fault|reboot' "${LOG}"; then
     echo 'kernel reported a failure during normal boot' >&2
     status=1
 fi
