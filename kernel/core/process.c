@@ -89,7 +89,7 @@ bool process_init(void) {
 }
 
 struct process *process_bootstrap(void) {
-    if (!process_initialized) {
+    if ((!process_initialized) && !process_init()) {
         return NULL;
     }
     return &bootstrap_process;
