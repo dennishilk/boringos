@@ -45,6 +45,7 @@ KERNEL_C_SOURCES := \
 	kernel/core/pmm.c \
 	kernel/core/heap.c \
 	kernel/core/task.c \
+	kernel/core/preemption_test.c \
 	kernel/arch/x86_64/vmm.c \
 	kernel/arch/x86_64/exception.c \
 	kernel/arch/x86_64/irq.c \
