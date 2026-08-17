@@ -3,14 +3,14 @@
 These decisions remain deliberately narrow and provisional.
 
 - **Initial architecture:** x86_64.
-- **Reference machine:** QEMU `q35`. For the current legacy PIC/PIT bootstrap proof, the single reference CPU is explicitly `qemu64,apic=off`; BoringKernel does not configure a LAPIC in this milestone.
+- **Reference machine:** QEMU `q35`. For the current legacy PIC/PIT bootstrap proof, the single reference CPU is explicitly `qemu64,apic=off`; BoringKernel does not configure a LAPIC yet.
 - **Bootloader:** Limine 12.5.2, used to load BoringKernel and provide boot-time information that is still needed by the current kernel, including the memory map, HHDM offset and paging mode.
 - **Kernel format:** freestanding, statically linked ELF64 x86_64 (`kernel.elf`).
 - **Kernel entry path:** firmware → Limine → ELF entry symbol `boring_kernel_entry` → BoringKernel C code.
-- **C/assembly boundary:** kernel policy, allocation, exception diagnostics and IRQ dispatch remain in C. Tiny x86_64 inline assembly is isolated to CPU/I/O primitives such as port I/O, `CR3`, `invlpg`, IF control and the halt loop. `exception_stubs.S` contains exception ABI mechanics and deliberate fault triggers; `irq_stubs.S` contains only hardware-IRQ entry/save/restore/`iretq` mechanics.
+- **C/assembly boundary:** kernel policy, allocation, exception diagnostics, IRQ dispatch and cooperative task selection remain in C. Tiny x86_64 inline assembly is isolated to CPU/I/O primitives such as port I/O, `CR3`, `invlpg`, IF control and the halt loop. `exception_stubs.S` contains exception ABI mechanics and deliberate fault triggers; `irq_stubs.S` contains hardware-IRQ entry/save/restore/`iretq` mechanics; `context_switch.S` contains only the minimal SysV AMD64 cooperative context save/restore boundary and its register-preservation acceptance probe.
 - **Serial console:** legacy COM1 at I/O base `0x3f8`, configured for 115200 baud, 8 data bits, no parity, one stop bit; transmit is polled.
 - **Privilege level:** the kernel currently executes at x86_64 CPL 0 (ring 0), as handed off by Limine. There is no ring-3/userspace execution yet.
-- **Execution model:** one bootstrap CPU only. There is no SMP, scheduler, preemption or task switching.
+- **Execution model:** one bootstrap CPU only. BoringKernel can switch cooperatively among independent kernel execution contexts when code explicitly calls `task_yield()`. There is no timer-driven preemption, SMP or user process model.
 
 ## Physical memory manager
 
@@ -98,7 +98,7 @@ This is a finite 16-MiB range immediately after the separate VMM test window. In
 
 ### Allocation algorithm and metadata
 
-The allocator uses deterministic first-fit selection, 16-byte payload alignment, 48-byte in-heap block headers, splitting when a useful remainder exists and immediate coalescing of adjacent free blocks. `kmalloc(0)` returns `NULL`. Block topology, magic, guards, sizes, links, bounds and alignment are validated before allocator operations continue.
+The allocator uses deterministic first-fit selection, 16-byte payload alignment, 48-byte in-heap block headers, splitting when a useful remainder exists and immediate coalescing of adjacent free blocks. `kmalloc(0)` returns `NULL`. Block topology, magic, guards, sizes, alignment, bounds and links are validated before allocator operations continue.
 
 `kfree` accepts only the exact payload start of a currently allocated block. Outside-heap, unaligned/interior and double frees are rejected. Mapped heap pages are retained after `kfree`; page-level heap shrinking is not implemented.
 
@@ -200,7 +200,7 @@ Double Fault still has no dedicated IST/emergency stack and therefore is not har
 
 ## Bootstrap hardware IRQ delivery
 
-BoringKernel now has one deliberately small asynchronous hardware-interrupt path. Full details and the acceptance capture are in [`interrupts.md`](interrupts.md).
+BoringKernel has one deliberately small asynchronous hardware-interrupt path. Full details and the IRQ acceptance capture are in [`interrupts.md`](interrupts.md).
 
 The verified path is:
 
@@ -265,7 +265,7 @@ The normal acceptance path verifies `timer_ticks()==0` before `sti`, then waits 
 
 `kernel/arch/x86_64/irq_stubs.S` reuses the same current CPL0 176-byte trap-frame shape where technically clean. PIC interrupts have no CPU error code, so each stub supplies synthetic zero plus its vector, saves the GPRs, calls C dispatch, restores the interrupted state and executes `iretq`.
 
-Unlike fatal exception entry, normal IRQ entry returns to interrupted kernel code. No stack switch, scheduler context, task object or preemption policy is present.
+Normal IRQ entry returns to interrupted kernel code. The IRQ dispatcher does not invoke the cooperative task selector and does not perform a context switch.
 
 ### Tick/concurrency assumptions
 
@@ -275,38 +275,17 @@ No dynamic memory allocation and no per-tick serial logging occurs in the IRQ ha
 
 ### QEMU reference limitation
 
-The current verified PIC/PIT path runs QEMU `q35` with a single `qemu64,apic=off` CPU. With QEMU's local APIC active, legacy PIC output is routed through LAPIC LINT0, and LAPIC configuration is intentionally outside this milestone. Disabling the CPU APIC feature keeps this proof genuinely PIC/PIT-only rather than silently adding LAPIC setup.
+The current verified PIC/PIT path runs QEMU `q35` with a single `qemu64,apic=off` CPU. With QEMU's local APIC active, legacy PIC output is routed through LAPIC LINT0, and LAPIC configuration is intentionally outside this bootstrap path. Disabling the CPU APIC feature keeps this proof genuinely PIC/PIT-only rather than silently adding LAPIC setup.
 
-This is temporary bootstrap infrastructure, not the final interrupt architecture and not a physical-hardware compatibility claim. A later milestone may replace it with LAPIC/IOAPIC-based routing after that work is explicitly scoped.
+This is temporary bootstrap infrastructure, not the final interrupt architecture and not a physical-hardware compatibility claim.
 
-### Acceptance proof
+### IRQ acceptance proof
 
-The verified normal QEMU run observed:
+The verified normal QEMU path requires at least ten distinct IRQ0 deliveries specifically so a single initial interrupt cannot hide a missing EOI. The test never increments the tick counter manually or calls the IRQ dispatcher directly.
+
+The accepted cooperative-context branch run reported the preceding timer proof as:
 
 ```text
-Hardware interrupts:
-Controller: 8259 PIC
-PIC: remapped
-Master vectors: 32-39
-Slave vectors: 40-47
-Initial master mask: 255
-Initial slave mask: 255
-IRQ0 vector: 32
-Master mask: 254
-Slave mask: 255
-
-Timer:
-Source: PIT channel 0
-Input frequency: 1193182 Hz
-Requested frequency: 100 Hz
-Divisor: 11932
-Effective frequency: 99998 mHz
-IRQ: 0
-Vector: 32
-Timer: online
-
-Interrupts: enabled
-
 IRQ self-test:
   timer-delivery: PASS
   repeated-irqs: PASS
@@ -314,13 +293,156 @@ IRQ self-test:
 Ticks observed: 10
 IRQ0 deliveries: 10
 Unexpected IRQs: 0
-Spurious IRQ7: 0
-Spurious IRQ15: 0
 
 BoringKernel hardware interrupt test passed.
 ```
 
-Ten distinct deliveries are required specifically so a single initial IRQ cannot hide a missing EOI. The acceptance test never increments the tick counter manually or calls the IRQ dispatcher directly.
+## Cooperative kernel execution contexts
+
+Full task/context details are in [`tasks.md`](tasks.md).
+
+The verified cooperative path is:
+
+```text
+bootstrap context
+    ↓ explicit task_yield()
+task A / independent stack A
+    ↓ explicit task_yield()
+task B / independent stack B
+    ↓
+task A resumes after its yield
+    ↓
+...
+    ↓
+FINISHED tasks are skipped
+    ↓
+bootstrap context resumes
+```
+
+This is genuine stack-pointer/context switching, not sequential calls disguised as multitasking.
+
+### Minimal context contract
+
+The current SysV AMD64 cooperative context contains only:
+
+```text
+RSP
+RBX
+RBP
+R12
+R13
+R14
+R15
+```
+
+`RBX`, `RBP` and `R12`–`R15` are the general-purpose callee-saved registers required to survive an ordinary SysV AMD64 C call. `RSP` identifies the suspended task stack. Caller-saved registers (`RAX`, `RCX`, `RDX`, `RSI`, `RDI`, `R8`–`R11`) are deliberately not promoted into this small context object.
+
+There is no explicit `RIP` field. A suspended task's normal return address already lives on its saved stack, so `context_switch.S` restores the saved registers and `RSP`, then executes `ret`.
+
+The acceptance probe explicitly loads known values into every saved callee-saved GPR, performs a real yield/context switch, and validates `RBX`, `RBP`, `R12`–`R15` plus `RSP` after that execution context resumes.
+
+### Kernel task object and states
+
+The internal task object owns:
+
+- a monotonically assigned kernel task ID;
+- one of exactly `READY`, `RUNNING`, `FINISHED`;
+- the minimal x86_64 context;
+- stack base and size;
+- C entry function and argument;
+- fixed-slot ownership state;
+- the context's intended interrupt-enabled state.
+
+Ordinary task metadata lives in a fixed four-slot table. This avoids speculative dynamic scheduler infrastructure. The current acceptance test creates exactly two ordinary tasks.
+
+### Bootstrap context
+
+The already-running kernel is represented as special task ID **0**. Its active Limine-provided stack is not copied. Its context becomes valid naturally when bootstrap first calls the architecture context-switch routine to leave that stack.
+
+Bootstrap is not selected as an ordinary round-robin peer while runnable test tasks remain. When the final ordinary task returns and no `READY` task remains, the saved bootstrap context is restored and execution continues immediately after the original bootstrap `task_yield()` call.
+
+### Task stacks and first entry
+
+Every created ordinary task receives an independent **16 KiB** stack through the existing `kmalloc` kernel heap.
+
+Current stack safety checks include 16-byte alignment, range/overlap checks, a low-end 64-bit sentinel, a reserved low 16-byte area and sentinel validation before cleanup. Guard pages are not implemented.
+
+A never-run task has no natural suspended return frame. BoringKernel constructs a synthetic first frame at the aligned high end of the stack with the C `kernel_task_trampoline` address as the first return target. Loading that task context and executing `ret` enters the trampoline with the SysV AMD64 function-entry stack alignment expected by C.
+
+The trampoline restores the task's intended interrupt state and calls its entry function. If the entry returns normally, the task is marked `FINISHED`; the selector never chooses it again. Another `READY` task is selected, or bootstrap is restored if none remains.
+
+### Cooperative selector and interrupt policy
+
+The selector is deterministic round-robin over fixed ordinary task slots and runs only when ordinary kernel code explicitly yields or when a task entry returns.
+
+For the small critical section:
+
+1. record whether the current context intended interrupts enabled;
+2. execute `cli`;
+3. update task state/current-task selection;
+4. save the outgoing context and restore the incoming context;
+5. once the incoming/resumed C context is coherent, restore that context's intended IF state.
+
+This prevents PIT IRQ delivery halfway through partially changed stack/current-task state while ensuring interrupts do not remain globally disabled during normal task execution.
+
+Crucially, PIT IRQ0 remains:
+
+```text
+IRQ0 → tick++ → PIC EOI → iretq
+```
+
+No IRQ0 path calls `task_yield()`, the selector or `x86_64_context_switch`. Therefore this milestone does **not** prove preemption.
+
+### Completion and cleanup
+
+Task entry return causes `RUNNING → FINISHED`. Finished tasks are not scheduled again and their currently active stack is never freed in place.
+
+After both acceptance tasks have finished and bootstrap has resumed, the kernel validates each task stack sentinel and releases both 16-KiB stacks through `kfree`.
+
+Because the existing heap intentionally retains mapped pages after free, task cleanup checks that heap allocation count and used bytes return to their previous values rather than falsely requiring heap page mappings to shrink.
+
+### Cooperative acceptance proof
+
+The verified branch QEMU run reported:
+
+```text
+Kernel tasks:
+Mode: cooperative
+Tasks created: 2
+Task stack size: 16384 bytes
+Bootstrap task ID: 0
+Scheduler: online
+
+Task A:
+  iterations: 3
+  local-state: PASS
+
+Task B:
+  iterations: 3
+  local-state: PASS
+
+Context switch self-test:
+  task-a-start: PASS
+  task-b-start: PASS
+  alternating-switch: PASS
+  stack-isolation: PASS
+  register-state: PASS
+  task-return: PASS
+  timer-coexistence: PASS
+  stack-cleanup: PASS
+  heap-bookkeeping: PASS
+Context switches: 7
+Ticks before task test: 10
+Ticks after task test: 16
+Task stacks freed: 2
+Task heap allocations after cleanup: 0
+
+BoringKernel cooperative task test passed.
+```
+
+Each task keeps a local counter on its own stack across yields. The test also proves the two local addresses are distinct and belong to the currently active task stack. Seven switches match the expected bootstrap → A/B alternating path and clean return to bootstrap.
+
+Timer progress from 10 to 16 ticks proves that cooperative context switching did not leave hardware interrupts disabled. It does not select or preempt tasks.
 
 ## Acceptance build modes
 
@@ -332,9 +454,9 @@ TEST_MODE=divide
 TEST_MODE=pagefault
 ```
 
-`normal` runs PMM, VMM, heap and exception-infrastructure checks and then proves repeated real PIT/PIC hardware-IRQ delivery. `divide` and `pagefault` first pass the earlier subsystem checks and then intentionally trigger their respective real CPU faults. A mode-stamp dependency forces kernel objects to rebuild when the mode changes.
+`normal` runs PMM, VMM, heap and exception-infrastructure checks, proves repeated real PIT/PIC hardware-IRQ delivery, then runs the cooperative two-task context-switch acceptance test. `divide` and `pagefault` first pass the earlier memory/exception setup and then intentionally trigger their respective real CPU faults. A mode-stamp dependency forces kernel objects to rebuild when the mode changes.
 
-CI runs all three QEMU modes with finite timeouts. Missing diagnostics, wrong vectors, early QEMU termination, a stalled one-shot IRQ, failure markers or missing final success markers are not accepted as success.
+CI runs all three QEMU modes with finite timeouts. Missing diagnostics, wrong vectors, early QEMU termination, stalled IRQ/task switching, failure markers or missing final success markers are not accepted as success.
 
 ## Still not implemented
 
@@ -342,6 +464,10 @@ BoringKernel does **not** yet own the complete address space. It still depends o
 
 The kernel heap remains a small single-core bootstrap allocator, not a production allocator.
 
-The exception subsystem remains fatal-diagnostic infrastructure, and the hardware-interrupt path is deliberately limited to a legacy PIC/PIT bootstrap timer. There is no LAPIC, IOAPIC, x2APIC, APIC timer, HPET, ACPI/MADT parsing, SMP, interrupt affinity, TSS/IST exception-stack hardening, scheduler, preemption, threads, context switching, processes, ring 3, syscalls, userspace loader, VFS, RAMFS, BoringFS implementation, storage stack, keyboard/mouse driver, graphics, BoringWM, networking, USB, audio or GPU acceleration.
+The exception subsystem remains fatal-diagnostic infrastructure, and the hardware-interrupt path remains deliberately limited to a legacy PIC/PIT bootstrap timer.
 
-No scheduler code is part of the hardware-IRQ milestone.
+The cooperative task layer is also deliberately narrow. It does **not** provide timer-driven preemption, timeslices, sleeping/blocking/waiting states, wakeups, priorities, fairness accounting, synchronization primitives, FPU/SIMD context switching, guard pages, per-process address spaces, user processes or a stable scheduler API.
+
+There is still no LAPIC, IOAPIC, x2APIC, APIC timer, HPET, ACPI/MADT parsing, SMP, interrupt affinity, hardened TSS/IST exception stacks, ring 3, syscalls, userspace loader, VFS, RAMFS, BoringFS implementation, storage stack, keyboard/mouse driver, graphics, BoringWM, networking, USB, audio or GPU acceleration.
+
+The exact next execution-model blocker, only when separately requested, is timer-driven preemption: connecting a timer interrupt to a safe scheduling/context-switch boundary without weakening the cooperative context, IRQ acknowledgement and exception invariants already proven.
