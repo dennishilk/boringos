@@ -20,6 +20,7 @@ void x86_64_context_switch(struct x86_64_kernel_context *from,
 bool x86_64_context_test_callee_saved(void (*yield_fn)(void));
 void x86_64_preemption_probe_reset(void);
 void x86_64_preemption_probe_release(void);
+bool x86_64_preemption_probe_is_armed(void);
 bool x86_64_context_test_preemptive_gprs(void);
 
 #endif
