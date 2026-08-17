@@ -13,26 +13,28 @@ Es ist **keine Linux-Distribution**, **keine BSD-Distribution** und **basiert we
 
 **Extrem früher Bootstrap-Kernel.**
 
-BoringKernel bootet unter **QEMU x86_64**. Limine bleibt der externe Bootloader. Nach der Übergabe initialisiert BoringKernel die serielle COM1-Ausgabe, verarbeitet Limines Memory Map für seinen 4096-Byte-Physical-Page-Frame-Allocator, kontrolliert ausgewählte x86_64-4-KiB-Virtual-to-Physical-Mappings und besitzt jetzt zusätzlich einen kleinen begrenzten dynamischen Kernel-Heap auf Basis dieser PMM-/VMM-Primitiven.
+BoringKernel bootet unter **QEMU x86_64**. Limine bleibt der externe Bootloader. Nach der Übergabe initialisiert BoringKernel die serielle COM1-Ausgabe, verarbeitet Limines Memory Map für seinen 4096-Byte-Physical-Page-Frame-Allocator, kontrolliert ausgewählte x86_64-4-KiB-Virtual-to-Physical-Mappings, besitzt einen begrenzten dynamischen Kernel-Heap und installiert jetzt zusätzlich eine eigene x86_64 Interrupt Descriptor Table für die CPU-Exception-Vektoren 0–31.
 
 Die aktuelle serielle Ausgabe beginnt mit:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.4-dev
+BoringKernel 0.0.5-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```
 
 Der VMM übernimmt bewusst die aktuell aktive, von Limine erzeugte vierstufige Page-Table-Root-Struktur, statt sofort den gesamten Adressraum zu ersetzen. Fehlende Page-Table-Frames kommen aus dem PMM und physischer Page-Table-Speicher wird über Limines gemeldete HHDM-Abbildung erreicht.
 
-Der Kernel-Heap reserviert einen endlichen 16-MiB-Virtual-Address-Bereich, mappt initial nur zwei 4-KiB-Seiten, wächst jeweils um eine Seite über PMM + VMM, verwendet deterministisches First-Fit mit 16-Byte-Ausrichtung und führt benachbarte freie Blöcke wieder zusammen. Bereits gemappte Heap-Seiten bleiben in diesem Bootstrap-Meilenstein nach `kfree` bewusst erhalten.
+Der Kernel-Heap reserviert einen endlichen 16-MiB-Virtual-Address-Bereich, mappt initial nur zwei 4-KiB-Seiten, wächst jeweils um eine Seite über PMM + VMM, verwendet deterministisches First-Fit mit 16-Byte-Ausrichtung und führt benachbarte freie Blöcke wieder zusammen. Bereits gemappte Heap-Seiten bleiben in dieser Bootstrap-Phase nach `kfree` bewusst erhalten.
 
-Der automatisierte QEMU-Acceptance-Test prüft weiterhin sämtliche PMM- und VMM-Invarianten und führt nun zusätzlich echte bytegroße Heap-Allokationen, echte Schreib-/Lesetests, erzwungenes PMM-/VMM-gestütztes Heap-Wachstum, Free/Reuse, Double-Free-Ablehnung, Invalid-Free-Ablehnung und abschließende Allocator-Buchhaltung durch.
+BoringKernel besitzt jetzt außerdem eine 256 Einträge große x86_64-IDT mit aktiven DPL0-Interrupt-Gates für die Exception-Vektoren 0–31. Der normale QEMU-Boot verifiziert die installierte IDTR mit `sidt`. Separate Acceptance-Builds lösen anschließend einen **echten CPU-Divide-Error** und einen **echten MMU-Page-Fault** aus, führen beide über BoringKernels eigene Assembly-Entry-Stubs und den C-Exception-Handler, geben Diagnosen über die serielle Konsole aus und stoppen über den kontrollierten `cli`/`hlt`-Pfad. Der Page-Fault-Pfad meldet `CR2` und dekodiert die relevanten Hardware-Error-Code-Bits; er implementiert weder Demand Paging noch eine automatische Reparatur des Faults.
 
-BoringKernel besitzt damit **partielle, gezielte Kontrolle über virtuellen Speicher und einen funktionierenden begrenzten Bootstrap-Kernel-Heap**, aber noch weder vollständige Adressraumhoheit noch einen fertigen Produktions-Allocator. Kernel-Ausführung, aktueller Stack, HHDM und Boot-Strukturen hängen weiterhin von geerbten Limine-Mappings ab.
+Die automatisierte QEMU-Acceptance-Suite besitzt damit drei Modi: normaler Boot/IDT-Initialisierung, echter Divide-Exception-Test und echter Page-Fault-Test. Der normale Pfad erhält und prüft weiterhin die bestehenden PMM-, VMM- und Heap-Tests.
 
-Das System bleibt absichtlich winzig. Es gibt **noch keinen Userspace, Scheduler, kein Dateisystem, Networking, keine grafische Umgebung, keinen Input-Stack, Exception-/Interrupt-Unterbau oder Prozessmodell**.
+BoringKernel besitzt damit **partielle gezielte Virtual-Memory-Kontrolle, einen funktionierenden begrenzten Bootstrap-Kernel-Heap und einen funktionierenden fatalen CPU-Exception-Pfad durch seine eigene IDT**. Der Kernel besitzt weiterhin nicht den vollständigen Adressraum, und der Exception-Unterbau bleibt bewusst minimal. Double Fault besitzt einen eigenen Diagnosepfad, verwendet aber weiterhin den normalen Kernel-Stack; TSS-/IST-Härtung existiert noch nicht.
+
+Das System bleibt absichtlich winzig. Es gibt **noch kein Hardware-IRQ-Routing, kein PIC-/APIC-/IOAPIC-Setup, keinen Timer, Scheduler, Userspace, kein Dateisystem, Networking, keine grafische Umgebung, keinen Input-Stack oder Prozessmodell**.
 
 ## Technische Richtung
 
@@ -53,11 +55,13 @@ make
 make run
 ```
 
-Der automatisierte Acceptance-Test baut BoringOS neu, startet QEMU headless, erfasst die serielle Konsole und prüft Boot-Identität, PMM, ausgewählte VMM-Mapping-Kontrolle und den begrenzten Kernel-Heap:
+Die vollständige Acceptance-Suite baut BoringOS in seinem normalen Modus und in den absichtlichen Fatal-Test-Modi neu, startet QEMU headless, erfasst die serielle Konsole und prüft PMM, VMM, Heap, IDT-Initialisierung, einen echten Divide Error und einen echten Page Fault:
 
 ```sh
 make test
 ```
+
+Die Exception-Modi sind interne Entwicklungs-/Acceptance-Modi und kein benutzerseitiges Runtime-Testframework.
 
 Siehe [`docs/architecture.md`](docs/architecture.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md) und [`docs/boringfs.md`](docs/boringfs.md).
 

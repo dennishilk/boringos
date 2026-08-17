@@ -4,6 +4,7 @@
 
 #include <boring/boot_protocol.h>
 #include <boring/cpu.h>
+#include <boring/exception.h>
 #include <boring/heap.h>
 #include <boring/kernel.h>
 #include <boring/pmm.h>
@@ -11,6 +12,19 @@
 #include <boring/vmm.h>
 
 #define VMM_TEST_PATTERN 0x424f52494e474f53ULL
+#define BORING_TEST_MODE_NORMAL 0
+#define BORING_TEST_MODE_DIVIDE 1
+#define BORING_TEST_MODE_PAGEFAULT 2
+
+#ifndef BORING_TEST_MODE
+#define BORING_TEST_MODE BORING_TEST_MODE_NORMAL
+#endif
+
+#if (BORING_TEST_MODE != BORING_TEST_MODE_NORMAL) && \
+    (BORING_TEST_MODE != BORING_TEST_MODE_DIVIDE) && \
+    (BORING_TEST_MODE != BORING_TEST_MODE_PAGEFAULT)
+#error "unsupported BoringKernel test mode"
+#endif
 
 __attribute__((used, section(".limine_requests_start")))
 static volatile uint64_t limine_requests_start[] = BORING_LIMINE_REQUESTS_START_MARKER;
@@ -470,6 +484,31 @@ static bool heap_self_test(void) {
     return true;
 }
 
+static void run_exception_test_mode(void) __attribute__((noreturn));
+static void run_exception_test_mode(void) {
+#if BORING_TEST_MODE == BORING_TEST_MODE_DIVIDE
+    serial_write_string("Exception test mode: divide\n");
+    serial_write_string("Triggering real Divide Error.\n");
+    x86_64_trigger_divide_error();
+#elif BORING_TEST_MODE == BORING_TEST_MODE_PAGEFAULT
+    const uintptr_t fault_address = vmm_test_virtual_address();
+    uint64_t translated = 0ULL;
+
+    if (vmm_translate(fault_address, &translated)) {
+        serial_write_string("Page Fault test setup FAILED: address is mapped\n");
+        x86_64_halt_forever();
+    }
+
+    serial_write_string("Exception test mode: pagefault\n");
+    serial_write_string("Expected CR2: ");
+    serial_write_hex_u64((uint64_t)fault_address);
+    serial_write_string("\nTriggering real Page Fault.\n");
+    x86_64_trigger_page_fault(fault_address);
+#else
+    x86_64_halt_forever();
+#endif
+}
+
 void boring_kernel_entry(void) {
     struct pmm_stats pmm_stats;
     struct pmm_stats pmm_before_heap;
@@ -478,6 +517,7 @@ void boring_kernel_entry(void) {
     struct vmm_stats vmm_before_heap;
     struct vmm_stats vmm_after_heap;
     struct heap_stats heap_stats;
+    struct exception_stats exception_stats;
     uint64_t heap_init_pmm_frames;
     uint64_t heap_init_page_table_frames;
 
@@ -487,7 +527,7 @@ void boring_kernel_entry(void) {
 
     serial_init();
     serial_write_string("BoringOS booting...\n");
-    serial_write_string("BoringKernel 0.0.4-dev\n");
+    serial_write_string("BoringKernel 0.0.5-dev\n");
     serial_write_string("Arch: x86_64\n");
     serial_write_string("Hello from BoringKernel.\n\n");
 
@@ -589,7 +629,26 @@ void boring_kernel_entry(void) {
     if (!heap_self_test()) {
         x86_64_halt_forever();
     }
+    serial_write_string("\nBoringKernel heap test passed.\n\n");
 
-    serial_write_string("\nBoringKernel heap test passed.\n");
-    x86_64_halt_forever();
+    if (!exception_init() || !exception_get_stats(&exception_stats) ||
+        (exception_stats.configured_vectors !=
+         (uint16_t)X86_64_EXCEPTION_VECTOR_COUNT)) {
+        serial_write_string("Exception handling: FAILED\n");
+        x86_64_halt_forever();
+    }
+
+    serial_write_string("Exception handling:\n");
+    serial_write_string("IDT entries: 32\n");
+    serial_write_string("IDTR base: ");
+    serial_write_hex_u64((uint64_t)exception_stats.idtr_base);
+    serial_write_string("\nIDTR limit: ");
+    serial_write_u64((uint64_t)exception_stats.idtr_limit);
+    serial_write_string("\nCode selector: ");
+    serial_write_hex_u64((uint64_t)exception_stats.code_selector);
+    serial_write_string("\nIDT: loaded\n");
+    serial_write_string("Exceptions: online\n\n");
+    serial_write_string("BoringKernel exception infrastructure test passed.\n\n");
+
+    run_exception_test_mode();
 }
