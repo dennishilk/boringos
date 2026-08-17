@@ -4,8 +4,8 @@
 #include <stdint.h>
 
 /*
- * Limine boot protocol constants and memory-map structures required by the
- * current BoringKernel milestones.
+ * Limine boot protocol constants and structures required by the current
+ * BoringKernel milestones.
  *
  * Provenance: Limine Protocol header, commit
  * 4e1587972c148d43b2f397e4e5983bdd6c2a55a0 (0BSD).
@@ -23,9 +23,19 @@
 
 #define BORING_LIMINE_COMMON_MAGIC \
     0xc7b1dd30df4c8b88ULL, 0x0a82e883a194f07bULL
+
+#define BORING_LIMINE_HHDM_REQUEST_ID \
+    { BORING_LIMINE_COMMON_MAGIC, \
+      0x48dcf1cb8ad2b852ULL, 0x63984e959a98244bULL }
+#define BORING_LIMINE_PAGING_MODE_REQUEST_ID \
+    { BORING_LIMINE_COMMON_MAGIC, \
+      0x95c1a0edab0944cbULL, 0xa4e5cb3842f7488aULL }
 #define BORING_LIMINE_MEMMAP_REQUEST_ID \
     { BORING_LIMINE_COMMON_MAGIC, \
       0x67cf3d9d378a806fULL, 0xe304acdfc50c3c62ULL }
+
+#define BORING_LIMINE_PAGING_MODE_X86_64_4LVL 0ULL
+#define BORING_LIMINE_PAGING_MODE_X86_64_5LVL 1ULL
 
 #define BORING_LIMINE_MEMMAP_USABLE                 0ULL
 #define BORING_LIMINE_MEMMAP_RESERVED               1ULL
@@ -36,6 +46,31 @@
 #define BORING_LIMINE_MEMMAP_EXECUTABLE_AND_MODULES 6ULL
 #define BORING_LIMINE_MEMMAP_FRAMEBUFFER            7ULL
 #define BORING_LIMINE_MEMMAP_RESERVED_MAPPED        8ULL
+
+struct boring_limine_hhdm_response {
+    uint64_t revision;
+    uint64_t offset;
+};
+
+struct boring_limine_hhdm_request {
+    uint64_t id[4];
+    uint64_t revision;
+    struct boring_limine_hhdm_response *response;
+};
+
+struct boring_limine_paging_mode_response {
+    uint64_t revision;
+    uint64_t mode;
+};
+
+struct boring_limine_paging_mode_request {
+    uint64_t id[4];
+    uint64_t revision;
+    struct boring_limine_paging_mode_response *response;
+    uint64_t mode;
+    uint64_t max_mode;
+    uint64_t min_mode;
+};
 
 struct boring_limine_memmap_entry {
     uint64_t base;

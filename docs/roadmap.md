@@ -19,10 +19,16 @@ BoringKernel physical memory manager
     ↓
 4-KiB frame allocate/free self-test
     ↓
+Limine HHDM + active CR3 root
+    ↓
+BoringKernel selected 4-KiB virtual mapping
+    ↓
+translate + real write/read + unmap self-test
+    ↓
 controlled halt
 ```
 
-BoringKernel currently runs in ring 0 and has a minimal physical page-frame allocator. It still has no BoringKernel-owned page-table manager, heap, IDT, interrupts, timer, scheduler, processes, ring 3, syscalls, userspace loader, VFS, RAMFS, block devices, storage drivers, BoringFS implementation, init or shell.
+BoringKernel currently runs in ring 0, owns a minimal physical page-frame allocator, and can create/remove selected 4-KiB mappings in the active x86_64 four-level address space. The active root and boot-critical mappings remain inherited from Limine. There is still no kernel heap, IDT, interrupts, timer, scheduler, processes, ring 3, syscalls, userspace loader, VFS, RAMFS, block devices, storage drivers, BoringFS implementation, init or shell.
 
 Every milestone should keep the existing QEMU acceptance test green and add a focused test for the new capability.
 
@@ -32,7 +38,7 @@ Every milestone should keep the existing QEMU acceptance test green and add a fo
 
 ## Milestone 1: physical memory manager — COMPLETE
 
-Implemented and accepted when the QEMU test passes:
+Implemented and accepted in QEMU:
 
 - consume the Limine memory map;
 - validate entries defensively;
@@ -44,37 +50,42 @@ Implemented and accepted when the QEMU test passes:
 - detect invalid/double frees where practical;
 - verify alignment, uniqueness, usable-range membership, free/reuse and bookkeeping inside QEMU.
 
-This milestone deliberately does not map frames into virtual address space.
+## Milestone 2: selected BoringKernel virtual-memory control — COMPLETE
 
-## Milestone 2: BoringKernel-owned virtual memory — NEXT
+Implemented and accepted in QEMU:
 
-Take explicit ownership of x86_64 page-table management instead of indefinitely relying on the bootloader-created mappings.
+- explicitly request x86_64 four-level paging from Limine;
+- request and validate Limine's HHDM offset;
+- read the active PML4 physical address from `CR3` without replacing it;
+- preserve the running kernel, stack, HHDM and boot-time mappings inherited from Limine;
+- centralize checked physical-to-HHDM access for page-table memory;
+- walk ordinary PML4 → PDPT → PD → PT paths;
+- allocate missing PDPT/PD/PT frames through the existing PMM;
+- map one 4-KiB PMM-owned physical frame at a controlled kernel virtual address;
+- translate the mapping back to the same physical frame;
+- perform a real write/read through the mapped virtual address;
+- unmap the page and invalidate the TLB entry with `invlpg`;
+- reclaim empty page-table frames only when those tables were allocated by the VMM itself;
+- verify VMM and PMM bookkeeping returns to the pre-test state.
 
-Minimum goals:
+This milestone proves selected mapping control. It does **not** claim complete address-space ownership and does not replace Limine's active root page table.
 
-- inspect and understand the mappings inherited at boot;
-- create a BoringKernel-owned page-table root;
-- map and unmap 4-KiB pages using PMM-provided frames;
-- establish explicit kernel virtual-address conventions;
-- preserve the kernel, stack and required boot-time mappings during handover;
-- add bounds/overflow checks to page-table walking;
-- keep architecture-specific page-table code isolated;
-- prove mappings in QEMU without introducing a heap.
+## Milestone 3: kernel heap — NEXT
 
-Do not add userspace mappings, copy-on-write or a broad VM subsystem in this milestone.
-
-## Milestone 3: kernel heap
-
-Build a small general-purpose kernel allocator on top of physical and virtual memory primitives.
+Build a small general-purpose kernel allocator on top of the existing PMM and explicit VMM mapping primitives.
 
 Initial requirements:
 
+- reserve a bounded kernel virtual region for heap backing;
+- obtain physical frames through PMM and map them through VMM;
 - explicit allocation failure;
 - alignment support;
 - overflow-safe sizes;
 - deterministic behavior;
 - development checks for invalid frees where practical;
 - no slab ecosystem until a concrete need exists.
+
+The immediate blocker is that BoringKernel can map explicitly chosen pages but still has no general-purpose allocator for kernel objects or bounded heap region.
 
 ---
 
@@ -307,13 +318,12 @@ Networking remains unrelated and deferred.
 
 # Exact next implementation milestone
 
-## BoringKernel-owned virtual memory
+## Kernel heap
 
-The next implementation task should do **only** page-table ownership and 4-KiB map/unmap foundations using frames from the now-working PMM.
+The next implementation task should build only the smallest bounded kernel heap on top of the now-working PMM and VMM primitives.
 
 It must not add:
 
-- kernel heap;
 - IDT/interrupts;
 - timer;
 - scheduler;
@@ -328,4 +338,4 @@ It must not add:
 
 The next narrow proof is:
 
-> BoringKernel can map and unmap PMM-owned physical frames through page tables that BoringKernel itself controls.
+> BoringKernel can reserve a bounded kernel virtual heap region, back it with PMM frames mapped through the VMM, allocate/free ordinary kernel memory safely, and keep its bookkeeping consistent.
