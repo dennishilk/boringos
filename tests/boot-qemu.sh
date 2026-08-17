@@ -33,7 +33,7 @@ PID=$!
 
 attempt=0
 while [ "${attempt}" -lt 100 ]; do
-    if grep -Fqx 'BoringKernel hardware interrupt test passed.' "${LOG}" 2>/dev/null; then
+    if grep -Fqx 'BoringKernel cooperative task test passed.' "${LOG}" 2>/dev/null; then
         break
     fi
 
@@ -48,7 +48,7 @@ done
 status=0
 for line in \
     'BoringOS booting...' \
-    'BoringKernel 0.0.6-dev' \
+    'BoringKernel 0.0.7-dev' \
     'Arch: x86_64' \
     'Hello from BoringKernel.' \
     'Physical memory manager:' \
@@ -126,7 +126,28 @@ for line in \
     '  repeated-irqs: PASS' \
     '  acknowledgement: PASS' \
     'Unexpected IRQs: 0' \
-    'BoringKernel hardware interrupt test passed.'
+    'BoringKernel hardware interrupt test passed.' \
+    'Kernel tasks:' \
+    'Mode: cooperative' \
+    'Tasks created: 2' \
+    'Task stack size: 16384 bytes' \
+    'Bootstrap task ID: 0' \
+    'Scheduler: online' \
+    'Task A:' \
+    'Task B:' \
+    'Context switch self-test:' \
+    '  task-a-start: PASS' \
+    '  task-b-start: PASS' \
+    '  alternating-switch: PASS' \
+    '  stack-isolation: PASS' \
+    '  register-state: PASS' \
+    '  task-return: PASS' \
+    '  timer-coexistence: PASS' \
+    '  stack-cleanup: PASS' \
+    '  heap-bookkeeping: PASS' \
+    'Task stacks freed: 2' \
+    'Task heap allocations after cleanup: 0' \
+    'BoringKernel cooperative task test passed.'
 do
     if ! grep -Fqx "${line}" "${LOG}"; then
         echo "missing serial line: ${line}" >&2
@@ -153,7 +174,10 @@ for pattern in \
     '^Final mapped pages: [3-9][0-9]*$' \
     '^Final free bytes: [1-9][0-9]*$' \
     '^IDTR base: 0x[0-9A-F]{16}$' \
-    '^Code selector: 0x[0-9A-F]{16}$'
+    '^Code selector: 0x[0-9A-F]{16}$' \
+    '^Context switches: [1-9][0-9]*$' \
+    '^Ticks before task test: [1-9][0-9]*$' \
+    '^Ticks after task test: [1-9][0-9]*$'
 do
     if ! grep -Eq "${pattern}" "${LOG}"; then
         echo "missing runtime value matching: ${pattern}" >&2
@@ -163,6 +187,12 @@ done
 
 TICKS=$(sed -n 's/^Ticks observed: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
 DELIVERIES=$(sed -n 's/^IRQ0 deliveries: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
+SWITCHES=$(sed -n 's/^Context switches: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
+TASK_TICKS_BEFORE=$(sed -n 's/^Ticks before task test: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
+TASK_TICKS_AFTER=$(sed -n 's/^Ticks after task test: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
+ITERATION_LINES=$(grep -Fxc '  iterations: 3' "${LOG}" || true)
+LOCAL_STATE_LINES=$(grep -Fxc '  local-state: PASS' "${LOG}" || true)
+
 if [ -z "${TICKS}" ] || [ "${TICKS}" -lt 10 ]; then
     echo 'timer self-test did not observe at least 10 ticks' >&2
     status=1
@@ -171,8 +201,21 @@ if [ -z "${DELIVERIES}" ] || [ "${DELIVERIES}" -lt 10 ]; then
     echo 'IRQ self-test did not observe at least 10 IRQ0 deliveries' >&2
     status=1
 fi
+if [ -z "${SWITCHES}" ] || [ "${SWITCHES}" -lt 7 ]; then
+    echo 'cooperative task test did not observe at least 7 real context switches' >&2
+    status=1
+fi
+if [ "${ITERATION_LINES}" -ne 2 ] || [ "${LOCAL_STATE_LINES}" -ne 2 ]; then
+    echo 'both cooperative tasks did not preserve three iterations of local state' >&2
+    status=1
+fi
+if [ -z "${TASK_TICKS_BEFORE}" ] || [ -z "${TASK_TICKS_AFTER}" ] ||
+   [ "${TASK_TICKS_AFTER}" -le "${TASK_TICKS_BEFORE}" ]; then
+    echo 'timer did not progress during cooperative task execution' >&2
+    status=1
+fi
 
-if grep -Eiq 'PMM self-test FAILED|Physical memory manager: FAILED|VMM: FAILED|VMM self-test FAILED|Kernel heap: FAILED|Heap self-test FAILED|Exception handling: FAILED|Hardware interrupts: FAILED|Timer: FAILED|Hardware interrupt self-test FAILED|heap corruption|Fatal exception: controlled halt|general protection fault|triple fault|reboot' "${LOG}"; then
+if grep -Eiq 'PMM self-test FAILED|Physical memory manager: FAILED|VMM: FAILED|VMM self-test FAILED|Kernel heap: FAILED|Heap self-test FAILED|Exception handling: FAILED|Hardware interrupts: FAILED|Timer: FAILED|Hardware interrupt self-test FAILED|Kernel tasks: FAILED|Cooperative task self-test FAILED|heap corruption|Fatal exception: controlled halt|general protection fault|triple fault|reboot' "${LOG}"; then
     echo 'kernel reported a failure during normal boot' >&2
     status=1
 fi
