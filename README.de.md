@@ -4,103 +4,66 @@
 
 BoringOS ist ein experimentelles, unabhängiges Desktop-Betriebssystemprojekt.
 
-Es ist **keine Linux-Distribution**, **keine BSD-Distribution** und **basiert weder auf Redox noch auf dem Kernel eines anderen Betriebssystems**. Das Projekt soll einen eigenen Kernel, **BoringKernel**, einen nativen BoringOS-Userspace und später einen eigenen Desktop-Stack entwickeln.
+Es ist **keine Linux-Distribution**, **keine BSD-Distribution** und **basiert weder auf Redox noch auf dem Kernel eines anderen Betriebssystems**. BoringOS entwickelt seinen eigenen Kernel, **BoringKernel**, sowie später einen nativen BoringOS-Userspace und Desktop-Stack.
 
 > boring is not a bug.  
 > it's the entire operating system now.
 
 ## Status
 
-**Extrem frühe Bootstrap-Phase.**
+**Extrem früher Bootstrap-Kernel.**
 
-Dieses Repository enthält derzeit nur die Projektgrundlage und Dokumentation. Es enthält **noch keinen** funktionsfähigen BoringKernel, kein bootfähiges BoringOS-Abbild, keinen nativen Userspace, keinen Display-Server, keinen Paketmanager und keine native BoringWM-Implementierung. Geplante Funktionen dürfen nicht als bereits implementiert dargestellt werden.
+BoringKernel besitzt jetzt einen ersten Boot-Meilenstein für **QEMU x86_64**. Limine dient ausschließlich als externer Bootloader; nach der Übergabe erreicht die Ausführung den freestanding BoringKernel-Einstiegspunkt, BoringKernel initialisiert die serielle COM1-Ausgabe, gibt seine Identität aus und wechselt anschließend in eine kontrollierte Halt-Schleife.
+
+Aktuelle serielle Ausgabe:
+
+```text
+BoringOS booting...
+BoringKernel 0.0.1-dev
+Arch: x86_64
+Hello from BoringKernel.
+```
+
+Das System bleibt absichtlich winzig. Es gibt **noch keinen Userspace, Scheduler, kein Dateisystem, Networking, keine grafische Umgebung, keinen Input-Stack, Allocator, Interrupt-Unterbau oder Prozessmodell**.
 
 ## Technische Richtung
 
-Von BoringOS entwickelte Systemkomponenten sollen hauptsächlich in **C** geschrieben werden. Minimale architekturspezifische Assembly-Anteile sind dort erlaubt, wo sie technisch unvermeidbar sind, zum Beispiel beim frühen CPU-Start, beim Eintritt und Verlassen von Interrupts, beim Context Switch oder beim Zugriff auf spezielle CPU-Instruktionen. Solcher Assembly-Code soll klein, isoliert und dokumentiert bleiben.
-
-Eine präzise langfristige Beschreibung lautet:
+Von BoringOS entwickelte Systemkomponenten werden hauptsächlich in **C** geschrieben. Minimale architekturspezifische Assembly-Anteile sind dort erlaubt, wo sie technisch unvermeidbar sind; sie müssen klein, isoliert und dokumentiert bleiben.
 
 > BoringOS ist ein unabhängiges Betriebssystem, dessen eigene Systemkomponenten hauptsächlich in C geschrieben werden.
 
 Die erste Referenzplattform ist **x86_64 unter QEMU**. Breite Unterstützung physischer PC-Hardware ist bewusst kein frühes Ziel.
 
-## Erstes Ziel
+## Bauen und booten
 
-Der erste Entwicklungsmeilenstein ist ein kleines, tatsächlich bootfähiges und unabhängiges System:
+Der aktuelle Build verwendet GCC/binutils als freestanding x86_64-Toolchain und lädt eine fest gepinnte Limine-Version. Generierte Dateien bleiben unter `build/`.
 
-```text
-boot
-  ↓
-BoringKernel
-  ↓
-Speicherverwaltung
-  ↓
-Scheduler / Ausführungsumgebung
-  ↓
-nativer BoringOS-Userspace
-  ↓
-boring-init
-  ↓
-boring-shell
+Benötigte Host-Werkzeuge sind unter anderem GNU Make, GCC/binutils, `curl`, `xorriso` und QEMU zum Starten/Testen.
+
+```sh
+make
+make run
 ```
 
-Die erste Shell soll später die Identität des Systems wahrheitsgemäß anzeigen können, zum Beispiel:
+Der automatisierte Acceptance-Test baut BoringOS neu, startet QEMU headless, erfasst die serielle Konsole und prüft alle vier Identitätszeilen:
 
-```text
-BoringOS 0.0.1-dev
-
-Kernel:    BoringKernel
-Arch:      x86_64
-Userspace: BoringOS
-Shell:     boring-shell
+```sh
+make test
 ```
 
-Das ist ein Ziel und keine Aussage über den aktuellen Funktionsumfang des Repositorys.
+Siehe [`docs/architecture.md`](docs/architecture.md) und [`docs/boot.md`](docs/boot.md) für die bewusst kleinen Phase-0.1-Entscheidungen.
 
 ## Bewusst keine frühen Ziele
 
-BoringOS soll schrittweise wachsen. Die frühen Meilensteine zielen ausdrücklich **nicht** auf:
-
-- Networking
-- komplexe USB-Unterstützung
-- Audio
-- fortgeschrittene GPU-Beschleunigung
-- Wi-Fi oder Bluetooth
-- Suspend/Resume
-- Browser
-- große Kompatibilitätsschichten
-- breite Unterstützung physischer PC-Hardware
+BoringOS soll schrittweise wachsen. Frühe Meilensteine zielen ausdrücklich **nicht** auf Networking, komplexe USB-Unterstützung, Audio, fortgeschrittene GPU-Beschleunigung, Wi-Fi/Bluetooth, Suspend/Resume, Browser, große Kompatibilitätsschichten oder breite Unterstützung physischer PC-Hardware.
 
 Insbesondere Networking wird bewusst aufgeschoben, bis Kernel/User-Trennung, Prozessisolation, getrennte Adressräume, kontrollierte System-Call-Schnittstellen, validierte Kernel-Grenzen und grundlegende defensive Testverfahren vorhanden sind.
 
 ## Richtung des nativen Desktops
 
-Der native BoringOS-Desktop soll nicht von X11 oder Wayland abhängen. Ein späterer Meilenstein soll ein bewusst kleines, natives BoringOS-Display-/Window-Protokoll und einen Display-Dienst definieren, die echte grafische Clients ermöglichen, ohne ein komplettes fremdes Display-Ökosystem nachzubauen.
+Der native BoringOS-Desktop soll nicht von X11 oder Wayland abhängen. Ein späterer Meilenstein wird ein bewusst kleines natives BoringOS-Display-/Window-Protokoll und einen Display-Dienst definieren. Die native BoringOS-Version von **BoringWM wird in C geschrieben**.
 
-Eine mögliche langfristige Architektur ist:
-
-```text
-Anwendungen
-    ↓
-boring-window-Protokoll
-    ↓
-boring-display
-    ↓
-BoringWM
-    ↓
-Framebuffer / Grafik-Backend
-```
-
-Die native BoringOS-Version von **BoringWM wird in C geschrieben**.
-
-## Bestehendes BoringWM
-
-Das bestehende Repository [dennishilk/boringwm](https://github.com/dennishilk/boringwm) ist ein separates Rust/X11-Projekt. Es bleibt unverändert bestehen und ist **keine Code-Abhängigkeit** von BoringOS.
-
-BoringOS verwendet es als Verhaltensreferenz für Konzepte wie deterministisches Master/Stack-Layout, Workspaces, Fokusverhalten, tastaturorientierte Bedienung, Client-Reihenfolge, Promotion zum Master und bewusst kleine Konfiguration. X11-/EWMH-spezifische Mechanismen gehören nicht zum nativen BoringOS-Vertrag.
-
-Siehe [`docs/boringwm-reference.md`](docs/boringwm-reference.md) für die Referenzanalyse und Integrationsempfehlung der Bootstrap-Phase.
+Das bestehende Repository [dennishilk/boringwm](https://github.com/dennishilk/boringwm) bleibt ein separates Rust/X11-Projekt und eine externe Verhaltensreferenz. Es ist weder Code-Abhängigkeit noch Submodul von BoringOS. Siehe [`docs/boringwm-reference.md`](docs/boringwm-reference.md).
 
 ## Repository-Struktur
 
@@ -114,22 +77,9 @@ boringos/
 └── scripts/
 ```
 
-Diese Verzeichnisse sind in der Bootstrap-Phase bewusst weitgehend leer. Ihre Existenz definiert Projektgrenzen; sie behauptet keine implementierten Subsysteme.
-
 ## Prinzipien
 
-BoringOS soll bevorzugen:
-
-- kleine Module
-- explizite Schnittstellen
-- vorhersehbares Verhalten
-- lesbaren C-Code
-- testbare Komponenten
-- auditierbare Komponenten
-- strikte Compiler-Diagnostik
-- minimale Abhängigkeiten
-- dokumentierte Architekturentscheidungen
-- ehrliche Berichte darüber, was funktioniert und was nicht
+BoringOS soll kleine Module, explizite Schnittstellen, vorhersehbares Verhalten, lesbaren C-Code, test- und auditierbare Komponenten, strikte Diagnostik, minimale Abhängigkeiten, dokumentierte Architekturentscheidungen und ehrliche Aussagen über den tatsächlichen Funktionsumfang bevorzugen.
 
 Das Projekt soll für einen einzelnen entschlossenen Entwickler verständlich bleiben.
 
