@@ -8,8 +8,11 @@
 #define X86_64_IDT_ENTRY_COUNT 256U
 
 struct x86_64_trap_frame {
+    /* C-facing copies of the interrupted stack state. */
     uint64_t rsp;
     uint64_t ss;
+
+    /* GPRs saved by the BoringKernel assembly entry stub. */
     uint64_t r15;
     uint64_t r14;
     uint64_t r13;
@@ -25,11 +28,17 @@ struct x86_64_trap_frame {
     uint64_t rcx;
     uint64_t rbx;
     uint64_t rax;
+
+    /* Normalized BoringKernel fields. */
     uint64_t vector;
     uint64_t error_code;
+
+    /* Long-mode hardware interrupt/exception return frame. */
     uint64_t rip;
     uint64_t cs;
     uint64_t rflags;
+    uint64_t hardware_rsp;
+    uint64_t hardware_ss;
 };
 
 struct exception_stats {
