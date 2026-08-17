@@ -32,8 +32,8 @@ make -C "${ROOT}" TEST_MODE=normal
 PID=$!
 
 attempt=0
-while [ "${attempt}" -lt 100 ]; do
-    if grep -Fqx 'BoringKernel cooperative task test passed.' "${LOG}" 2>/dev/null; then
+while [ "${attempt}" -lt 150 ]; do
+    if grep -Fqx 'BoringKernel preemptive scheduling test passed.' "${LOG}" 2>/dev/null; then
         break
     fi
 
@@ -48,7 +48,7 @@ done
 status=0
 for line in \
     'BoringOS booting...' \
-    'BoringKernel 0.0.7-dev' \
+    'BoringKernel 0.0.8-dev' \
     'Arch: x86_64' \
     'Hello from BoringKernel.' \
     'Physical memory manager:' \
@@ -147,7 +147,31 @@ for line in \
     '  heap-bookkeeping: PASS' \
     'Task stacks freed: 2' \
     'Task heap allocations after cleanup: 0' \
-    'BoringKernel cooperative task test passed.'
+    'BoringKernel cooperative task test passed.' \
+    'Preemptive scheduler:' \
+    'Policy: round-robin' \
+    'Timer source: PIT IRQ0' \
+    'Timer vector: 32' \
+    'Quantum: 1 tick' \
+    'Preemption: enabled during test' \
+    'Preemption self-test:' \
+    '  task-a-progress: PASS' \
+    '  task-b-progress: PASS' \
+    '  no-cooperative-yield: PASS' \
+    '  repeated-preemption: PASS' \
+    '  stack-isolation: PASS' \
+    '  local-state: PASS' \
+    '  register-state: PASS' \
+    '  timer-delivery: PASS' \
+    '  bootstrap-return: PASS' \
+    '  finished-task-skip: PASS' \
+    '  stack-sentinel: PASS' \
+    '  stack-cleanup: PASS' \
+    '  heap-bookkeeping: PASS' \
+    'Cooperative yields during test: 0' \
+    'Task stacks freed: 2' \
+    'Task heap allocations after preemption cleanup: 0' \
+    'BoringKernel preemptive scheduling test passed.'
 do
     if ! grep -Fqx "${line}" "${LOG}"; then
         echo "missing serial line: ${line}" >&2
@@ -177,7 +201,14 @@ for pattern in \
     '^Code selector: 0x[0-9A-F]{16}$' \
     '^Context switches: [1-9][0-9]*$' \
     '^Ticks before task test: [1-9][0-9]*$' \
-    '^Ticks after task test: [1-9][0-9]*$'
+    '^Ticks after task test: [1-9][0-9]*$' \
+    '^Timer ticks during test: [1-9][0-9]*$' \
+    '^Scheduler ticks: [1-9][0-9]*$' \
+    '^Preemptions: [1-9][0-9]*$' \
+    '^Task A slices: [1-9][0-9]*$' \
+    '^Task B slices: [1-9][0-9]*$' \
+    '^Task A resumes: [1-9][0-9]*$' \
+    '^Task B resumes: [1-9][0-9]*$'
 do
     if ! grep -Eq "${pattern}" "${LOG}"; then
         echo "missing runtime value matching: ${pattern}" >&2
@@ -190,6 +221,13 @@ DELIVERIES=$(sed -n 's/^IRQ0 deliveries: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail 
 SWITCHES=$(sed -n 's/^Context switches: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
 TASK_TICKS_BEFORE=$(sed -n 's/^Ticks before task test: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
 TASK_TICKS_AFTER=$(sed -n 's/^Ticks after task test: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
+PREEMPT_TIMER_TICKS=$(sed -n 's/^Timer ticks during test: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
+SCHEDULER_TICKS=$(sed -n 's/^Scheduler ticks: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
+PREEMPTIONS=$(sed -n 's/^Preemptions: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
+TASK_A_SLICES=$(sed -n 's/^Task A slices: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
+TASK_B_SLICES=$(sed -n 's/^Task B slices: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
+TASK_A_RESUMES=$(sed -n 's/^Task A resumes: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
+TASK_B_RESUMES=$(sed -n 's/^Task B resumes: \([0-9][0-9]*\)$/\1/p' "${LOG}" | tail -n 1)
 ITERATION_LINES=$(grep -Fxc '  iterations: 3' "${LOG}" || true)
 LOCAL_STATE_LINES=$(grep -Fxc '  local-state: PASS' "${LOG}" || true)
 
@@ -205,8 +243,8 @@ if [ -z "${SWITCHES}" ] || [ "${SWITCHES}" -lt 7 ]; then
     echo 'cooperative task test did not observe at least 7 real context switches' >&2
     status=1
 fi
-if [ "${ITERATION_LINES}" -ne 2 ] || [ "${LOCAL_STATE_LINES}" -ne 2 ]; then
-    echo 'both cooperative tasks did not preserve three iterations of local state' >&2
+if [ "${ITERATION_LINES}" -ne 2 ] || [ "${LOCAL_STATE_LINES}" -lt 3 ]; then
+    echo 'cooperative or preemptive task local-state checks are missing' >&2
     status=1
 fi
 if [ -z "${TASK_TICKS_BEFORE}" ] || [ -z "${TASK_TICKS_AFTER}" ] ||
@@ -214,8 +252,30 @@ if [ -z "${TASK_TICKS_BEFORE}" ] || [ -z "${TASK_TICKS_AFTER}" ] ||
     echo 'timer did not progress during cooperative task execution' >&2
     status=1
 fi
+if [ -z "${PREEMPT_TIMER_TICKS}" ] || [ "${PREEMPT_TIMER_TICKS}" -lt 6 ]; then
+    echo 'preemptive test did not observe at least 6 real timer ticks' >&2
+    status=1
+fi
+if [ -z "${SCHEDULER_TICKS}" ] || [ "${SCHEDULER_TICKS}" -lt 6 ]; then
+    echo 'preemptive test did not enter the scheduler at least 6 times' >&2
+    status=1
+fi
+if [ -z "${PREEMPTIONS}" ] || [ "${PREEMPTIONS}" -lt 6 ]; then
+    echo 'preemptive test did not perform at least 6 timer-driven context switches' >&2
+    status=1
+fi
+if [ -z "${TASK_A_SLICES}" ] || [ "${TASK_A_SLICES}" -lt 3 ] ||
+   [ -z "${TASK_B_SLICES}" ] || [ "${TASK_B_SLICES}" -lt 3 ]; then
+    echo 'both preemptive tasks did not receive at least 3 scheduling slices' >&2
+    status=1
+fi
+if [ -z "${TASK_A_RESUMES}" ] || [ "${TASK_A_RESUMES}" -lt 2 ] ||
+   [ -z "${TASK_B_RESUMES}" ] || [ "${TASK_B_RESUMES}" -lt 2 ]; then
+    echo 'both preemptive tasks did not resume repeatedly after timer preemption' >&2
+    status=1
+fi
 
-if grep -Eiq 'PMM self-test FAILED|Physical memory manager: FAILED|VMM: FAILED|VMM self-test FAILED|Kernel heap: FAILED|Heap self-test FAILED|Exception handling: FAILED|Hardware interrupts: FAILED|Timer: FAILED|Hardware interrupt self-test FAILED|Kernel tasks: FAILED|Cooperative task self-test FAILED|heap corruption|Fatal exception: controlled halt|general protection fault|triple fault|reboot' "${LOG}"; then
+if grep -Eiq 'PMM self-test FAILED|Physical memory manager: FAILED|VMM: FAILED|VMM self-test FAILED|Kernel heap: FAILED|Heap self-test FAILED|Exception handling: FAILED|Hardware interrupts: FAILED|Timer: FAILED|Hardware interrupt self-test FAILED|Kernel tasks: FAILED|Cooperative task self-test FAILED|Preemptive scheduler: FAILED|Preemptive scheduling self-test FAILED|heap corruption|Fatal exception: controlled halt|general protection fault|triple fault|reboot' "${LOG}"; then
     echo 'kernel reported a failure during normal boot' >&2
     status=1
 fi
