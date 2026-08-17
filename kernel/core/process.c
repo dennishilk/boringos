@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <boring/cpu.h>
 #include <boring/process.h>
 
 static struct process bootstrap_process;
@@ -48,10 +49,19 @@ static bool process_is_regular(const struct process *process) {
     return false;
 }
 
+static void process_restore_interrupts(bool interrupts_were_enabled) {
+    if (interrupts_were_enabled) {
+        x86_64_interrupts_enable();
+    }
+}
+
 bool process_init(void) {
     size_t index;
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
+    x86_64_interrupts_disable();
     if (process_initialized) {
+        process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
 
@@ -62,6 +72,7 @@ bool process_init(void) {
 
     if (!address_space_system_init(&bootstrap_process.address_space)) {
         process_clear(&bootstrap_process);
+        process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
 
@@ -73,6 +84,7 @@ bool process_init(void) {
     created_process_count = 0ULL;
     finished_process_count = 0ULL;
     process_initialized = true;
+    process_restore_interrupts(interrupts_were_enabled);
     return true;
 }
 
@@ -93,9 +105,12 @@ struct process *process_current(void) {
 bool process_create(struct process **process_out) {
     struct process *process = NULL;
     size_t index;
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
+    x86_64_interrupts_disable();
     if ((!process_initialized) || (process_out == NULL) ||
         (next_pid == UINT64_MAX)) {
+        process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
 
@@ -106,12 +121,14 @@ bool process_create(struct process **process_out) {
         }
     }
     if (process == NULL) {
+        process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
 
     process_clear(process);
     if (!address_space_create(&process->address_space)) {
         process_clear(process);
+        process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
 
@@ -121,46 +138,56 @@ bool process_create(struct process **process_out) {
     ++next_pid;
     ++created_process_count;
     *process_out = process;
+    process_restore_interrupts(interrupts_were_enabled);
     return true;
 }
 
 bool process_activate(struct process *process) {
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+
+    x86_64_interrupts_disable();
     if ((!process_initialized) || (process == NULL) ||
-        !process->slot_used || (process->state != PROCESS_ALIVE)) {
-        return false;
-    }
-
-    if ((process != &bootstrap_process) && !process_is_regular(process)) {
-        return false;
-    }
-
-    if (!address_space_activate(&process->address_space)) {
+        !process->slot_used || (process->state != PROCESS_ALIVE) ||
+        ((process != &bootstrap_process) && !process_is_regular(process)) ||
+        !address_space_activate(&process->address_space)) {
+        process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
 
     current_process = process;
+    process_restore_interrupts(interrupts_were_enabled);
     return true;
 }
 
 bool process_mark_finished(struct process *process) {
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+
+    x86_64_interrupts_disable();
     if ((!process_initialized) || !process_is_regular(process) ||
         (process->state != PROCESS_ALIVE) || (current_process == process)) {
+        process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
 
     process->state = PROCESS_FINISHED;
     ++finished_process_count;
+    process_restore_interrupts(interrupts_were_enabled);
     return true;
 }
 
 bool process_destroy(struct process *process) {
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+
+    x86_64_interrupts_disable();
     if ((!process_initialized) || !process_is_regular(process) ||
         (process->state != PROCESS_FINISHED) || (current_process == process) ||
         !address_space_destroy(&process->address_space)) {
+        process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
 
     process_clear(process);
+    process_restore_interrupts(interrupts_were_enabled);
     return true;
 }
 
@@ -176,9 +203,12 @@ bool process_is_alive(const struct process *process) {
 bool process_get_stats(struct process_stats *stats) {
     uint64_t active = 0ULL;
     size_t index;
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
+    x86_64_interrupts_disable();
     if ((!process_initialized) || (stats == NULL) ||
         (current_process == NULL)) {
+        process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
 
@@ -192,5 +222,6 @@ bool process_get_stats(struct process_stats *stats) {
     stats->finished_processes = finished_process_count;
     stats->active_processes = active;
     stats->current_pid = current_process->pid;
+    process_restore_interrupts(interrupts_were_enabled);
     return true;
 }
