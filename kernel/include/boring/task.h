@@ -15,6 +15,7 @@ enum kernel_task_state {
     KERNEL_TASK_FINISHED = 2
 };
 
+struct process;
 struct x86_64_trap_frame;
 
 struct task_stats {
@@ -28,6 +29,7 @@ struct task_stats {
     uint64_t scheduler_fault_count;
     uint64_t active_tasks;
     uint64_t current_task_id;
+    uint64_t current_process_pid;
     size_t stack_size;
     bool preemption_enabled;
 };
@@ -36,8 +38,13 @@ bool task_init(void);
 bool task_create(void (*entry)(void *), void *arg, uint64_t *task_id);
 bool task_create_preemptive(void (*entry)(void *), void *arg,
                             uint64_t *task_id);
+bool task_create_preemptive_for_process(struct process *process,
+                                        void (*entry)(void *),
+                                        void *arg,
+                                        uint64_t *task_id);
 void task_yield(void);
 uint64_t task_current_id(void);
+uint64_t task_current_process_id(void);
 uint64_t task_current_preempt_slices(void);
 bool task_current_stack_contains(const void *address);
 bool task_get_stats(struct task_stats *stats);
