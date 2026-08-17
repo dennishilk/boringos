@@ -6,15 +6,20 @@
 #include <boring/cpu.h>
 #include <boring/exception.h>
 #include <boring/heap.h>
+#include <boring/irq.h>
 #include <boring/kernel.h>
 #include <boring/pmm.h>
 #include <boring/serial.h>
+#include <boring/timer.h>
 #include <boring/vmm.h>
 
 #define VMM_TEST_PATTERN 0x424f52494e474f53ULL
 #define BORING_TEST_MODE_NORMAL 0
 #define BORING_TEST_MODE_DIVIDE 1
 #define BORING_TEST_MODE_PAGEFAULT 2
+#define IRQ_TEST_TICKS 10ULL
+#define IRQ_TEST_SPIN_LIMIT 500000000ULL
+#define BOOTSTRAP_TIMER_FREQUENCY_HZ 100U
 
 #ifndef BORING_TEST_MODE
 #define BORING_TEST_MODE BORING_TEST_MODE_NORMAL
@@ -484,6 +489,117 @@ static bool heap_self_test(void) {
     return true;
 }
 
+#if BORING_TEST_MODE == BORING_TEST_MODE_NORMAL
+static void hardware_irq_test_fail(const char *check) __attribute__((noreturn));
+static void hardware_irq_test_fail(const char *check) {
+    serial_write_string("  ");
+    serial_write_string(check);
+    serial_write_string(": FAIL\n");
+    serial_write_string("Hardware interrupt self-test FAILED: ");
+    serial_write_string(check);
+    serial_write_string("\n");
+    x86_64_halt_forever();
+}
+
+static void run_hardware_irq_test(void) __attribute__((noreturn));
+static void run_hardware_irq_test(void) {
+    struct irq_stats irq_before;
+    struct irq_stats irq_after;
+    struct timer_stats timer_stats;
+    uint64_t start;
+    uint64_t target;
+    uint64_t observed;
+    uint64_t spins = 0ULL;
+
+    if (!irq_init() || !irq_get_stats(&irq_before) ||
+        (irq_before.master_mask != 0xffU) ||
+        (irq_before.slave_mask != 0xffU)) {
+        serial_write_string("Hardware interrupts: FAILED\n");
+        x86_64_halt_forever();
+    }
+
+    serial_write_string("Hardware interrupts:\n");
+    serial_write_string("Controller: 8259 PIC\n");
+    serial_write_string("PIC: remapped\n");
+    serial_write_string("Master vectors: 32-39\n");
+    serial_write_string("Slave vectors: 40-47\n");
+    serial_write_string("Initial master mask: 255\n");
+    serial_write_string("Initial slave mask: 255\n");
+    serial_write_string("IRQ0 vector: 32\n");
+
+    if (!timer_init(BOOTSTRAP_TIMER_FREQUENCY_HZ) ||
+        !timer_get_stats(&timer_stats) ||
+        !irq_get_stats(&irq_before) ||
+        (timer_ticks() != 0ULL) ||
+        (irq_before.master_mask != 0xfeU) ||
+        (irq_before.slave_mask != 0xffU)) {
+        serial_write_string("Timer: FAILED\n");
+        x86_64_halt_forever();
+    }
+
+    serial_write_string("Master mask: 254\n");
+    serial_write_string("Slave mask: 255\n\n");
+    serial_write_string("Timer:\n");
+    serial_write_string("Source: PIT channel 0\n");
+    serial_write_string("Input frequency: ");
+    serial_write_u64((uint64_t)timer_stats.input_frequency_hz);
+    serial_write_string(" Hz\nRequested frequency: ");
+    serial_write_u64((uint64_t)timer_stats.requested_frequency_hz);
+    serial_write_string(" Hz\nDivisor: ");
+    serial_write_u64((uint64_t)timer_stats.divisor);
+    serial_write_string("\nEffective frequency: ");
+    serial_write_u64((uint64_t)timer_stats.effective_frequency_millihz);
+    serial_write_string(" mHz\nIRQ: 0\nVector: 32\nTimer: online\n\n");
+
+    start = timer_ticks();
+    if (start != 0ULL) {
+        hardware_irq_test_fail("known-state");
+    }
+
+    if (!irq_enable()) {
+        hardware_irq_test_fail("interrupt-enable");
+    }
+    serial_write_string("Interrupts: enabled\n\n");
+
+    target = start + IRQ_TEST_TICKS;
+    while ((timer_ticks() < target) && (spins < IRQ_TEST_SPIN_LIMIT)) {
+        x86_64_pause();
+        ++spins;
+    }
+    observed = timer_ticks();
+
+    serial_write_string("IRQ self-test:\n");
+    if (observed <= start) {
+        hardware_irq_test_fail("timer-delivery");
+    }
+    serial_write_string("  timer-delivery: PASS\n");
+
+    if (observed < target) {
+        hardware_irq_test_fail("repeated-irqs");
+    }
+    serial_write_string("  repeated-irqs: PASS\n");
+
+    if (!irq_get_stats(&irq_after) ||
+        (irq_after.timer_irq_count < IRQ_TEST_TICKS) ||
+        (irq_after.unexpected_irq_count != 0ULL)) {
+        hardware_irq_test_fail("acknowledgement");
+    }
+    serial_write_string("  acknowledgement: PASS\n");
+
+    serial_write_string("Ticks observed: ");
+    serial_write_u64(observed);
+    serial_write_string("\nIRQ0 deliveries: ");
+    serial_write_u64(irq_after.timer_irq_count);
+    serial_write_string("\nUnexpected IRQs: ");
+    serial_write_u64(irq_after.unexpected_irq_count);
+    serial_write_string("\nSpurious IRQ7: ");
+    serial_write_u64(irq_after.spurious_irq7_count);
+    serial_write_string("\nSpurious IRQ15: ");
+    serial_write_u64(irq_after.spurious_irq15_count);
+    serial_write_string("\n\nBoringKernel hardware interrupt test passed.\n");
+    x86_64_halt_forever();
+}
+#else
 static void run_exception_test_mode(void) __attribute__((noreturn));
 static void run_exception_test_mode(void) {
 #if BORING_TEST_MODE == BORING_TEST_MODE_DIVIDE
@@ -504,10 +620,9 @@ static void run_exception_test_mode(void) {
     serial_write_hex_u64((uint64_t)fault_address);
     serial_write_string("\nTriggering real Page Fault.\n");
     x86_64_trigger_page_fault(fault_address);
-#else
-    x86_64_halt_forever();
 #endif
 }
+#endif
 
 void boring_kernel_entry(void) {
     struct pmm_stats pmm_stats;
@@ -527,7 +642,7 @@ void boring_kernel_entry(void) {
 
     serial_init();
     serial_write_string("BoringOS booting...\n");
-    serial_write_string("BoringKernel 0.0.5-dev\n");
+    serial_write_string("BoringKernel 0.0.6-dev\n");
     serial_write_string("Arch: x86_64\n");
     serial_write_string("Hello from BoringKernel.\n\n");
 
@@ -650,5 +765,9 @@ void boring_kernel_entry(void) {
     serial_write_string("Exceptions: online\n\n");
     serial_write_string("BoringKernel exception infrastructure test passed.\n\n");
 
+#if BORING_TEST_MODE == BORING_TEST_MODE_NORMAL
+    run_hardware_irq_test();
+#else
     run_exception_test_mode();
+#endif
 }
