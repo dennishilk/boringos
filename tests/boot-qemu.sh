@@ -3,6 +3,7 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 QEMU=${QEMU:-qemu-system-x86_64}
+QEMU_CPU=${QEMU_CPU:-qemu64,apic=off}
 LOG=$(mktemp)
 PID=
 
@@ -19,6 +20,7 @@ make -C "${ROOT}" TEST_MODE=normal
 
 "${QEMU}" \
     -M q35 \
+    -cpu "${QEMU_CPU}" \
     -m 128M \
     -cdrom "${ROOT}/build/boringos.iso" \
     -boot d \
