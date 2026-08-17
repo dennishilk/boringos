@@ -1,8 +1,10 @@
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include <boring/boot_protocol.h>
 #include <boring/cpu.h>
+#include <boring/heap.h>
 #include <boring/kernel.h>
 #include <boring/pmm.h>
 #include <boring/serial.h>
@@ -230,9 +232,254 @@ static bool vmm_self_test(void) {
     return true;
 }
 
+static bool heap_self_test_fail(const char *check) {
+    serial_write_string("  ");
+    serial_write_string(check);
+    serial_write_string(": FAIL\n");
+    serial_write_string("Heap self-test FAILED: ");
+    serial_write_string(check);
+    serial_write_string("\n");
+    return false;
+}
+
+static bool heap_ranges_overlap(uintptr_t first,
+                                size_t first_size,
+                                uintptr_t second,
+                                size_t second_size) {
+    uintptr_t first_end;
+    uintptr_t second_end;
+
+    if ((first_size > (size_t)(UINTPTR_MAX - first)) ||
+        (second_size > (size_t)(UINTPTR_MAX - second))) {
+        return true;
+    }
+
+    first_end = first + (uintptr_t)first_size;
+    second_end = second + (uintptr_t)second_size;
+    return (first < second_end) && (second < first_end);
+}
+
+static uint8_t heap_test_pattern(size_t block_index, size_t offset) {
+    switch (block_index) {
+        case 0U:
+            return 0xaaU;
+        case 1U:
+            return 0x55U;
+        case 2U:
+            return (uint8_t)(offset & 0xffU);
+        case 3U:
+            return 0xa5U;
+        case 4U:
+            return (uint8_t)((offset + 0x33U) & 0xffU);
+        default:
+            return 0x3cU;
+    }
+}
+
+static bool heap_write_read_test(void *const *blocks,
+                                 const size_t *sizes,
+                                 size_t count) {
+    size_t block_index;
+
+    for (block_index = 0U; block_index < count; ++block_index) {
+        size_t offset;
+        volatile uint8_t *bytes =
+            (volatile uint8_t *)blocks[block_index];
+
+        for (offset = 0U; offset < sizes[block_index]; ++offset) {
+            bytes[offset] = heap_test_pattern(block_index, offset);
+        }
+    }
+
+    for (block_index = 0U; block_index < count; ++block_index) {
+        size_t offset;
+        volatile const uint8_t *bytes =
+            (volatile const uint8_t *)blocks[block_index];
+
+        for (offset = 0U; offset < sizes[block_index]; ++offset) {
+            if (bytes[offset] != heap_test_pattern(block_index, offset)) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+static bool heap_self_test(void) {
+    enum { HEAP_TEST_ALLOCATION_COUNT = 6 };
+    static const size_t sizes[HEAP_TEST_ALLOCATION_COUNT] = {
+        1U, 16U, 64U, 200U, 6000U, 4096U
+    };
+    void *blocks[HEAP_TEST_ALLOCATION_COUNT] = { NULL };
+    void *reused;
+    struct heap_stats heap_before;
+    struct heap_stats heap_after_alloc;
+    struct heap_stats heap_final;
+    struct pmm_stats pmm_before_growth;
+    struct pmm_stats pmm_after_growth;
+    struct pmm_stats pmm_final;
+    uint64_t growth_mappings;
+    uint64_t growth_pmm_frames;
+    size_t first_index;
+    size_t second_index;
+
+    serial_write_string("Heap self-test:\n");
+
+    if (!heap_get_stats(&heap_before) ||
+        !pmm_get_stats(&pmm_before_growth)) {
+        return heap_self_test_fail("allocate");
+    }
+
+    for (first_index = 0U;
+         first_index < (size_t)HEAP_TEST_ALLOCATION_COUNT; ++first_index) {
+        blocks[first_index] = kmalloc(sizes[first_index]);
+        if (blocks[first_index] == NULL) {
+            return heap_self_test_fail("allocate");
+        }
+    }
+    if (kmalloc(0U) != NULL) {
+        return heap_self_test_fail("allocate");
+    }
+    serial_write_string("  allocate: PASS\n");
+
+    for (first_index = 0U;
+         first_index < (size_t)HEAP_TEST_ALLOCATION_COUNT; ++first_index) {
+        if (((uintptr_t)blocks[first_index] &
+             ((uintptr_t)KERNEL_HEAP_ALIGNMENT - 1ULL)) != 0ULL) {
+            return heap_self_test_fail("alignment");
+        }
+    }
+    serial_write_string("  alignment: PASS\n");
+
+    for (first_index = 0U;
+         first_index < (size_t)HEAP_TEST_ALLOCATION_COUNT; ++first_index) {
+        for (second_index = first_index + 1U;
+             second_index < (size_t)HEAP_TEST_ALLOCATION_COUNT;
+             ++second_index) {
+            if (heap_ranges_overlap((uintptr_t)blocks[first_index],
+                                    sizes[first_index],
+                                    (uintptr_t)blocks[second_index],
+                                    sizes[second_index])) {
+                return heap_self_test_fail("non-overlap");
+            }
+        }
+    }
+    serial_write_string("  non-overlap: PASS\n");
+
+    if (!heap_write_read_test(blocks, sizes,
+                              (size_t)HEAP_TEST_ALLOCATION_COUNT)) {
+        return heap_self_test_fail("write-read");
+    }
+    serial_write_string("  write-read: PASS\n");
+
+    if (!heap_get_stats(&heap_after_alloc) ||
+        !pmm_get_stats(&pmm_after_growth) ||
+        (heap_after_alloc.mapped_pages <= heap_before.mapped_pages) ||
+        (heap_after_alloc.allocation_count !=
+         (uint64_t)HEAP_TEST_ALLOCATION_COUNT) ||
+        (pmm_before_growth.free_frames <= pmm_after_growth.free_frames)) {
+        return heap_self_test_fail("growth");
+    }
+
+    growth_mappings = heap_after_alloc.mapped_pages -
+                      heap_before.mapped_pages;
+    growth_pmm_frames = pmm_before_growth.free_frames -
+                        pmm_after_growth.free_frames;
+
+    for (first_index = (size_t)heap_before.mapped_pages;
+         first_index < (size_t)heap_after_alloc.mapped_pages;
+         ++first_index) {
+        uintptr_t virtual_address;
+        uint64_t physical_address;
+
+        if (first_index >
+            (size_t)((UINTPTR_MAX - heap_before.virtual_base) /
+                     (uintptr_t)VMM_PAGE_SIZE)) {
+            return heap_self_test_fail("growth");
+        }
+        virtual_address = heap_before.virtual_base +
+            ((uintptr_t)first_index * (uintptr_t)VMM_PAGE_SIZE);
+        if (!vmm_translate(virtual_address, &physical_address) ||
+            !pmm_frame_is_usable(physical_address)) {
+            return heap_self_test_fail("growth");
+        }
+    }
+    serial_write_string("  growth: PASS\n");
+
+    if (!kfree(blocks[2])) {
+        return heap_self_test_fail("free");
+    }
+    serial_write_string("  free: PASS\n");
+
+    reused = kmalloc(sizes[2]);
+    if ((reused == NULL) || (reused != blocks[2])) {
+        return heap_self_test_fail("reuse");
+    }
+    serial_write_string("  reuse: PASS\n");
+
+    if (!kfree(reused) || kfree(reused)) {
+        return heap_self_test_fail("double-free");
+    }
+    blocks[2] = NULL;
+    serial_write_string("  double-free: PASS\n");
+
+    if (kfree((void *)(heap_before.virtual_base -
+                       (uintptr_t)KERNEL_HEAP_ALIGNMENT)) ||
+        kfree((void *)((uintptr_t)blocks[3] +
+                       (uintptr_t)KERNEL_HEAP_ALIGNMENT))) {
+        return heap_self_test_fail("invalid-free");
+    }
+    serial_write_string("  invalid-free: PASS\n");
+
+    for (first_index = 0U;
+         first_index < (size_t)HEAP_TEST_ALLOCATION_COUNT; ++first_index) {
+        if ((blocks[first_index] != NULL) &&
+            !kfree(blocks[first_index])) {
+            return heap_self_test_fail("bookkeeping");
+        }
+    }
+
+    if (!heap_get_stats(&heap_final) || !pmm_get_stats(&pmm_final) ||
+        (heap_final.allocation_count != 0ULL) ||
+        (heap_final.used_bytes != 0ULL) ||
+        (heap_final.free_bytes == 0ULL) ||
+        (heap_final.mapped_pages != heap_after_alloc.mapped_pages) ||
+        (pmm_final.free_frames != pmm_after_growth.free_frames)) {
+        return heap_self_test_fail("bookkeeping");
+    }
+    serial_write_string("  bookkeeping: PASS\n");
+
+    serial_write_string("Allocation sizes tested: 1,16,64,200,6000,4096 bytes\n");
+    serial_write_string("Growth mappings created: ");
+    serial_write_u64(growth_mappings);
+    serial_write_string("\n");
+    serial_write_string("Growth PMM frames consumed: ");
+    serial_write_u64(growth_pmm_frames);
+    serial_write_string("\n");
+    serial_write_string("Final mapped pages: ");
+    serial_write_u64(heap_final.mapped_pages);
+    serial_write_string("\n");
+    serial_write_string("Final used bytes: ");
+    serial_write_u64(heap_final.used_bytes);
+    serial_write_string("\n");
+    serial_write_string("Final free bytes: ");
+    serial_write_u64(heap_final.free_bytes);
+    serial_write_string("\n");
+
+    return true;
+}
+
 void boring_kernel_entry(void) {
     struct pmm_stats pmm_stats;
+    struct pmm_stats pmm_before_heap;
+    struct pmm_stats pmm_after_heap;
     struct vmm_stats vmm_stats;
+    struct vmm_stats vmm_before_heap;
+    struct vmm_stats vmm_after_heap;
+    struct heap_stats heap_stats;
+    uint64_t heap_init_pmm_frames;
+    uint64_t heap_init_page_table_frames;
 
     if (!BORING_LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision)) {
         x86_64_halt_forever();
@@ -240,7 +487,7 @@ void boring_kernel_entry(void) {
 
     serial_init();
     serial_write_string("BoringOS booting...\n");
-    serial_write_string("BoringKernel 0.0.3-dev\n");
+    serial_write_string("BoringKernel 0.0.4-dev\n");
     serial_write_string("Arch: x86_64\n");
     serial_write_string("Hello from BoringKernel.\n\n");
 
@@ -293,7 +540,56 @@ void boring_kernel_entry(void) {
     if (!vmm_self_test()) {
         x86_64_halt_forever();
     }
+    serial_write_string("\nBoringKernel virtual memory test passed.\n\n");
 
-    serial_write_string("\nBoringKernel virtual memory test passed.\n");
+    if (!pmm_get_stats(&pmm_before_heap) ||
+        !vmm_get_stats(&vmm_before_heap) ||
+        !heap_init() ||
+        !pmm_get_stats(&pmm_after_heap) ||
+        !vmm_get_stats(&vmm_after_heap) ||
+        !heap_get_stats(&heap_stats) ||
+        (pmm_before_heap.free_frames < pmm_after_heap.free_frames) ||
+        (vmm_after_heap.owned_page_table_frames <
+         vmm_before_heap.owned_page_table_frames)) {
+        serial_write_string("Kernel heap: FAILED\n");
+        x86_64_halt_forever();
+    }
+
+    heap_init_pmm_frames = pmm_before_heap.free_frames -
+                           pmm_after_heap.free_frames;
+    heap_init_page_table_frames =
+        vmm_after_heap.owned_page_table_frames -
+        vmm_before_heap.owned_page_table_frames;
+
+    serial_write_string("Kernel heap:\n");
+    serial_write_string("Virtual base: ");
+    serial_write_u64((uint64_t)heap_stats.virtual_base);
+    serial_write_string("\n");
+    serial_write_string("Virtual limit: ");
+    serial_write_u64((uint64_t)heap_stats.virtual_limit);
+    serial_write_string("\n");
+    serial_write_string("Mapped pages: ");
+    serial_write_u64(heap_stats.mapped_pages);
+    serial_write_string("\n");
+    serial_write_string("Mapped capacity: ");
+    serial_write_u64(heap_stats.mapped_bytes);
+    serial_write_string(" bytes\n");
+    serial_write_string("Free payload: ");
+    serial_write_u64(heap_stats.free_bytes);
+    serial_write_string(" bytes\n");
+    serial_write_string("Alignment: 16 bytes\n");
+    serial_write_string("Initial PMM frames consumed: ");
+    serial_write_u64(heap_init_pmm_frames);
+    serial_write_string("\n");
+    serial_write_string("Initial page-table frames: ");
+    serial_write_u64(heap_init_page_table_frames);
+    serial_write_string("\n");
+    serial_write_string("Heap: online\n\n");
+
+    if (!heap_self_test()) {
+        x86_64_halt_forever();
+    }
+
+    serial_write_string("\nBoringKernel heap test passed.\n");
     x86_64_halt_forever();
 }

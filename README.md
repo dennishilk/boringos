@@ -13,24 +13,26 @@ It is **not a Linux distribution**, **not a BSD distribution**, and **not based 
 
 **Extremely early bootstrap kernel.**
 
-BoringKernel boots under **QEMU x86_64**. Limine remains the external bootloader. After handoff, BoringKernel initializes COM1 serial output, consumes Limine's memory map for its 4096-byte physical page-frame allocator, and now also controls selected x86_64 4-KiB virtual-to-physical mappings.
+BoringKernel boots under **QEMU x86_64**. Limine remains the external bootloader. After handoff, BoringKernel initializes COM1 serial output, consumes Limine's memory map for its 4096-byte physical page-frame allocator, controls selected x86_64 4-KiB virtual-to-physical mappings, and now provides a small bounded dynamic kernel heap on top of those PMM/VMM primitives.
 
 Current serial output begins with:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.3-dev
+BoringKernel 0.0.4-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```
 
-The VMM deliberately adopts the currently active Limine-created four-level page-table root rather than replacing the entire address space. It obtains missing page-table frames from the PMM, accesses physical page-table memory through Limine's reported HHDM, can map/translate/unmap ordinary 4-KiB kernel pages, and invalidates changed translations with `invlpg`.
+The VMM deliberately adopts the currently active Limine-created four-level page-table root rather than replacing the entire address space. Missing page-table frames come from PMM and physical page-table memory is accessed through Limine's reported HHDM.
 
-The automated QEMU acceptance test verifies the existing PMM invariants and a real VMM mapping test that writes and reads data through a newly created virtual mapping before removing it and returning all test-owned frames.
+The kernel heap reserves a finite 16-MiB virtual range, initially maps only two 4-KiB pages, grows one page at a time through PMM + VMM, uses deterministic first-fit allocation with 16-byte alignment and coalesces adjacent free blocks. Mapped heap pages are deliberately retained after `kfree` in this bootstrap milestone.
 
-BoringKernel therefore has **partial, selected virtual-memory control**, not complete address-space ownership. Kernel execution, the current stack, HHDM and boot structures still rely on mappings inherited from Limine.
+The automated QEMU acceptance test continues to verify all PMM and VMM invariants and now also performs real byte-sized heap allocations, real write/read checks, forced PMM/VMM-backed heap growth, free/reuse, double-free rejection, invalid-free rejection and final allocator bookkeeping.
 
-This remains intentionally tiny. There is **no general-purpose kernel heap, userspace, scheduler, filesystem, networking, graphical environment, input stack, exception/interrupt subsystem or process model yet**.
+BoringKernel therefore has **partial, selected virtual-memory control and a functioning bounded bootstrap kernel heap**, not complete address-space ownership or a finished production allocator. Kernel execution, the current stack, HHDM and boot structures still rely on mappings inherited from Limine.
+
+This remains intentionally tiny. There is **no userspace, scheduler, filesystem, networking, graphical environment, input stack, exception/interrupt subsystem or process model yet**.
 
 ## Engineering direction
 
@@ -51,7 +53,7 @@ make
 make run
 ```
 
-The automated acceptance test rebuilds BoringOS, boots QEMU headlessly, captures the serial console and verifies boot identity, PMM and the selected VMM mapping self-test:
+The automated acceptance test rebuilds BoringOS, boots QEMU headlessly, captures the serial console and verifies boot identity, PMM, selected VMM mapping control and the bounded kernel heap:
 
 ```sh
 make test
