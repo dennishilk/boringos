@@ -13,28 +13,26 @@ BoringKernel ELF entry
     ↓
 COM1 serial output
     ↓
-Limine memory map
+physical memory manager
     ↓
-BoringKernel physical memory manager
+selected 4-KiB virtual mappings
     ↓
-4-KiB frame allocate/free self-test
+bounded kernel heap
     ↓
-Limine HHDM + active CR3 root
+BoringKernel x86_64 IDT
     ↓
-BoringKernel selected 4-KiB virtual mapping
+exception stubs + normalized trap frame
     ↓
-translate + real write/read + unmap self-test
+C exception diagnostics
     ↓
-bounded BoringKernel heap
-    ↓
-byte allocation + growth + free/reuse self-test
-    ↓
-controlled halt
+controlled fatal halt
 ```
 
-BoringKernel currently runs in ring 0, owns a minimal physical page-frame allocator, can create/remove selected 4-KiB mappings in the active x86_64 four-level address space, and has a bounded dynamic kernel heap backed through those PMM/VMM layers. The active root and boot-critical mappings remain inherited from Limine. There is still no IDT, exception framework, interrupts, timer, scheduler, processes, ring 3, syscalls, userspace loader, VFS, RAMFS, block devices, storage drivers, BoringFS implementation, init or shell.
+BoringKernel currently runs in ring 0, owns a minimal physical page-frame allocator, can create/remove selected 4-KiB mappings in the active x86_64 four-level address space, has a bounded dynamic kernel heap, and installs its own x86_64 IDT for CPU exception vectors 0–31. Real QEMU acceptance tests have reached BoringKernel through both a CPU-generated Divide Error and an MMU-generated Page Fault, including correct Page Fault `CR2` reporting and controlled fatal halt.
 
-Every milestone should keep the existing QEMU acceptance test green and add a focused test for the new capability.
+The active page-table root and boot-critical mappings remain inherited from Limine. There is still no hardware IRQ delivery, interrupt-controller setup, timer, scheduler, processes, ring 3, syscalls, userspace loader, VFS, RAMFS, block devices, storage drivers, BoringFS implementation, init or shell.
+
+Every milestone should keep all earlier QEMU acceptance checks green and add a focused proof for the new capability.
 
 ---
 
@@ -69,7 +67,7 @@ Implemented and accepted in QEMU:
 - translate the mapping back to the same physical frame;
 - perform a real write/read through the mapped virtual address;
 - unmap the page and invalidate the TLB entry with `invlpg`;
-- reclaim empty page-table frames only when those tables were allocated by the VMM itself;
+- reclaim empty page-table frames only when those tables were allocated by VMM itself;
 - verify VMM and PMM bookkeeping returns to the pre-test state.
 
 This milestone proves selected mapping control. It does **not** claim complete address-space ownership and does not replace Limine's active root page table.
@@ -89,38 +87,67 @@ Implemented and accepted in QEMU:
 - split reusable free blocks and immediately coalesce adjacent free blocks;
 - validate block magic, guard values, sizes, alignment, bounds, links and contiguous topology;
 - define `kmalloc(0)` as `NULL`;
-- reject outside-heap, unaligned/interior and double frees without silently trusting caller-provided metadata;
+- reject outside-heap, unaligned/interior and double frees;
 - retain mapped heap pages after `kfree` rather than pretending page-level shrinking exists;
 - test real allocations of 1, 16, 64, 200, 6000 and 4096 bytes;
 - verify real write/read patterns, alignment, non-overlap, PMM/VMM-backed growth, valid free, deterministic reuse, invalid/double-free rejection and final bookkeeping.
 
 The accepted QEMU run starts with two heap pages, forces one additional page mapping, then frees all test allocations. Three pages remain mapped by policy with zero used payload bytes and one coalesced free block.
 
-This milestone proves a functioning small dynamic kernel heap. It does **not** claim a production allocator: there is no SMP locking, slab/object-cache layer, per-CPU allocation, guard-page system or page-level heap shrinking.
+This milestone proves a functioning small dynamic kernel heap. It does **not** claim a production allocator.
 
 ---
 
 # Stage 2 — controlled faults, interrupts and time
 
-## Milestone 4: exception infrastructure — NEXT
+## Milestone 4: exception infrastructure — COMPLETE
 
-Introduce the minimum x86_64 descriptor/exception machinery required for controlled faults:
+Implemented and accepted in QEMU:
 
-- IDT;
-- minimal isolated entry assembly where unavoidable;
-- readable serial fault reports;
-- safe halt/panic after unrecoverable exceptions;
-- page-fault diagnostics.
+- allocate a BoringKernel-owned 256-entry x86_64 IDT;
+- install valid exception gates for vectors 0–31 while leaving hardware IRQ vectors unconfigured;
+- use DPL0 64-bit interrupt gates with the currently executing kernel code selector;
+- validate the configured descriptors before loading the table;
+- execute `lidt` and verify the active IDTR with `sidt`;
+- keep exception policy/diagnostics in C and isolate ABI-required entry work in one x86_64 assembly source file;
+- normalize exceptions with and without CPU-pushed hardware error codes into one trap-frame contract;
+- preserve general-purpose registers and report vector, name, error code, RIP, CS, RFLAGS, RSP and SS;
+- report `CR2` and decode relevant Page Fault error-code state;
+- provide a dedicated minimal Double Fault diagnostic while documenting that it still uses the normal kernel stack and has no IST hardening;
+- never return from a fatal exception; end through the existing controlled `cli`/`hlt` halt loop;
+- add separate normal, divide and pagefault build/test modes rather than crashing the ordinary successful boot;
+- preserve all previous PMM, VMM and heap acceptance checks in the normal path and before each deliberate fatal test.
 
-GDT/TSS work should remain limited to what privilege transitions and exception handling actually require.
+Verified real exception proofs:
 
-No exception/IDT code is part of the completed heap milestone.
+```text
+Divide Error:
+Vector: 0
+Name: Divide Error
+RIP: 0xFFFFFFFF8000450F
+Fatal exception: controlled halt.
 
-## Milestone 5: interrupt controller and timer
+Page Fault:
+Vector: 14
+Name: Page Fault
+Error code: 0x0000000000000000
+RIP: 0xFFFFFFFF80004544
+CR2: 0xFFFFFF0000000000
+Page fault mapping: non-present
+Page fault access: read
+Page fault privilege: supervisor
+Fatal exception: controlled halt.
+```
 
-Establish one tested interrupt path and one timer source under QEMU.
+The normal QEMU path also verified the loaded table at runtime with IDTR limit 4095 and kernel code selector `0x28`.
 
-Acceptance should prove interrupt acknowledgement and timer progress without flooding the serial console.
+This milestone proves a working fatal CPU-exception path through BoringKernel's own IDT. It does **not** provide hardware IRQ routing, recoverable faults, demand paging, a hardened Double Fault IST stack or a general interrupt subsystem.
+
+## Milestone 5: interrupt controller and timer — NEXT
+
+Establish one deliberately narrow tested hardware interrupt path and one timer source under QEMU.
+
+This is a separate future milestone. It has **not** been started. A later implementation must choose and initialize the required interrupt-controller/timer mechanism deliberately, prove interrupt acknowledgement and timer progress, and avoid serial flooding.
 
 ---
 
@@ -331,13 +358,15 @@ Networking remains unrelated and deferred.
 
 # Exact next implementation milestone
 
-## Exception infrastructure
+## Interrupt controller and timer
 
-The next implementation task is the separate Milestone 4: establish the smallest controlled x86_64 exception path so faults can be diagnosed instead of relying only on missing-output/time-out detection.
+The next roadmap item is Milestone 5: establish the first controlled hardware interrupt path and one timer source under QEMU.
 
-It must remain separate from the completed heap and must not jump ahead to:
+It has **not** been started. It requires a separate instruction and must not be conflated with the now-complete CPU-exception milestone.
 
-- timer/scheduler work;
+A future implementation must remain narrow and must not jump ahead to:
+
+- scheduler/preemption;
 - threads or processes;
 - ring 3;
 - syscalls;
@@ -346,6 +375,6 @@ It must remain separate from the completed heap and must not jump ahead to:
 - shell code;
 - storage drivers.
 
-The next narrow proof is:
+The next proof, only when separately requested, is:
 
-> BoringKernel can receive a deliberately triggered CPU exception through its own IDT path, report useful fault information over serial, and halt in a controlled way.
+> BoringKernel can receive and acknowledge one deliberately configured hardware interrupt source and demonstrate timer progress under QEMU without compromising the existing exception path.
