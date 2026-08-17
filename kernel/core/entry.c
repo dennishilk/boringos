@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include <boring/boot_protocol.h>
+#include <boring/context.h>
 #include <boring/cpu.h>
 #include <boring/exception.h>
 #include <boring/heap.h>
@@ -10,6 +11,7 @@
 #include <boring/kernel.h>
 #include <boring/pmm.h>
 #include <boring/serial.h>
+#include <boring/task.h>
 #include <boring/timer.h>
 #include <boring/vmm.h>
 
@@ -20,6 +22,9 @@
 #define IRQ_TEST_TICKS 10ULL
 #define IRQ_TEST_SPIN_LIMIT 500000000ULL
 #define BOOTSTRAP_TIMER_FREQUENCY_HZ 100U
+#define TASK_TEST_ITERATIONS 3ULL
+#define TASK_TEST_SEQUENCE_LENGTH 6U
+#define TASK_TEST_TIMER_SPIN_LIMIT 50000000ULL
 
 #ifndef BORING_TEST_MODE
 #define BORING_TEST_MODE BORING_TEST_MODE_NORMAL
@@ -490,6 +495,117 @@ static bool heap_self_test(void) {
 }
 
 #if BORING_TEST_MODE == BORING_TEST_MODE_NORMAL
+struct cooperative_task_result {
+    uint64_t id;
+    uint64_t iterations;
+    uintptr_t local_address;
+    bool local_state_ok;
+    bool stack_ok;
+    bool register_ok;
+    bool timer_ok;
+};
+
+static uint64_t task_test_sequence[TASK_TEST_SEQUENCE_LENGTH];
+static size_t task_test_sequence_count;
+static bool task_test_sequence_valid;
+static bool task_test_timer_progress_ok;
+
+static void cooperative_task_test_fail(const char *check) __attribute__((noreturn));
+static void cooperative_task_test_fail(const char *check) {
+    serial_write_string("  ");
+    serial_write_string(check);
+    serial_write_string(": FAIL\n");
+    serial_write_string("Cooperative task self-test FAILED: ");
+    serial_write_string(check);
+    serial_write_string("\n");
+    x86_64_halt_forever();
+}
+
+static bool task_test_wait_for_timer_tick(void) {
+    const uint64_t before = timer_ticks();
+    uint64_t spins = 0ULL;
+
+    if (!task_test_timer_progress_ok) {
+        return false;
+    }
+
+    while ((timer_ticks() <= before) &&
+           (spins < TASK_TEST_TIMER_SPIN_LIMIT)) {
+        x86_64_pause();
+        ++spins;
+    }
+
+    if (timer_ticks() <= before) {
+        task_test_timer_progress_ok = false;
+        return false;
+    }
+
+    return true;
+}
+
+static void cooperative_task_entry(void *arg) {
+    struct cooperative_task_result *result =
+        (struct cooperative_task_result *)arg;
+    volatile uint64_t local_counter = 0ULL;
+    const uintptr_t local_address = (uintptr_t)&local_counter;
+    uint64_t iteration;
+
+    if (result == NULL) {
+        return;
+    }
+
+    result->local_state_ok = true;
+    result->stack_ok = true;
+    result->register_ok = true;
+    result->timer_ok = true;
+    result->local_address = local_address;
+
+    if ((task_current_id() != result->id) ||
+        !task_current_stack_contains((const void *)&local_counter)) {
+        result->stack_ok = false;
+    }
+
+    for (iteration = 0ULL; iteration < TASK_TEST_ITERATIONS; ++iteration) {
+        if (local_counter != iteration) {
+            result->local_state_ok = false;
+        }
+        local_counter = iteration + 1ULL;
+        result->iterations = iteration + 1ULL;
+
+        if (task_test_sequence_count >=
+            (size_t)TASK_TEST_SEQUENCE_LENGTH) {
+            task_test_sequence_valid = false;
+        } else {
+            task_test_sequence[task_test_sequence_count] = result->id;
+            ++task_test_sequence_count;
+        }
+
+        if (!task_test_wait_for_timer_tick()) {
+            result->timer_ok = false;
+        }
+
+        if ((iteration + 1ULL) < TASK_TEST_ITERATIONS) {
+            if (iteration == 0ULL) {
+                if (!x86_64_context_test_callee_saved(task_yield)) {
+                    result->register_ok = false;
+                }
+            } else {
+                task_yield();
+            }
+
+            if ((local_counter != (iteration + 1ULL)) ||
+                (task_current_id() != result->id)) {
+                result->local_state_ok = false;
+            }
+            if (!task_current_stack_contains(
+                    (const void *)&local_counter) ||
+                ((uintptr_t)&local_counter != local_address)) {
+                result->stack_ok = false;
+            }
+        }
+    }
+}
+
 static void hardware_irq_test_fail(const char *check) __attribute__((noreturn));
 static void hardware_irq_test_fail(const char *check) {
     serial_write_string("  ");
@@ -501,7 +617,6 @@ static void hardware_irq_test_fail(const char *check) {
     x86_64_halt_forever();
 }
 
-static void run_hardware_irq_test(void) __attribute__((noreturn));
 static void run_hardware_irq_test(void) {
     struct irq_stats irq_before;
     struct irq_stats irq_after;
@@ -596,8 +711,164 @@ static void run_hardware_irq_test(void) {
     serial_write_u64(irq_after.spurious_irq7_count);
     serial_write_string("\nSpurious IRQ15: ");
     serial_write_u64(irq_after.spurious_irq15_count);
-    serial_write_string("\n\nBoringKernel hardware interrupt test passed.\n");
-    x86_64_halt_forever();
+    serial_write_string("\n\nBoringKernel hardware interrupt test passed.\n\n");
+}
+
+static void run_cooperative_task_test(void) {
+    struct cooperative_task_result task_a = { 0 };
+    struct cooperative_task_result task_b = { 0 };
+    struct task_stats task_stats_before;
+    struct task_stats task_stats_after;
+    struct task_stats task_stats_cleanup;
+    struct heap_stats heap_before;
+    struct heap_stats heap_after;
+    uint64_t ticks_before;
+    uint64_t ticks_after;
+    uint64_t freed_stacks = 0ULL;
+    bool alternating = true;
+    size_t index;
+
+    task_test_sequence_count = 0U;
+    task_test_sequence_valid = true;
+    task_test_timer_progress_ok = true;
+    for (index = 0U; index < (size_t)TASK_TEST_SEQUENCE_LENGTH; ++index) {
+        task_test_sequence[index] = 0ULL;
+    }
+
+    if (!heap_get_stats(&heap_before) || !task_init()) {
+        serial_write_string("Kernel tasks: FAILED\n");
+        x86_64_halt_forever();
+    }
+
+    if (!task_create(cooperative_task_entry, &task_a, &task_a.id) ||
+        !task_create(cooperative_task_entry, &task_b, &task_b.id) ||
+        !task_get_stats(&task_stats_before) ||
+        (task_stats_before.created_tasks != 2ULL) ||
+        (task_stats_before.active_tasks != 2ULL) ||
+        (task_stats_before.current_task_id != KERNEL_BOOTSTRAP_TASK_ID) ||
+        (task_stats_before.stack_size !=
+         (size_t)KERNEL_TASK_STACK_SIZE)) {
+        serial_write_string("Kernel tasks: FAILED\n");
+        x86_64_halt_forever();
+    }
+
+    serial_write_string("Kernel tasks:\n");
+    serial_write_string("Mode: cooperative\n");
+    serial_write_string("Tasks created: 2\n");
+    serial_write_string("Task stack size: 16384 bytes\n");
+    serial_write_string("Bootstrap task ID: 0\n");
+    serial_write_string("Scheduler: online\n\n");
+
+    ticks_before = timer_ticks();
+    task_yield();
+    ticks_after = timer_ticks();
+
+    if (!task_get_stats(&task_stats_after)) {
+        cooperative_task_test_fail("task-return");
+    }
+
+    if ((!task_test_sequence_valid) ||
+        (task_test_sequence_count !=
+         (size_t)TASK_TEST_SEQUENCE_LENGTH)) {
+        alternating = false;
+    } else {
+        for (index = 0U; index < (size_t)TASK_TEST_SEQUENCE_LENGTH; ++index) {
+            const uint64_t expected =
+                ((index & 1U) == 0U) ? task_a.id : task_b.id;
+            if (task_test_sequence[index] != expected) {
+                alternating = false;
+            }
+        }
+    }
+
+    serial_write_string("Task A:\n  iterations: ");
+    serial_write_u64(task_a.iterations);
+    serial_write_string("\n");
+    if ((task_a.iterations != TASK_TEST_ITERATIONS) ||
+        !task_a.local_state_ok) {
+        cooperative_task_test_fail("task-a-local-state");
+    }
+    serial_write_string("  local-state: PASS\n\n");
+
+    serial_write_string("Task B:\n  iterations: ");
+    serial_write_u64(task_b.iterations);
+    serial_write_string("\n");
+    if ((task_b.iterations != TASK_TEST_ITERATIONS) ||
+        !task_b.local_state_ok) {
+        cooperative_task_test_fail("task-b-local-state");
+    }
+    serial_write_string("  local-state: PASS\n\n");
+
+    serial_write_string("Context switch self-test:\n");
+    if ((task_a.iterations == 0ULL) || (task_a.id == 0ULL)) {
+        cooperative_task_test_fail("task-a-start");
+    }
+    serial_write_string("  task-a-start: PASS\n");
+
+    if ((task_b.iterations == 0ULL) || (task_b.id == 0ULL) ||
+        (task_b.id == task_a.id)) {
+        cooperative_task_test_fail("task-b-start");
+    }
+    serial_write_string("  task-b-start: PASS\n");
+
+    if (!alternating) {
+        cooperative_task_test_fail("alternating-switch");
+    }
+    serial_write_string("  alternating-switch: PASS\n");
+
+    if ((!task_a.stack_ok) || (!task_b.stack_ok) ||
+        (task_a.local_address == 0U) || (task_b.local_address == 0U) ||
+        (task_a.local_address == task_b.local_address)) {
+        cooperative_task_test_fail("stack-isolation");
+    }
+    serial_write_string("  stack-isolation: PASS\n");
+
+    if ((!task_a.register_ok) || (!task_b.register_ok)) {
+        cooperative_task_test_fail("register-state");
+    }
+    serial_write_string("  register-state: PASS\n");
+
+    if ((task_stats_after.finished_tasks != 2ULL) ||
+        (task_stats_after.created_tasks != 2ULL) ||
+        (task_stats_after.active_tasks != 2ULL) ||
+        (task_stats_after.current_task_id != KERNEL_BOOTSTRAP_TASK_ID)) {
+        cooperative_task_test_fail("task-return");
+    }
+    serial_write_string("  task-return: PASS\n");
+
+    if ((!task_a.timer_ok) || (!task_b.timer_ok) ||
+        (!task_test_timer_progress_ok) || (ticks_after <= ticks_before)) {
+        cooperative_task_test_fail("timer-coexistence");
+    }
+    serial_write_string("  timer-coexistence: PASS\n");
+
+    if (!task_cleanup_finished(&freed_stacks) ||
+        (freed_stacks != 2ULL) ||
+        !task_get_stats(&task_stats_cleanup) ||
+        (task_stats_cleanup.active_tasks != 0ULL)) {
+        cooperative_task_test_fail("stack-cleanup");
+    }
+    serial_write_string("  stack-cleanup: PASS\n");
+
+    if (!heap_get_stats(&heap_after) ||
+        (heap_after.allocation_count != heap_before.allocation_count) ||
+        (heap_after.used_bytes != heap_before.used_bytes) ||
+        (heap_after.mapped_pages < heap_before.mapped_pages)) {
+        cooperative_task_test_fail("heap-bookkeeping");
+    }
+    serial_write_string("  heap-bookkeeping: PASS\n");
+
+    serial_write_string("Context switches: ");
+    serial_write_u64(task_stats_after.context_switches);
+    serial_write_string("\nTicks before task test: ");
+    serial_write_u64(ticks_before);
+    serial_write_string("\nTicks after task test: ");
+    serial_write_u64(ticks_after);
+    serial_write_string("\nTask stacks freed: ");
+    serial_write_u64(freed_stacks);
+    serial_write_string("\nTask heap allocations after cleanup: ");
+    serial_write_u64(heap_after.allocation_count);
+    serial_write_string("\n\nBoringKernel cooperative task test passed.\n");
 }
 #else
 static void run_exception_test_mode(void) __attribute__((noreturn));
@@ -642,7 +913,7 @@ void boring_kernel_entry(void) {
 
     serial_init();
     serial_write_string("BoringOS booting...\n");
-    serial_write_string("BoringKernel 0.0.6-dev\n");
+    serial_write_string("BoringKernel 0.0.7-dev\n");
     serial_write_string("Arch: x86_64\n");
     serial_write_string("Hello from BoringKernel.\n\n");
 
@@ -767,6 +1038,8 @@ void boring_kernel_entry(void) {
 
 #if BORING_TEST_MODE == BORING_TEST_MODE_NORMAL
     run_hardware_irq_test();
+    run_cooperative_task_test();
+    x86_64_halt_forever();
 #else
     run_exception_test_mode();
 #endif
