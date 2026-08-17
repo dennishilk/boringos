@@ -51,16 +51,15 @@ x86_64_irq_common:
     pushq %r15
 
     /*
-     * Match the current CPL0 176-byte normalized trap-frame convention.
-     * The CPU has already pushed RIP, CS and RFLAGS. Hardware IRQs have no
-     * CPU error code, so the per-vector stub supplies error=0 plus vector.
-     * These 15 pushes save every GPR. The synthetic normalized RSP and SS
-     * fields are then prepended for C inspection; they are not CPU-pushed
-     * privilege-transition fields and are skipped during restore.
+     * In 64-bit mode the hardware interrupt frame contains
+     * RIP, CS, RFLAGS, RSP and SS even when CPL does not change. Hardware
+     * IRQs have no CPU error code, so the vector stub supplies error=0 plus
+     * vector before these 15 GPR pushes. Copy the hardware RSP/SS values to
+     * the two C-facing fields at the front of the normalized frame; the
+     * original hardware RSP/SS words remain in place after RFLAGS for iretq.
      */
-    leaq 160(%rsp), %rax
-    xorl %edx, %edx
-    movw %ss, %dx
+    movq 160(%rsp), %rax
+    movq 168(%rsp), %rdx
     pushq %rdx
     pushq %rax
 
@@ -69,9 +68,9 @@ x86_64_irq_common:
     call x86_64_irq_dispatch
 
     /*
-     * RAX is the normalized frame selected by C policy. It may be the frame
-     * just interrupted or a saved/synthetic frame on another task's stack.
-     * From this point restore is pure architecture mechanics.
+     * RAX is the complete normalized frame selected by C policy. It may be
+     * the frame just interrupted or a saved/synthetic frame on another
+     * task's stack. EOI has already been sent by C before this stack switch.
      */
     movq %rax, %rsp
 
