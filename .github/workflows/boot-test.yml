@@ -13,12 +13,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install build and QEMU dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential binutils curl xorriso qemu-system-x86
-
-      - name: Normal boot and real hardware timer IRQ
+      - name: Normal boot, hardware timer IRQ and cooperative contexts
         run: ./tests/boot-qemu.sh
 
       - name: Real divide exception
