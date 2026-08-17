@@ -13,13 +13,13 @@ It is **not a Linux distribution**, **not a BSD distribution**, and **not based 
 
 **Extremely early bootstrap kernel.**
 
-BoringKernel boots under **QEMU x86_64**. Limine remains the external bootloader. After handoff, BoringKernel initializes COM1 serial output, consumes Limine's memory map for its 4096-byte physical page-frame allocator, controls selected x86_64 4-KiB virtual-to-physical mappings, provides a bounded dynamic kernel heap, and now installs its own x86_64 Interrupt Descriptor Table for CPU exception vectors 0–31.
+BoringKernel boots under **QEMU x86_64**. Limine remains the external bootloader. After handoff, BoringKernel initializes COM1 serial output, consumes Limine's memory map for its 4096-byte physical page-frame allocator, controls selected x86_64 4-KiB virtual-to-physical mappings, provides a bounded dynamic kernel heap, owns an x86_64 IDT for CPU exception vectors 0–31, and can now receive and return from a real periodic legacy hardware timer interrupt.
 
 Current serial output begins with:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.5-dev
+BoringKernel 0.0.6-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```
@@ -28,13 +28,15 @@ The VMM deliberately adopts the currently active Limine-created four-level page-
 
 The kernel heap reserves a finite 16-MiB virtual range, initially maps only two 4-KiB pages, grows one page at a time through PMM + VMM, uses deterministic first-fit allocation with 16-byte alignment and coalesces adjacent free blocks. Mapped heap pages are deliberately retained after `kfree` in this bootstrap stage.
 
-BoringKernel now also owns a 256-entry x86_64 IDT with active DPL0 interrupt gates for exception vectors 0–31. The normal QEMU boot verifies the installed IDTR with `sidt`. Separate acceptance builds then trigger a **real CPU Divide Error** and a **real MMU Page Fault**, route both through BoringKernel's assembly entry stubs and C exception handler, print serial diagnostics, and stop through the controlled `cli`/`hlt` halt path. The Page Fault path reports `CR2` and decodes the relevant hardware error-code bits; it does not implement demand paging or repair the fault.
+BoringKernel owns a 256-entry x86_64 IDT. CPU exception vectors 0–31 remain DPL0 interrupt gates and the dedicated QEMU acceptance modes continue to prove a **real CPU Divide Error** and a **real MMU Page Fault** through BoringKernel's own entry stubs and C exception diagnostics.
 
-The automated QEMU acceptance suite therefore has three modes: normal boot/IDT initialization, real divide exception, and real Page Fault. The normal path continues to preserve and verify the existing PMM, VMM and heap tests.
+The new bootstrap hardware-interrupt path installs gates for PIC vectors 32–47, remaps the legacy 8259 PIC to vectors 32–39 / 40–47, masks every PIC IRQ initially, programs PIT channel 0 for a requested 100 Hz rate, then unmasks only IRQ0. The normal QEMU test deliberately enables interrupts only after this state is validated and requires at least ten real IRQ0 deliveries. Each timer IRQ increments a tick counter, sends the required PIC End Of Interrupt and returns with `iretq`; no scheduler or task switching exists.
 
-BoringKernel therefore has **partial selected virtual-memory control, a functioning bounded bootstrap kernel heap, and a working fatal CPU-exception path through its own IDT**. It still does not own the complete address space, and its exception subsystem is intentionally minimal. Double Fault has a dedicated diagnostic path but still uses the ordinary kernel stack; no TSS/IST hardening exists yet.
+For this deliberately legacy PIC/PIT proof, the QEMU reference remains `q35` but uses a single bootstrap CPU with the local APIC feature explicitly disabled (`qemu64,apic=off`). This avoids silently introducing LAPIC configuration into a PIC-only milestone. PIC/PIT is temporary bootstrap infrastructure and is expected to be replaced by a modern APIC-based interrupt architecture later.
 
-This remains intentionally tiny. There is **no hardware IRQ routing, PIC/APIC/IOAPIC setup, timer, scheduler, userspace, filesystem, networking, graphical environment, input stack or process model yet**.
+BoringKernel therefore has **partial selected virtual-memory control, a functioning bounded bootstrap kernel heap, a working fatal CPU-exception path, and a verified periodic hardware-IRQ path**. It still does not own the complete address space and remains single-core bootstrap software.
+
+There is **no scheduler, preemption, threads, processes, ring 3, syscall layer, filesystem, storage stack, networking, graphical environment or input stack yet**. LAPIC, IOAPIC, HPET, ACPI/MADT and SMP are also not implemented.
 
 ## Engineering direction
 
@@ -55,7 +57,9 @@ make
 make run
 ```
 
-The full acceptance suite rebuilds BoringOS in its normal and deliberate fatal-test modes, boots QEMU headlessly, captures the serial console and verifies PMM, VMM, heap, IDT initialization, a real Divide Error and a real Page Fault:
+The bootstrap QEMU command used by `make run` keeps `q35` while explicitly disabling the CPU's local APIC feature for the current PIC/PIT-only reference path.
+
+The full acceptance suite rebuilds BoringOS in its normal and deliberate fatal-test modes. It verifies PMM, VMM, heap, IDT initialization, repeated real PIT/PIC IRQ0 delivery, a real Divide Error and a real Page Fault:
 
 ```sh
 make test
@@ -63,7 +67,7 @@ make test
 
 The exception modes are internal development/acceptance modes, not a runtime user-facing test framework.
 
-See [`docs/architecture.md`](docs/architecture.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md) and [`docs/boringfs.md`](docs/boringfs.md).
+See [`docs/architecture.md`](docs/architecture.md), [`docs/interrupts.md`](docs/interrupts.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md) and [`docs/boringfs.md`](docs/boringfs.md).
 
 ## Deliberately not early goals
 
