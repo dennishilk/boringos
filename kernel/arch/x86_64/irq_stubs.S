@@ -51,11 +51,12 @@ x86_64_irq_common:
     pushq %r15
 
     /*
-     * Match the existing CPL0 trap-frame convention. Hardware IRQs do not
-     * push an error code, so the per-vector stub supplies a zero error field.
-     * With 15 saved GPRs plus vector/error/RIP/CS/RFLAGS, interrupted RSP is
-     * 160 bytes above the current RSP. No privilege transition occurs yet,
-     * so SS is read explicitly rather than pretending the CPU pushed it.
+     * Match the current CPL0 176-byte normalized trap-frame convention.
+     * The CPU has already pushed RIP, CS and RFLAGS. Hardware IRQs have no
+     * CPU error code, so the per-vector stub supplies error=0 plus vector.
+     * These 15 pushes save every GPR. The synthetic normalized RSP and SS
+     * fields are then prepended for C inspection; they are not CPU-pushed
+     * privilege-transition fields and are skipped during restore.
      */
     leaq 160(%rsp), %rax
     xorl %edx, %edx
@@ -64,10 +65,15 @@ x86_64_irq_common:
     pushq %rax
 
     movq %rsp, %rdi
-    movq %rsp, %rbx
     andq $-16, %rsp
     call x86_64_irq_dispatch
-    movq %rbx, %rsp
+
+    /*
+     * RAX is the normalized frame selected by C policy. It may be the frame
+     * just interrupted or a saved/synthetic frame on another task's stack.
+     * From this point restore is pure architecture mechanics.
+     */
+    movq %rax, %rsp
 
     addq $16, %rsp
     popq %r15
