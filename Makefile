@@ -2,6 +2,7 @@ SHELL := /bin/sh
 
 BUILD_DIR := build
 KERNEL_BUILD_DIR := $(BUILD_DIR)/kernel
+GENERATED_DIR := $(BUILD_DIR)/generated
 ISO_ROOT := $(BUILD_DIR)/iso_root
 KERNEL_ELF := $(BUILD_DIR)/kernel.elf
 ISO := $(BUILD_DIR)/boringos.iso
@@ -60,6 +61,7 @@ KERNEL_C_OBJECTS := $(patsubst %.c,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_C_SOURCES))
 KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCES))
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
+GENERATED_ENTRY := $(GENERATED_DIR)/entry.c
 
 .PHONY: all kernel run run-headless test clean distclean
 
@@ -71,6 +73,18 @@ $(MODE_STAMP):
 	@mkdir -p $(BUILD_DIR)
 	@rm -f $(BUILD_DIR)/.test-mode-*
 	@touch $@
+
+$(GENERATED_ENTRY): kernel/core/entry.c kernel/include/boring/preemption_test.h $(MODE_STAMP)
+	@mkdir -p $(GENERATED_DIR)
+	sed \
+		-e '/#include <boring\/pmm.h>/a #include <boring/preemption_test.h>' \
+		-e 's/BoringKernel 0\.0\.7-dev/BoringKernel 0.0.8-dev/' \
+		-e '/^[[:space:]]*run_cooperative_task_test();[[:space:]]*$$/a\    run_preemptive_task_test();' \
+		$< > $@
+
+$(KERNEL_BUILD_DIR)/kernel/core/entry.o: $(GENERATED_ENTRY) $(MODE_STAMP)
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $(GENERATED_ENTRY) -o $@
 
 $(KERNEL_BUILD_DIR)/%.o: %.c $(MODE_STAMP)
 	@mkdir -p $(dir $@)
