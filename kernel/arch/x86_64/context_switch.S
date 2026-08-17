@@ -92,6 +92,7 @@ x86_64_context_test_callee_saved:
 .type x86_64_preemption_probe_reset, @function
 x86_64_preemption_probe_reset:
     movb $0, x86_64_preemption_probe_release_flag(%rip)
+    movb $0, x86_64_preemption_probe_armed_flag(%rip)
     ret
 .size x86_64_preemption_probe_reset, .-x86_64_preemption_probe_reset
 
@@ -102,10 +103,22 @@ x86_64_preemption_probe_release:
     ret
 .size x86_64_preemption_probe_release, .-x86_64_preemption_probe_release
 
+.global x86_64_preemption_probe_is_armed
+.type x86_64_preemption_probe_is_armed, @function
+x86_64_preemption_probe_is_armed:
+    xorl %eax, %eax
+    cmpb $0, x86_64_preemption_probe_armed_flag(%rip)
+    sete %al
+    ret
+.size x86_64_preemption_probe_is_armed, .-x86_64_preemption_probe_is_armed
+
 /*
  * This probe deliberately keeps every integer caller-saved register live
- * while waiting for a different kernel task to run. The wait loop uses only
- * a RIP-relative byte compare, so no GPR is repurposed before validation.
+ * while waiting for a different kernel task to run. After all register
+ * patterns are loaded it marks itself armed using a RIP-relative byte store;
+ * the wait loop likewise uses no GPR. Task B releases the loop only after it
+ * observes the armed flag, proving the live register set crossed a real
+ * timer-driven task handoff before validation.
  */
 .global x86_64_context_test_preemptive_gprs
 .type x86_64_context_test_preemptive_gprs, @function
@@ -134,6 +147,8 @@ x86_64_context_test_preemptive_gprs:
     movq $0x1ddddddd, %r13
     movq $0x1eeeeeee, %r14
     movq $0x1fffffff, %r15
+
+    movb $1, x86_64_preemption_probe_armed_flag(%rip)
 
 .Lpreemption_probe_wait:
     cmpb $0, x86_64_preemption_probe_release_flag(%rip)
@@ -192,6 +207,8 @@ x86_64_context_test_preemptive_gprs:
 .bss
 .align 1
 x86_64_preemption_probe_release_flag:
+    .byte 0
+x86_64_preemption_probe_armed_flag:
     .byte 0
 
 .section .note.GNU-stack,"",@progbits
