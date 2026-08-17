@@ -48,7 +48,6 @@ KERNEL_C_SOURCES := \
 	kernel/core/task.c \
 	kernel/core/preemption_test.c \
 	kernel/core/process_test.c \
-	kernel/core/process_test_bridge.c \
 	kernel/arch/x86_64/vmm.c \
 	kernel/arch/x86_64/address_space.c \
 	kernel/arch/x86_64/exception.c \
@@ -64,8 +63,6 @@ KERNEL_C_OBJECTS := $(patsubst %.c,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_C_SOURCES))
 KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCES))
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
-
-$(KERNEL_BUILD_DIR)/kernel/core/entry.o: CPPFLAGS += -Drun_preemptive_task_test=run_preemptive_and_process_test
 
 .PHONY: all kernel run run-headless test clean distclean
 
