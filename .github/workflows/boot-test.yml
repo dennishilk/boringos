@@ -18,7 +18,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential binutils curl xorriso qemu-system-x86
 
-      - name: Normal boot and IDT initialization
+      - name: Normal boot and real hardware timer IRQ
         run: ./tests/boot-qemu.sh
 
       - name: Real divide exception

@@ -10,6 +10,7 @@ CC = gcc
 LD = ld
 HOST_CC = cc
 QEMU = qemu-system-x86_64
+QEMU_CPU ?= qemu64,apic=off
 CURL = curl
 XORRISO = xorriso
 
@@ -45,10 +46,13 @@ KERNEL_C_SOURCES := \
 	kernel/core/heap.c \
 	kernel/arch/x86_64/vmm.c \
 	kernel/arch/x86_64/exception.c \
+	kernel/arch/x86_64/irq.c \
+	kernel/arch/x86_64/timer.c \
 	kernel/arch/x86_64/serial.c \
 	kernel/arch/x86_64/cpu.c
 KERNEL_ASM_SOURCES := \
-	kernel/arch/x86_64/exception_stubs.S
+	kernel/arch/x86_64/exception_stubs.S \
+	kernel/arch/x86_64/irq_stubs.S
 KERNEL_C_OBJECTS := $(patsubst %.c,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_C_SOURCES))
 KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCES))
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
@@ -107,7 +111,7 @@ $(ISO): $(KERNEL_ELF) $(LIMINE_DIR)/limine limine.conf
 	rm -rf $(ISO_ROOT)
 
 run: $(ISO)
-	$(QEMU) -M q35 -m 128M -cdrom $(ISO) -boot d \
+	$(QEMU) -M q35 -cpu "$(QEMU_CPU)" -m 128M -cdrom $(ISO) -boot d \
 		-display none -serial stdio -monitor none -no-reboot -no-shutdown
 
 run-headless: run

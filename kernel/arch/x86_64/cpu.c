@@ -13,9 +13,27 @@ void x86_64_invalidate_page(uintptr_t virtual_address) {
     __asm__ volatile ("invlpg (%0)" : : "r" (virtual_address) : "memory");
 }
 
+void x86_64_interrupts_disable(void) {
+    __asm__ volatile ("cli" : : : "memory");
+}
+
+void x86_64_interrupts_enable(void) {
+    __asm__ volatile ("sti" : : : "memory");
+}
+
+bool x86_64_interrupts_enabled(void) {
+    uint64_t rflags;
+
+    __asm__ volatile ("pushfq; popq %0" : "=r" (rflags));
+    return (rflags & (1ULL << 9)) != 0ULL;
+}
+
+void x86_64_pause(void) {
+    __asm__ volatile ("pause");
+}
+
 void x86_64_halt_forever(void) {
-    /* cli/hlt are privileged CPU instructions and require tiny inline assembly. */
-    __asm__ volatile ("cli");
+    x86_64_interrupts_disable();
 
     for (;;) {
         __asm__ volatile ("hlt");

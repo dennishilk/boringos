@@ -3,13 +3,14 @@
 These decisions remain deliberately narrow and provisional.
 
 - **Initial architecture:** x86_64.
-- **Reference machine:** QEMU `q35`.
+- **Reference machine:** QEMU `q35`. For the current legacy PIC/PIT bootstrap proof, the single reference CPU is explicitly `qemu64,apic=off`; BoringKernel does not configure a LAPIC in this milestone.
 - **Bootloader:** Limine 12.5.2, used to load BoringKernel and provide boot-time information that is still needed by the current kernel, including the memory map, HHDM offset and paging mode.
 - **Kernel format:** freestanding, statically linked ELF64 x86_64 (`kernel.elf`).
 - **Kernel entry path:** firmware → Limine → ELF entry symbol `boring_kernel_entry` → BoringKernel C code.
-- **C/assembly boundary:** kernel policy and exception diagnostics remain in C. Tiny x86_64 inline assembly remains isolated to I/O-port access (`inb`/`outb`), reading `CR3`, invalidating one TLB entry with `invlpg`, and the controlled `cli`/`hlt` stop loop. The exception milestone adds one architecture-specific source file, `kernel/arch/x86_64/exception_stubs.S`, containing only exception entry normalization, required descriptor-register instructions and deliberate hardware-fault triggers used by QEMU acceptance tests.
+- **C/assembly boundary:** kernel policy, allocation, exception diagnostics and IRQ dispatch remain in C. Tiny x86_64 inline assembly is isolated to CPU/I/O primitives such as port I/O, `CR3`, `invlpg`, IF control and the halt loop. `exception_stubs.S` contains exception ABI mechanics and deliberate fault triggers; `irq_stubs.S` contains only hardware-IRQ entry/save/restore/`iretq` mechanics.
 - **Serial console:** legacy COM1 at I/O base `0x3f8`, configured for 115200 baud, 8 data bits, no parity, one stop bit; transmit is polled.
 - **Privilege level:** the kernel currently executes at x86_64 CPL 0 (ring 0), as handed off by Limine. There is no ring-3/userspace execution yet.
+- **Execution model:** one bootstrap CPU only. There is no SMP, scheduler, preemption or task switching.
 
 ## Physical memory manager
 
@@ -105,9 +106,9 @@ The QEMU heap self-test performs real allocations of 1, 16, 64, 200, 6000 and 40
 
 ## x86_64 IDT and CPU exception handling
 
-BoringKernel now installs its own x86_64 Interrupt Descriptor Table and can diagnose fatal CPU exceptions without relying on a silent reset or missing serial output.
+BoringKernel installs its own x86_64 Interrupt Descriptor Table and can diagnose fatal CPU exceptions without relying on a silent reset or missing serial output.
 
-The verified path is:
+The verified fatal path is:
 
 ```text
 CPU exception
@@ -129,56 +130,30 @@ controlled cli/hlt halt
 
 The kernel allocates a statically aligned **256-entry IDT**. Each x86_64 descriptor is 16 bytes, so the loaded table is 4096 bytes and the IDTR limit is **4095**.
 
-Only vectors **0–31** receive active exception handlers in this milestone. Entries 32–255 remain zero/unconfigured. No hardware IRQ vector is claimed to work.
+CPU exception vectors **0–31** are installed during `exception_init()`. The bootstrap hardware-IRQ layer subsequently installs DPL0 interrupt gates for legacy PIC vectors **32–47** into the same already loaded table. Entries 48–255 remain unconfigured.
 
-Each configured exception descriptor uses:
+All currently configured exception and IRQ descriptors use:
 
 - present, DPL0 **64-bit interrupt gate** attributes `0x8e`;
 - IST index 0;
-- the kernel's **currently executing CS selector**, read at runtime rather than hard-coded;
-- the corresponding BoringKernel exception stub address.
+- the kernel's currently executing CS selector, read at runtime rather than hard-coded;
+- the corresponding architecture entry-stub address.
 
-Before `lidt`, BoringKernel validates all 32 configured descriptors. The load helper executes `cli` before `lidt`, because IRQ vectors are deliberately not configured yet. The kernel then executes `sidt` and rejects initialization unless the CPU-reported base and limit exactly match the requested IDTR.
-
-A verified QEMU run reported:
-
-```text
-IDT entries: 32
-IDTR base: 0xFFFFFFFF800268A0
-IDTR limit: 4095
-Code selector: 0x0000000000000028
-IDT: loaded
-Exceptions: online
-```
-
-The IDTR base is a linked runtime address and is useful as acceptance evidence, not a stable ABI value.
+Before `lidt`, BoringKernel validates all 32 exception descriptors. The load helper executes `cli` before `lidt`. The kernel then executes `sidt` and rejects initialization unless the CPU-reported base and limit exactly match the requested IDTR. Hardware IRQ gates are added later while IF remains clear and are individually checked after installation.
 
 ### Exception names and vectors
 
-Vectors 0–31 all have stubs. Architecturally defined exceptions receive descriptive names, including Divide Error, Debug, NMI, Breakpoint, Overflow, Bound Range Exceeded, Invalid Opcode, Device Not Available, Double Fault, Invalid TSS, Segment Not Present, Stack-Segment Fault, General Protection Fault, Page Fault, x87 Floating-Point Exception, Alignment Check, Machine Check, SIMD Floating-Point Exception, Virtualization Exception and Control Protection Exception.
-
-Reserved slots are explicitly labeled reserved rather than assigned invented semantics. The implementation also names architecture/vendor-defined vectors such as Hypervisor Injection Exception and VMM Communication Exception where applicable; receiving any vector still enters the same bounded fatal diagnostic policy unless the dedicated Double Fault path applies.
+Vectors 0–31 all have exception stubs. Architecturally defined exceptions receive descriptive names; reserved slots remain explicitly reserved. The current fatal policy does not attempt recovery or demand paging.
 
 ### C / assembly boundary
 
 High-level exception policy remains in `kernel/arch/x86_64/exception.c`: IDT construction/validation, exception naming, diagnostic formatting, Page Fault decoding, Double Fault reporting and fatal-stop policy are C.
 
-`kernel/arch/x86_64/exception_stubs.S` contains only work that is tied directly to the x86_64 exception ABI:
-
-- one tiny entry stub per vector 0–31;
-- hardware-error-code normalization;
-- GPR preservation;
-- construction of the current CPL0 trap-frame contract;
-- call into the shared C dispatcher;
-- `lidt` / `sidt`;
-- reads of `CS` and `CR2`;
-- deliberate `divq` and unmapped-memory-load instructions used by the two fatal QEMU acceptance modes.
-
-There is no general assembly runtime or interrupt framework.
+`kernel/arch/x86_64/exception_stubs.S` contains only x86_64 exception ABI mechanics: per-vector entry, hardware-error-code normalization, GPR preservation, the CPL0 trap-frame contract, descriptor-register instructions, reads of `CS`/`CR2`, and the deliberate hardware-fault triggers used by QEMU acceptance.
 
 ### Normalized trap frame
 
-Some x86_64 exceptions push a hardware error code and some do not. For vectors without one, the entry stub pushes a synthetic zero. For vectors with one, the stub preserves the CPU-pushed error code. The stub then pushes the vector number, saves GPRs and presents C with one predictable 176-byte structure:
+Exceptions with and without hardware error codes are normalized to one current CPL0 176-byte structure:
 
 ```text
 offset   field
@@ -206,76 +181,150 @@ offset   field
 0xA8     RFLAGS
 ```
 
-The current hardware-error-code stub set is vectors **8, 10, 11, 12, 13, 14, 17, 21, 29 and 30**. Other vectors receive the synthetic zero.
+The current hardware-error-code exception set is vectors **8, 10, 11, 12, 13, 14, 17, 21, 29 and 30**. Other exception vectors receive a synthetic zero.
 
-BoringKernel currently handles only CPL0 → CPL0 exceptions. In that case x86_64 does not push privilege-transition `RSP`/`SS` fields. The assembly therefore computes the interrupted ring-0 RSP from the known normalized frame depth and reads the current `SS` selector explicitly. It does **not** read nonexistent stack slots. When real ring-3 transitions are introduced later, this trap-frame contract must be extended to distinguish CPU-pushed privilege-transition state.
+BoringKernel currently handles only CPL0 → CPL0 entries. x86_64 therefore does not push privilege-transition `RSP`/`SS`. The assembly computes the interrupted ring-0 RSP from the known frame depth and reads the current `SS` selector explicitly. When ring 3 is introduced later, this contract must be extended to distinguish CPU-pushed privilege-transition state.
 
 ### Fatal exception policy
 
-All exceptions handled by this milestone are fatal. The shared C handler prints vector, name, normalized error code, RIP, CS, RFLAGS, RSP, SS and saved GPR state. It does not return to the interrupted instruction. It ends with:
+Fatal exceptions print vector/name, normalized error code, RIP, CS, RFLAGS, RSP, SS and saved GPR state. Page Fault additionally reports `CR2` and the current low error-code interpretation. Fatal handling ends in the controlled `cli` plus infinite `hlt` path and does not return.
+
+The dedicated QEMU tests continue to prove:
 
 ```text
-Fatal exception: controlled halt.
+Divide Error → CPU vector 0 → BoringKernel diagnostic → controlled halt
+Page Fault   → CPU vector 14 → CR2/error decode → controlled halt
 ```
 
-followed by the existing `x86_64_halt_forever()` path (`cli` plus an infinite `hlt` loop).
+Double Fault still has no dedicated IST/emergency stack and therefore is not hardened against corruption of the ordinary kernel stack.
 
-No exception is used to implement demand paging, retry execution or silently repair kernel state.
+## Bootstrap hardware IRQ delivery
 
-### Page Fault diagnostics
+BoringKernel now has one deliberately small asynchronous hardware-interrupt path. Full details and the acceptance capture are in [`interrupts.md`](interrupts.md).
 
-Vector 14 additionally reads `CR2` and reports the faulting virtual address. The current Page Fault decoder reports the architecturally relevant low error-code fields used by this kernel mode:
-
-- present/protection violation versus non-present;
-- read versus write;
-- supervisor versus user;
-- reserved-bit violation;
-- instruction fetch.
-
-The dedicated QEMU Page Fault mode first verifies that `0xffffff0000000000` is unmapped through VMM and then executes a real load from that address. The CPU/MMU produced:
+The verified path is:
 
 ```text
-Vector: 14
-Name: Page Fault
-Error code: 0x0000000000000000
-RIP: 0xFFFFFFFF80004544
-CR2: 0xFFFFFF0000000000
-Page fault mapping: non-present
-Page fault access: read
-Page fault privilege: supervisor
-Page fault reserved-bit violation: no
-Page fault instruction fetch: no
-Fatal exception: controlled halt.
+PIT channel 0
+    ↓
+IRQ0
+    ↓
+8259-compatible master PIC
+    ↓
+IDT vector 32
+    ↓
+x86_64 IRQ stub
+    ↓
+C IRQ dispatcher
+    ↓
+timer tick++
+    ↓
+PIC EOI
+    ↓
+restore + iretq
 ```
 
-Error code zero is therefore consistent with the deliberately unmapped supervisor read used by this acceptance test. No mapping is created in response to the fault.
+### PIC mapping and masks
 
-### Divide Error acceptance
-
-The dedicated divide mode executes a real `divq` with a zero divisor in architecture-specific test code. It does not call the C handler directly. QEMU reported:
+The legacy PIC pair is initialized in 8086 mode and remapped so hardware IRQs cannot collide with CPU exceptions:
 
 ```text
-Vector: 0
-Name: Divide Error
-Error code: 0x0000000000000000
-RIP: 0xFFFFFFFF8000450F
-CS: 0x0000000000000028
-RSP: 0xFFFF800007F8FD60
-SS: 0x0000000000000030
-Fatal exception: controlled halt.
+master IRQ0–7  → vectors 32–39
+slave IRQ8–15  → vectors 40–47
 ```
 
-This proves CPU #DE → IDT vector 0 → BoringKernel stub → C handler → serial diagnostic → controlled halt.
+All sixteen IDT gates are installed, but all hardware IRQs begin masked:
 
-### Double Fault limitation
+```text
+master = 0xff
+slave  = 0xff
+```
 
-Vector 8 has a dedicated minimal C diagnostic that avoids routing through additional recovery logic. It reports Double Fault, the hardware error code, RIP/RSP/RFLAGS, states that the normal kernel stack is in use, and halts.
+Only after PIT setup does BoringKernel unmask IRQ0:
 
-This is **not a hardened Double Fault design**. There is no TSS/IST configuration and no dedicated emergency stack. If the current stack itself is unusable, the vector-8 path may be unable to execute. A robust future Double Fault path is expected to require a separately provisioned IST stack once the required TSS/privilege infrastructure is introduced.
+```text
+master = 0xfe
+slave  = 0xff
+```
 
-### Acceptance build modes
+No unrelated hardware IRQ is intentionally enabled.
 
-The Makefile has three compile-time development modes:
+For ordinary slave IRQs, EOI is sent to the slave before the master cascade. Ordinary master IRQs acknowledge the master only. Spurious IRQ7 and IRQ15 use ISR checks; spurious IRQ7 sends no EOI, while spurious IRQ15 acknowledges only the master cascade.
+
+### PIT source
+
+The timer uses PIT channel 0 in rate-generator mode. The bootstrap input clock is **1,193,182 Hz**. For a requested **100 Hz**, BoringKernel computes the nearest integer divisor **11932**, giving approximately **99.998491 Hz**. Serial output intentionally reports the rounded rate as **99998 mHz** rather than claiming exact 100 Hz timing.
+
+### Interrupt enable point
+
+IF remains clear throughout exception/IRQ-gate setup, PIC remapping, complete initial masking, PIT programming, IRQ0 unmasking and state validation. `irq_enable()` executes `sti` only after the expected masks `0xfe/0xff` are read back and the timer subsystem is ready.
+
+The normal acceptance path verifies `timer_ticks()==0` before `sti`, then waits for at least ten asynchronous timer ticks with a bounded failure loop.
+
+### IRQ frame and return
+
+`kernel/arch/x86_64/irq_stubs.S` reuses the same current CPL0 176-byte trap-frame shape where technically clean. PIC interrupts have no CPU error code, so each stub supplies synthetic zero plus its vector, saves the GPRs, calls C dispatch, restores the interrupted state and executes `iretq`.
+
+Unlike fatal exception entry, normal IRQ entry returns to interrupted kernel code. No stack switch, scheduler context, task object or preemption policy is present.
+
+### Tick/concurrency assumptions
+
+The periodic timer count is a `volatile uint64_t`, modified only by the IRQ0 handler and polled by ordinary code. This is sufficient only for the current single-CPU bootstrap assumptions; it is not a general SMP/thread-safety guarantee.
+
+No dynamic memory allocation and no per-tick serial logging occurs in the IRQ handler.
+
+### QEMU reference limitation
+
+The current verified PIC/PIT path runs QEMU `q35` with a single `qemu64,apic=off` CPU. With QEMU's local APIC active, legacy PIC output is routed through LAPIC LINT0, and LAPIC configuration is intentionally outside this milestone. Disabling the CPU APIC feature keeps this proof genuinely PIC/PIT-only rather than silently adding LAPIC setup.
+
+This is temporary bootstrap infrastructure, not the final interrupt architecture and not a physical-hardware compatibility claim. A later milestone may replace it with LAPIC/IOAPIC-based routing after that work is explicitly scoped.
+
+### Acceptance proof
+
+The verified normal QEMU run observed:
+
+```text
+Hardware interrupts:
+Controller: 8259 PIC
+PIC: remapped
+Master vectors: 32-39
+Slave vectors: 40-47
+Initial master mask: 255
+Initial slave mask: 255
+IRQ0 vector: 32
+Master mask: 254
+Slave mask: 255
+
+Timer:
+Source: PIT channel 0
+Input frequency: 1193182 Hz
+Requested frequency: 100 Hz
+Divisor: 11932
+Effective frequency: 99998 mHz
+IRQ: 0
+Vector: 32
+Timer: online
+
+Interrupts: enabled
+
+IRQ self-test:
+  timer-delivery: PASS
+  repeated-irqs: PASS
+  acknowledgement: PASS
+Ticks observed: 10
+IRQ0 deliveries: 10
+Unexpected IRQs: 0
+Spurious IRQ7: 0
+Spurious IRQ15: 0
+
+BoringKernel hardware interrupt test passed.
+```
+
+Ten distinct deliveries are required specifically so a single initial IRQ cannot hide a missing EOI. The acceptance test never increments the tick counter manually or calls the IRQ dispatcher directly.
+
+## Acceptance build modes
+
+The Makefile retains three compile-time development modes:
 
 ```text
 TEST_MODE=normal
@@ -283,9 +332,9 @@ TEST_MODE=divide
 TEST_MODE=pagefault
 ```
 
-`normal` runs the complete PMM, VMM and heap acceptance sequence, installs/verifies the IDT and halts normally without creating a fatal fault. `divide` and `pagefault` first pass the same earlier subsystem checks and IDT initialization, then intentionally trigger their respective real CPU faults. A mode-stamp dependency forces kernel objects to rebuild when the mode changes, preventing stale test-mode objects.
+`normal` runs PMM, VMM, heap and exception-infrastructure checks and then proves repeated real PIT/PIC hardware-IRQ delivery. `divide` and `pagefault` first pass the earlier subsystem checks and then intentionally trigger their respective real CPU faults. A mode-stamp dependency forces kernel objects to rebuild when the mode changes.
 
-CI runs all three QEMU modes with timeouts and treats the deliberate controlled fatal halt as success only when the expected vector-specific diagnostics were observed. Missing diagnostics, wrong vectors, early QEMU termination or failure markers are not accepted as success.
+CI runs all three QEMU modes with finite timeouts. Missing diagnostics, wrong vectors, early QEMU termination, a stalled one-shot IRQ, failure markers or missing final success markers are not accepted as success.
 
 ## Still not implemented
 
@@ -293,6 +342,6 @@ BoringKernel does **not** yet own the complete address space. It still depends o
 
 The kernel heap remains a small single-core bootstrap allocator, not a production allocator.
 
-The exception subsystem is fatal-diagnostic infrastructure only. There is still **no hardware IRQ handling**, PIC remapping, APIC/IOAPIC setup, IRQ routing, PIT/HPET/timer interrupt, TSS/IST exception-stack hardening, scheduler, preemption, threads, processes, ring 3, syscalls, userspace loader, VFS, RAMFS, BoringFS implementation, storage stack, input, graphics, BoringWM, networking, USB, audio or GPU acceleration.
+The exception subsystem remains fatal-diagnostic infrastructure, and the hardware-interrupt path is deliberately limited to a legacy PIC/PIT bootstrap timer. There is no LAPIC, IOAPIC, x2APIC, APIC timer, HPET, ACPI/MADT parsing, SMP, interrupt affinity, TSS/IST exception-stack hardening, scheduler, preemption, threads, context switching, processes, ring 3, syscalls, userspace loader, VFS, RAMFS, BoringFS implementation, storage stack, keyboard/mouse driver, graphics, BoringWM, networking, USB, audio or GPU acceleration.
 
-The next separate roadmap milestone is hardware interrupt-controller and timer work. It has not been started and requires a separate implementation instruction.
+No scheduler code is part of the hardware-IRQ milestone.
