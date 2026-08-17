@@ -21,13 +21,15 @@ LIMINE_URL := https://github.com/Limine-Bootloader/Limine/releases/download/v$(L
 
 CPPFLAGS := -Ikernel/include
 CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
-	-m64 -mno-red-zone -mcmodel=kernel -O2 -g \
+	-m64 -mno-80387 -mno-mmx -mno-sse -mno-sse2 \
+	-mno-red-zone -mcmodel=kernel -O2 -g \
 	-Wall -Wextra -Wpedantic -Werror \
 	-Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes
 LDFLAGS := -nostdlib -static -z max-page-size=0x1000 -T kernel/linker/x86_64.ld
 
 KERNEL_SOURCES := \
 	kernel/core/entry.c \
+	kernel/core/pmm.c \
 	kernel/arch/x86_64/serial.c \
 	kernel/arch/x86_64/cpu.c
 KERNEL_OBJECTS := $(patsubst %.c,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_SOURCES))

@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <stdint.h>
 
 #include <boring/io.h>
@@ -33,5 +34,27 @@ void serial_write_string(const char *text) {
     while (*text != '\0') {
         serial_write_char(*text);
         ++text;
+    }
+}
+
+void serial_write_u64(uint64_t value) {
+    char digits[20];
+    size_t count = 0U;
+
+    if (value == 0ULL) {
+        serial_write_char('0');
+        return;
+    }
+
+    while (value != 0ULL) {
+        const uint8_t digit = (uint8_t)(value % 10ULL);
+        digits[count] = (char)((uint8_t)'0' + digit);
+        ++count;
+        value /= 10ULL;
+    }
+
+    while (count != 0U) {
+        --count;
+        serial_write_char(digits[count]);
     }
 }

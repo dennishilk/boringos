@@ -31,10 +31,7 @@ PID=$!
 
 attempt=0
 while [ "${attempt}" -lt 100 ]; do
-    if grep -Fqx 'BoringOS booting...' "${LOG}" 2>/dev/null \
-        && grep -Fqx 'BoringKernel 0.0.1-dev' "${LOG}" 2>/dev/null \
-        && grep -Fqx 'Arch: x86_64' "${LOG}" 2>/dev/null \
-        && grep -Fqx 'Hello from BoringKernel.' "${LOG}" 2>/dev/null; then
+    if grep -Fqx 'BoringKernel physical memory test passed.' "${LOG}" 2>/dev/null; then
         break
     fi
 
@@ -49,15 +46,47 @@ done
 status=0
 for line in \
     'BoringOS booting...' \
-    'BoringKernel 0.0.1-dev' \
+    'BoringKernel 0.0.2-dev' \
     'Arch: x86_64' \
-    'Hello from BoringKernel.'
+    'Hello from BoringKernel.' \
+    'Physical memory manager:' \
+    'Page size: 4096 bytes' \
+    'PMM: online' \
+    'PMM self-test:' \
+    '  allocate: PASS' \
+    '  unique: PASS' \
+    '  aligned: PASS' \
+    '  usable: PASS' \
+    '  free: PASS' \
+    '  invalid-free: PASS' \
+    '  bookkeeping: PASS' \
+    'BoringKernel physical memory test passed.'
 do
     if ! grep -Fqx "${line}" "${LOG}"; then
         echo "missing serial line: ${line}" >&2
         status=1
     fi
 done
+
+if ! grep -Eq '^Usable memory: [1-9][0-9]* bytes$' "${LOG}"; then
+    echo 'missing or invalid runtime usable-memory value' >&2
+    status=1
+fi
+
+if ! grep -Eq '^Usable frames: [1-9][0-9]*$' "${LOG}"; then
+    echo 'missing or invalid runtime usable-frame count' >&2
+    status=1
+fi
+
+if grep -Fq 'PMM self-test FAILED' "${LOG}"; then
+    echo 'kernel reported a PMM self-test failure' >&2
+    status=1
+fi
+
+if grep -Fq 'Physical memory manager: FAILED' "${LOG}"; then
+    echo 'kernel reported PMM initialization failure' >&2
+    status=1
+fi
 
 cat "${LOG}"
 

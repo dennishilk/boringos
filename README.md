@@ -13,18 +13,20 @@ It is **not a Linux distribution**, **not a BSD distribution**, and **not based 
 
 **Extremely early bootstrap kernel.**
 
-BoringKernel now has a first boot milestone for **QEMU x86_64**. Limine is used only as the external bootloader; after handoff, execution reaches the freestanding BoringKernel entry point, BoringKernel initializes COM1 serial output, prints its identity, and enters a controlled halt loop.
+BoringKernel boots under **QEMU x86_64**. Limine is used only as the external bootloader; after handoff, execution reaches the freestanding BoringKernel entry point. BoringKernel initializes COM1 serial output and now consumes Limine's memory map to provide a minimal 4096-byte physical page-frame allocator with allocate/free support and an in-kernel QEMU self-test.
 
-Current serial output:
+Current serial output begins with:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.1-dev
+BoringKernel 0.0.2-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```
 
-This remains intentionally tiny. There is **no userspace, scheduler, filesystem, networking, graphical environment, input stack, allocator, interrupt subsystem or process model yet**.
+The boot acceptance test also verifies PMM initialization, runtime-discovered usable-memory/frame counts, unique aligned usable-frame allocations, free/reuse behavior and allocator bookkeeping.
+
+This remains intentionally tiny. There is **no general-purpose kernel heap, BoringKernel-owned virtual-memory manager, userspace, scheduler, filesystem, networking, graphical environment, input stack, interrupt subsystem or process model yet**.
 
 ## Engineering direction
 
@@ -45,13 +47,13 @@ make
 make run
 ```
 
-The automated acceptance test rebuilds BoringOS, boots QEMU headlessly, captures the serial console and verifies all four identity lines:
+The automated acceptance test rebuilds BoringOS, boots QEMU headlessly, captures the serial console and verifies both the boot identity and the physical-memory self-test:
 
 ```sh
 make test
 ```
 
-See [`docs/architecture.md`](docs/architecture.md) and [`docs/boot.md`](docs/boot.md) for the deliberately small Phase 0.1 decisions.
+See [`docs/architecture.md`](docs/architecture.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md) and [`docs/boringfs.md`](docs/boringfs.md).
 
 ## Deliberately not early goals
 

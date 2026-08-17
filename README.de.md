@@ -13,18 +13,20 @@ Es ist **keine Linux-Distribution**, **keine BSD-Distribution** und **basiert we
 
 **Extrem früher Bootstrap-Kernel.**
 
-BoringKernel besitzt jetzt einen ersten Boot-Meilenstein für **QEMU x86_64**. Limine dient ausschließlich als externer Bootloader; nach der Übergabe erreicht die Ausführung den freestanding BoringKernel-Einstiegspunkt, BoringKernel initialisiert die serielle COM1-Ausgabe, gibt seine Identität aus und wechselt anschließend in eine kontrollierte Halt-Schleife.
+BoringKernel bootet unter **QEMU x86_64**. Limine dient ausschließlich als externer Bootloader; nach der Übergabe erreicht die Ausführung den freestanding BoringKernel-Einstiegspunkt. BoringKernel initialisiert die serielle COM1-Ausgabe und verarbeitet jetzt zusätzlich die von Limine gelieferte Memory Map für einen minimalen 4096-Byte-Physical-Page-Frame-Allocator mit Allocate/Free und einem In-Kernel-Selbsttest unter QEMU.
 
-Aktuelle serielle Ausgabe:
+Die aktuelle serielle Ausgabe beginnt mit:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.1-dev
+BoringKernel 0.0.2-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```
 
-Das System bleibt absichtlich winzig. Es gibt **noch keinen Userspace, Scheduler, kein Dateisystem, Networking, keine grafische Umgebung, keinen Input-Stack, Allocator, Interrupt-Unterbau oder Prozessmodell**.
+Der Boot-Acceptance-Test prüft zusätzlich die PMM-Initialisierung, die zur Laufzeit ermittelten Werte für nutzbaren Speicher und Frames, eindeutige ausgerichtete Allocations innerhalb gültiger usable-RAM-Bereiche, Free/Reuse sowie konsistente Buchhaltung.
+
+Das System bleibt absichtlich winzig. Es gibt **noch keinen allgemeinen Kernel-Heap, keinen BoringKernel-eigenen Virtual-Memory-Manager, Userspace, Scheduler, kein Dateisystem, Networking, keine grafische Umgebung, keinen Input-Stack, Interrupt-Unterbau oder Prozessmodell**.
 
 ## Technische Richtung
 
@@ -45,13 +47,13 @@ make
 make run
 ```
 
-Der automatisierte Acceptance-Test baut BoringOS neu, startet QEMU headless, erfasst die serielle Konsole und prüft alle vier Identitätszeilen:
+Der automatisierte Acceptance-Test baut BoringOS neu, startet QEMU headless, erfasst die serielle Konsole und prüft sowohl die Boot-Identität als auch den Physical-Memory-Selbsttest:
 
 ```sh
 make test
 ```
 
-Siehe [`docs/architecture.md`](docs/architecture.md) und [`docs/boot.md`](docs/boot.md) für die bewusst kleinen Phase-0.1-Entscheidungen.
+Siehe [`docs/architecture.md`](docs/architecture.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md) und [`docs/boringfs.md`](docs/boringfs.md).
 
 ## Bewusst keine frühen Ziele
 
