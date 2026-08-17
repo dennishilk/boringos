@@ -30,6 +30,7 @@ LDFLAGS := -nostdlib -static -z max-page-size=0x1000 -T kernel/linker/x86_64.ld
 KERNEL_SOURCES := \
 	kernel/core/entry.c \
 	kernel/core/pmm.c \
+	kernel/core/heap.c \
 	kernel/arch/x86_64/vmm.c \
 	kernel/arch/x86_64/serial.c \
 	kernel/arch/x86_64/cpu.c
