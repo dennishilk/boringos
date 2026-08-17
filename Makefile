@@ -10,6 +10,7 @@ CC = gcc
 LD = ld
 HOST_CC = cc
 QEMU = qemu-system-x86_64
+QEMU_CPU ?= qemu64,apic=off
 CURL = curl
 XORRISO = xorriso
 
@@ -110,7 +111,7 @@ $(ISO): $(KERNEL_ELF) $(LIMINE_DIR)/limine limine.conf
 	rm -rf $(ISO_ROOT)
 
 run: $(ISO)
-	$(QEMU) -M q35 -m 128M -cdrom $(ISO) -boot d \
+	$(QEMU) -M q35 -cpu "$(QEMU_CPU)" -m 128M -cdrom $(ISO) -boot d \
 		-display none -serial stdio -monitor none -no-reboot -no-shutdown
 
 run-headless: run
