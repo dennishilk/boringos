@@ -171,6 +171,8 @@ static bool task_preempt_frame_is_valid_for(
     if ((frame_end > end) ||
         (frame->rsp < (uint64_t)(base + TASK_STACK_RESERVED_BYTES)) ||
         (frame->rsp > (uint64_t)end) ||
+        (frame->hardware_rsp != frame->rsp) ||
+        (frame->hardware_ss != frame->ss) ||
         (frame->vector != (uint64_t)X86_64_TIMER_VECTOR) ||
         (frame->error_code != 0ULL) || (frame->rip == 0ULL) ||
         (frame->cs == 0ULL) ||
@@ -295,9 +297,11 @@ static bool task_prepare_preemptive_context(struct kernel_task *task,
     const uintptr_t resume_rsp = stack_top - 8ULL;
     uintptr_t frame_address;
     size_t word_index;
+    const uint64_t stack_segment = (uint64_t)x86_64_read_ss();
 
     if (!exception_get_stats(&exception_state) ||
         (exception_state.code_selector == 0U) ||
+        (stack_segment == 0ULL) ||
         (resume_rsp < (uintptr_t)sizeof(struct x86_64_trap_frame))) {
         return false;
     }
@@ -316,13 +320,15 @@ static bool task_prepare_preemptive_context(struct kernel_task *task,
     *(uint64_t *)resume_rsp = (uint64_t)(uintptr_t)&x86_64_halt_forever;
 
     frame->rsp = (uint64_t)resume_rsp;
-    frame->ss = (uint64_t)x86_64_read_ss();
+    frame->ss = stack_segment;
     frame->vector = (uint64_t)X86_64_TIMER_VECTOR;
     frame->error_code = 0ULL;
     frame->rip = (uint64_t)(uintptr_t)&kernel_task_trampoline;
     frame->cs = (uint64_t)exception_state.code_selector;
     frame->rflags = X86_64_RFLAGS_RESERVED_BIT |
                     X86_64_RFLAGS_INTERRUPT_ENABLE;
+    frame->hardware_rsp = (uint64_t)resume_rsp;
+    frame->hardware_ss = stack_segment;
 
     task->preempt_frame = frame;
     task->context_kind = KERNEL_TASK_CONTEXT_PREEMPTIVE;
