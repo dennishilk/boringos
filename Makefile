@@ -7,6 +7,14 @@ ISO_ROOT := $(BUILD_DIR)/iso_root
 KERNEL_ELF := $(BUILD_DIR)/kernel.elf
 ELF_SMOKE_OBJECT := $(USER_BUILD_DIR)/elf-smoke/start.o
 ELF_SMOKE := $(USER_BUILD_DIR)/elf-smoke.elf
+RUNTIME_ENTRY_OBJECT := $(USER_BUILD_DIR)/runtime/entry.o
+RUNTIME_SYSCALL_OBJECT := $(USER_BUILD_DIR)/runtime/syscall.o
+RUNTIME_MEMORY_OBJECT := $(USER_BUILD_DIR)/runtime/memory.o
+RUNTIME_STRING_OBJECT := $(USER_BUILD_DIR)/runtime/string.o
+RUNTIME_MAIN_OBJECT := $(USER_BUILD_DIR)/runtime-smoke/main.o
+RUNTIME_OBJECTS := $(RUNTIME_ENTRY_OBJECT) $(RUNTIME_SYSCALL_OBJECT) \
+	$(RUNTIME_MEMORY_OBJECT) $(RUNTIME_STRING_OBJECT) $(RUNTIME_MAIN_OBJECT)
+RUNTIME_SMOKE := $(USER_BUILD_DIR)/runtime-smoke.elf
 ISO := $(BUILD_DIR)/boringos.iso
 
 CC = gcc
@@ -16,6 +24,10 @@ QEMU = qemu-system-x86_64
 QEMU_CPU ?= qemu64,apic=off
 CURL = curl
 XORRISO = xorriso
+
+BOOT_USER_ELF := $(ELF_SMOKE)
+BOOT_USER_NAME := elf-smoke.elf
+BOOT_LIMINE_CONF := limine.conf
 
 TEST_MODE ?= normal
 ifeq ($(TEST_MODE),normal)
@@ -34,12 +46,18 @@ else ifeq ($(TEST_MODE),syscall)
 TEST_MODE_VALUE := 4
 TEST_HARNESS_C := kernel/core/syscall_test.c
 else ifeq ($(TEST_MODE),elf)
-# Keep entry.c untouched during bring-up: this isolated build substitutes the
-# special-mode harness while the external acceptance mode remains TEST_MODE=elf.
+# Keep the established Milestone-11 acceptance isolated from the ordinary
+# syscall acceptance while preserving its existing external test mode.
 TEST_MODE_VALUE := 4
 TEST_HARNESS_C := kernel/core/elf_test.c kernel/core/elf_test_adapter.c
+else ifeq ($(TEST_MODE),runtime)
+TEST_MODE_VALUE := 5
+TEST_HARNESS_C := kernel/core/runtime_test.c kernel/core/runtime_test_adapter.c
+BOOT_USER_ELF := $(RUNTIME_SMOKE)
+BOOT_USER_NAME := runtime-smoke.elf
+BOOT_LIMINE_CONF := limine-runtime.conf
 else
-$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, or elf)
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, or runtime)
 endif
 
 LIMINE_VERSION := 12.5.2
@@ -56,10 +74,19 @@ CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
 	-Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes
 ASFLAGS := -ffreestanding -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel
 LDFLAGS := -nostdlib -static -z max-page-size=0x1000 -T kernel/linker/x86_64.ld
-USER_CPPFLAGS := -Ikernel/include
-USER_ASFLAGS := -ffreestanding -fno-pic -fno-pie -m64
+ELF_USER_CPPFLAGS := -Ikernel/include
+USER_ASFLAGS := -ffreestanding -fno-pic -fno-pie -m64 -mno-red-zone
 USER_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 	-T user/elf-smoke/linker.ld
+RUNTIME_USER_CPPFLAGS := -Ikernel/include -Iuser/runtime/include
+RUNTIME_USER_CFLAGS := -std=c11 -ffreestanding -fno-stack-protector \
+	-fno-pic -fno-pie -fno-builtin -fno-asynchronous-unwind-tables \
+	-fno-unwind-tables -m64 -mno-red-zone -mno-80387 -mno-mmx \
+	-mno-sse -mno-sse2 -O2 -Wall -Wextra -Wpedantic -Werror \
+	-Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes
+RUNTIME_USER_ASFLAGS := -ffreestanding -fno-pic -fno-pie -m64 -mno-red-zone
+RUNTIME_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
+	-T user/runtime-smoke/linker.ld
 
 KERNEL_C_SOURCES := \
 	kernel/core/entry.c \
@@ -96,7 +123,7 @@ KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCE
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
 
-.PHONY: all kernel user-elf elf-audit run run-headless test clean distclean
+.PHONY: all kernel user-elf user-runtime elf-audit runtime-audit run run-headless test clean distclean
 
 all: $(ISO)
 
@@ -104,8 +131,13 @@ kernel: $(KERNEL_ELF)
 
 user-elf: $(ELF_SMOKE)
 
+user-runtime: $(RUNTIME_SMOKE)
+
 elf-audit: $(ELF_SMOKE)
 	sh ./tests/elf-build-audit.sh
+
+runtime-audit: $(RUNTIME_SMOKE)
+	sh ./tests/runtime-build-audit.sh
 
 $(MODE_STAMP):
 	@mkdir -p $(BUILD_DIR)
@@ -126,11 +158,40 @@ $(KERNEL_ELF): $(KERNEL_OBJECTS) kernel/linker/x86_64.ld
 
 $(ELF_SMOKE_OBJECT): user/elf-smoke/start.S kernel/include/boring/elf_smoke.h kernel/include/boring/syscall_abi.h
 	@mkdir -p $(dir $@)
-	$(CC) $(USER_CPPFLAGS) $(USER_ASFLAGS) -c $< -o $@
+	$(CC) $(ELF_USER_CPPFLAGS) $(USER_ASFLAGS) -c $< -o $@
 
 $(ELF_SMOKE): $(ELF_SMOKE_OBJECT) user/elf-smoke/linker.ld
 	@mkdir -p $(dir $@)
 	$(LD) $(USER_LDFLAGS) $(ELF_SMOKE_OBJECT) -o $@
+
+$(RUNTIME_ENTRY_OBJECT): user/runtime/entry.S
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_ASFLAGS) -c $< -o $@
+
+$(RUNTIME_SYSCALL_OBJECT): user/runtime/syscall.c user/runtime/include/boring/syscall.h kernel/include/boring/syscall_abi.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(RUNTIME_MEMORY_OBJECT): user/runtime/memory.c user/runtime/include/boring/memory.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(RUNTIME_STRING_OBJECT): user/runtime/string.c user/runtime/include/boring/string.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(RUNTIME_MAIN_OBJECT): user/runtime-smoke/main.c \
+	user/runtime/include/boring/runtime.h \
+	user/runtime/include/boring/syscall.h \
+	user/runtime/include/boring/memory.h \
+	user/runtime/include/boring/string.h \
+	kernel/include/boring/runtime_smoke.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(RUNTIME_SMOKE): $(RUNTIME_OBJECTS) user/runtime-smoke/linker.ld
+	@mkdir -p $(dir $@)
+	$(LD) $(RUNTIME_LDFLAGS) $(RUNTIME_OBJECTS) -o $@
 
 $(LIMINE_ARCHIVE):
 	@mkdir -p $(dir $@)
@@ -142,12 +203,12 @@ $(LIMINE_DIR)/limine: $(LIMINE_ARCHIVE)
 	tar -xzf $(LIMINE_ARCHIVE) -C $(BUILD_DIR)/deps
 	$(MAKE) -C $(LIMINE_DIR) CC="$(HOST_CC)"
 
-$(ISO): $(KERNEL_ELF) $(ELF_SMOKE) $(LIMINE_DIR)/limine limine.conf
+$(ISO): $(KERNEL_ELF) $(BOOT_USER_ELF) $(LIMINE_DIR)/limine $(BOOT_LIMINE_CONF)
 	rm -rf $(ISO_ROOT)
 	mkdir -p $(ISO_ROOT)/boot/limine $(ISO_ROOT)/boot/user $(ISO_ROOT)/EFI/BOOT
 	cp $(KERNEL_ELF) $(ISO_ROOT)/boot/kernel.elf
-	cp $(ELF_SMOKE) $(ISO_ROOT)/boot/user/elf-smoke.elf
-	cp limine.conf $(ISO_ROOT)/boot/limine/limine.conf
+	cp $(BOOT_USER_ELF) $(ISO_ROOT)/boot/user/$(BOOT_USER_NAME)
+	cp $(BOOT_LIMINE_CONF) $(ISO_ROOT)/boot/limine/limine.conf
 	cp $(LIMINE_DIR)/limine-bios.sys $(ISO_ROOT)/boot/limine/
 	cp $(LIMINE_DIR)/limine-bios-cd.bin $(ISO_ROOT)/boot/limine/
 	cp $(LIMINE_DIR)/limine-uefi-cd.bin $(ISO_ROOT)/boot/limine/
@@ -170,12 +231,14 @@ run-headless: run
 
 test:
 	sh ./tests/elf-build-audit.sh
+	sh ./tests/runtime-build-audit.sh
 	./tests/boot-qemu.sh
 	./tests/exception-divide-qemu.sh
 	./tests/exception-pagefault-qemu.sh
 	./tests/ring3-qemu.sh
 	./tests/syscall-qemu.sh
 	sh ./tests/elf-qemu.sh
+	sh ./tests/runtime-qemu.sh
 
 clean:
 	rm -rf $(BUILD_DIR)
