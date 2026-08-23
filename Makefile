@@ -2,8 +2,11 @@ SHELL := /bin/sh
 
 BUILD_DIR := build
 KERNEL_BUILD_DIR := $(BUILD_DIR)/kernel
+USER_BUILD_DIR := $(BUILD_DIR)/user
 ISO_ROOT := $(BUILD_DIR)/iso_root
 KERNEL_ELF := $(BUILD_DIR)/kernel.elf
+ELF_SMOKE_OBJECT := $(USER_BUILD_DIR)/elf-smoke/start.o
+ELF_SMOKE := $(USER_BUILD_DIR)/elf-smoke.elf
 ISO := $(BUILD_DIR)/boringos.iso
 
 CC = gcc
@@ -25,8 +28,10 @@ else ifeq ($(TEST_MODE),ring3)
 TEST_MODE_VALUE := 3
 else ifeq ($(TEST_MODE),syscall)
 TEST_MODE_VALUE := 4
+else ifeq ($(TEST_MODE),elf)
+TEST_MODE_VALUE := 5
 else
-$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, or syscall)
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, or elf)
 endif
 
 LIMINE_VERSION := 12.5.2
@@ -43,6 +48,10 @@ CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
 	-Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes
 ASFLAGS := -ffreestanding -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel
 LDFLAGS := -nostdlib -static -z max-page-size=0x1000 -T kernel/linker/x86_64.ld
+USER_CPPFLAGS := -Ikernel/include
+USER_ASFLAGS := -ffreestanding -fno-pic -fno-pie -m64
+USER_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
+	-T user/elf-smoke/linker.ld
 
 KERNEL_C_SOURCES := \
 	kernel/core/entry.c \
@@ -55,6 +64,7 @@ KERNEL_C_SOURCES := \
 	kernel/core/ring3_test.c \
 	kernel/core/syscall.c \
 	kernel/core/syscall_test.c \
+	kernel/core/elf_loader.c \
 	kernel/arch/x86_64/vmm.c \
 	kernel/arch/x86_64/address_space.c \
 	kernel/arch/x86_64/ring3_memory.c \
@@ -77,11 +87,16 @@ KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCE
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
 
-.PHONY: all kernel run run-headless test clean distclean
+.PHONY: all kernel user-elf elf-audit run run-headless test clean distclean
 
 all: $(ISO)
 
 kernel: $(KERNEL_ELF)
+
+user-elf: $(ELF_SMOKE)
+
+elf-audit: $(ELF_SMOKE)
+	sh ./tests/elf-build-audit.sh
 
 $(MODE_STAMP):
 	@mkdir -p $(BUILD_DIR)
@@ -100,6 +115,14 @@ $(KERNEL_ELF): $(KERNEL_OBJECTS) kernel/linker/x86_64.ld
 	@mkdir -p $(dir $@)
 	$(LD) $(LDFLAGS) $(KERNEL_OBJECTS) -o $@
 
+$(ELF_SMOKE_OBJECT): user/elf-smoke/start.S kernel/include/boring/elf_smoke.h kernel/include/boring/syscall_abi.h
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CPPFLAGS) $(USER_ASFLAGS) -c $< -o $@
+
+$(ELF_SMOKE): $(ELF_SMOKE_OBJECT) user/elf-smoke/linker.ld
+	@mkdir -p $(dir $@)
+	$(LD) $(USER_LDFLAGS) $(ELF_SMOKE_OBJECT) -o $@
+
 $(LIMINE_ARCHIVE):
 	@mkdir -p $(dir $@)
 	$(CURL) --fail --location --retry 3 --output $@ $(LIMINE_URL)
@@ -110,10 +133,11 @@ $(LIMINE_DIR)/limine: $(LIMINE_ARCHIVE)
 	tar -xzf $(LIMINE_ARCHIVE) -C $(BUILD_DIR)/deps
 	$(MAKE) -C $(LIMINE_DIR) CC="$(HOST_CC)"
 
-$(ISO): $(KERNEL_ELF) $(LIMINE_DIR)/limine limine.conf
+$(ISO): $(KERNEL_ELF) $(ELF_SMOKE) $(LIMINE_DIR)/limine limine.conf
 	rm -rf $(ISO_ROOT)
-	mkdir -p $(ISO_ROOT)/boot/limine $(ISO_ROOT)/EFI/BOOT
+	mkdir -p $(ISO_ROOT)/boot/limine $(ISO_ROOT)/boot/user $(ISO_ROOT)/EFI/BOOT
 	cp $(KERNEL_ELF) $(ISO_ROOT)/boot/kernel.elf
+	cp $(ELF_SMOKE) $(ISO_ROOT)/boot/user/elf-smoke.elf
 	cp limine.conf $(ISO_ROOT)/boot/limine/limine.conf
 	cp $(LIMINE_DIR)/limine-bios.sys $(ISO_ROOT)/boot/limine/
 	cp $(LIMINE_DIR)/limine-bios-cd.bin $(ISO_ROOT)/boot/limine/
@@ -136,11 +160,13 @@ run: $(ISO)
 run-headless: run
 
 test:
+	sh ./tests/elf-build-audit.sh
 	./tests/boot-qemu.sh
 	./tests/exception-divide-qemu.sh
 	./tests/exception-pagefault-qemu.sh
 	./tests/ring3-qemu.sh
 	./tests/syscall-qemu.sh
+	sh ./tests/elf-qemu.sh
 
 clean:
 	rm -rf $(BUILD_DIR)
