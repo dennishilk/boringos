@@ -8,17 +8,17 @@ These decisions remain deliberately narrow and provisional. This document descri
 - **Reference machine:** QEMU `q35`, one `qemu64,apic=off` CPU for the current legacy PIC/PIT bootstrap path.
 - **Bootloader:** Limine 12.5.2.
 - **Kernel:** freestanding, statically linked ELF64, primarily C with small isolated architecture assembly.
-- **Privilege:** CPL0 only. There is no ring-3/userspace execution.
+- **Privilege:** normal kernel execution remains CPL0; one dedicated acceptance path performs a real CPL0 -> CPL3 transition and returns to CPL0 only through a deliberate CPU exception. There is no general userspace runtime or syscall boundary yet.
 - **Bootstrap address space:** PID 0 adopts the active Limine-created four-level root.
 - **Additional process address spaces:** PMM-backed independent roots with private lower-half mappings and shared higher-half kernel mappings.
 
-The current normal boot path proves PMM, selected bootstrap-VMM mappings, the bounded kernel heap, exception infrastructure, repeated hardware PIT/PIC interrupts, cooperative kernel contexts, timer-driven preemptive kernel scheduling, process identity, real CR3 switching, and independent process address spaces.
+The current normal boot path proves PMM, selected bootstrap-VMM mappings, the bounded kernel heap, exception infrastructure, repeated hardware PIT/PIC interrupts, cooperative kernel contexts, timer-driven preemptive kernel scheduling, process identity, real CR3 switching, and independent process address spaces. A separate Ring 3 test mode proves the descriptor/TSS state, user-accessible lower-half mappings, real `iretq` entry to CPL3, a real privileged-instruction #GP, preservation of the hardware user return state, and CPU stack switching through TSS.RSP0.
 
 ## Physical memory
 
 BoringKernel allocates 4096-byte physical frames only from Limine memory-map entries marked usable. A bounded static bitmap and usable-region table provide deterministic first-fit allocation, free/reuse, and invalid/double-free rejection. Bootloader-reclaimable and all other non-usable types remain non-allocatable.
 
-All new process root tables, process-private lower-level page tables, and process-isolation data frames come from this existing PMM. There is no second physical allocator.
+All new process root tables, process-private lower-level page tables, process-isolation data frames, and the two Ring 3 test pages come from this existing PMM. There is no second physical allocator.
 
 ## Bootstrap VMM
 
@@ -32,11 +32,11 @@ New VMM page-table frames come from PMM and are accessed through the HHDM. Empty
 
 The QEMU self-test maps a PMM frame, translates it, performs a real write/read, unmaps it, invalidates the TLB entry, and restores PMM/VMM bookkeeping.
 
-This inherited bootstrap root is now represented explicitly as PID 0's address space. It is never freed by the process layer.
+This inherited bootstrap root is represented explicitly as PID 0's address space. It is never freed by the process layer.
 
 ## Process address-space layer
 
-BoringKernel 0.0.9-dev adds an explicit address-space abstraction alongside the original bootstrap VMM.
+BoringKernel 0.0.9-dev added an explicit address-space abstraction alongside the original bootstrap VMM.
 
 The current object is deliberately small:
 
@@ -71,7 +71,9 @@ slot 510 → VMM test + kernel heap region
 slot 511 → linked higher-half kernel image
 ```
 
-Sharing the full current higher half preserves the mappings used by kernel code/data, HHDM physical access, heap, task stacks, PMM/VMM metadata, IDT, exception/IRQ code, scheduler metadata, and still-referenced Limine structures.
+Sharing the full current higher half preserves the mappings used by kernel code/data, HHDM physical access, heap, task stacks, PMM/VMM metadata, IDT, exception/IRQ code, scheduler metadata, GDT/TSS state, and still-referenced Limine structures.
+
+The Ring 3 mapping acceptance adds an explicit permission invariant: every **present** shared root entry in PML4 slots 256-511 must have `U/S=0`. User mapping creation is restricted to canonical lower-half addresses below `ADDRESS_SPACE_SHARED_PML4_START`; after user mappings are installed and again after the test process root is activated, the acceptance scans all shared root entries and rejects any accidental user bit.
 
 ### Ownership rule
 
@@ -153,7 +155,7 @@ The heap is single-core bootstrap infrastructure, not a production allocator.
 
 ## IDT and fatal exceptions
 
-BoringKernel owns a 256-entry x86_64 IDT. Vectors 0-31 are CPU exception gates; PIC vectors 32-47 are installed later by the hardware-IRQ layer. Configured entries are DPL0 64-bit interrupt gates using the current kernel code selector and IST 0.
+BoringKernel owns a 256-entry x86_64 IDT. Vectors 0-31 are CPU exception gates; PIC vectors 32-47 are installed later by the hardware-IRQ layer. Configured entries are DPL0 64-bit interrupt gates using BoringKernel's kernel code selector and IST 0.
 
 The real acceptance suite continues to prove:
 
@@ -162,11 +164,105 @@ Divide Error → vector 0  → BoringKernel diagnostic → controlled halt
 Page Fault   → vector 14 → CR2/error decode       → controlled halt
 ```
 
-Fatal exceptions do not return. Double Fault still lacks a dedicated IST/emergency stack.
+The Ring 3 mode additionally produces a real General Protection Fault from CPL3 and routes it through the same BoringKernel-owned vector-13 gate. Fatal exceptions do not return. Double Fault still lacks a dedicated IST/emergency stack.
+
+## GDT, TSS, and first Ring 3 transition
+
+BoringKernel 0.0.10-dev installs its own small x86_64 GDT before building the IDT. The seven 8-byte GDT slots are:
+
+```text
+slot  selector  purpose
+0     0x00      null
+1     0x08      kernel code, DPL0
+2     0x10      kernel data, DPL0
+3     0x18      user data descriptor, DPL3  (used as selector 0x1B with RPL3)
+4     0x20      user code descriptor, DPL3  (used as selector 0x23 with RPL3)
+5     0x28      64-bit available TSS descriptor, low half
+6     —         TSS descriptor, high half
+```
+
+The code therefore uses these public selectors:
+
+```text
+kernel CS  0x08
+kernel SS  0x10
+user SS    0x1B
+user CS    0x23
+TR/TSS     0x28
+```
+
+`descriptor_init()` disables interrupts while replacing the table, performs the architecture-specific GDT load and kernel segment reload, verifies active GDTR/CS/SS/DS, loads TR with `ltr`, and verifies TR with `str` before reporting success.
+
+The current TSS is the architectural 104-byte x86_64 structure. Only `RSP0` is used by this milestone; `RSP1`, `RSP2`, all IST entries, and the I/O permission bitmap remain unused. `iomap_base` is set to the end of the TSS so no I/O bitmap is present.
+
+`RSP0` points at the top of one statically allocated, 16-byte-aligned **16-KiB kernel stack**:
+
+```text
+rsp0_stack[16384]
+TSS.RSP0 = rsp0_stack + 16384
+```
+
+This is intentionally one bootstrap acceptance stack, not scheduler-managed per-task kernel stacks. No TSS/IST scheduler redesign is part of this milestone.
+
+### User mappings
+
+The dedicated Ring 3 mode creates one process address space and two PMM data frames. Its fixed mappings are:
+
+```text
+0x0000000040000000  user code page
+0x0000000040010000  user stack page
+0x0000000040011000  initial user RSP / top of stack
+```
+
+The code mapping is `present + user` and deliberately not writable. The stack mapping is `present + user + writable`. The user bit is required and verified at every relevant PML4 -> PDPT -> PD -> PT level. Existing lower-level user tables may be reused only if they are process-owned and already user-accessible; large-page entries are rejected.
+
+The kernel does not add NX handling in this milestone, so the code page is executable under the current paging policy. This is not a general VM permission API.
+
+### Real CPL0 -> CPL3 entry
+
+The test disables hardware interrupts for this isolated proof, activates the test process CR3, builds a five-word `iretq` frame, and enters user mode with:
+
+```text
+RIP     0x0000000040000000
+CS      0x23
+RFLAGS  0x2 (IF deliberately clear)
+RSP     0x0000000040011000
+SS      0x1B
+```
+
+The position-independent payload is copied byte-for-byte into the user code page. Before faulting it reads its live `CS`, records its live `RSP`, stores a marker, and performs a real user-stack push/pop/write. Those values prove that the CPU actually executed the payload at CPL3 rather than merely constructing a synthetic trap frame.
+
+The payload label `x86_64_ring3_payload_cli` contains the privileged instruction:
+
+```asm
+cli
+ud2
+```
+
+At CPL3, `cli` is not permitted because IOPL is zero. The CPU therefore raises a real **#GP / vector 13** at the `cli` RIP; the following `ud2` is only an unreachable fail-safe. The acceptance requires vector 13 with error code zero and requires the saved RIP to equal the copied address of the `cli` label.
+
+### Real CPL3 -> CPL0 exception stack switch
+
+Because the exception crosses from CPL3 to CPL0, x86_64 uses the loaded TSS and switches to `TSS.RSP0` before entering the DPL0 IDT gate. The CPU-saved privilege-transition frame includes the original user RSP and SS.
+
+The acceptance proves all of the following simultaneously:
+
+- saved CS is `0x23` and therefore has RPL3;
+- saved SS is `0x1B` and has RPL3;
+- the saved RIP is the expected CPL3 `cli` address;
+- the saved user RSP is `0x0000000040011000`;
+- the C-facing normalized `rsp` equals the hardware-pushed `hardware_rsp`;
+- the C-facing normalized `ss` equals the hardware-pushed `hardware_ss`;
+- the central `exception_frame_originates_from_cpl3()` API validates those CPL3 and hardware-frame invariants;
+- the exception frame address itself lies inside the dedicated RSP0 stack;
+- the C handler's live RSP lies inside the same RSP0 stack;
+- the saved user RSP does **not** lie inside the RSP0 stack.
+
+This is the current proof of a real hardware privilege transition in both directions. The test intentionally halts after reporting success; it does not recover to userspace and does not implement a syscall return path.
 
 ## Complete normalized x86_64 trap frame
 
-The exception and IRQ entry paths share one **192-byte** normalized ring-0 frame:
+The exception and IRQ entry paths share one **192-byte** normalized frame:
 
 ```text
 offset   field
@@ -196,9 +292,9 @@ offset   field
 0xB8     hardware SS
 ```
 
-The first `RSP`/`SS` pair is a C-facing copy. The tail contains the return state consumed by `iretq`. IRQ vector stubs synthesize error code zero and preserve all 15 integer GPRs before entering C.
+For the privilege-changing CPL3 -> CPL0 exception path, the hardware RSP/SS tail contains the actual user stack state pushed by the CPU. The first RSP/SS pair is the C-facing normalized copy and is explicitly compared against those hardware words by the Ring 3 acceptance. IRQ vector stubs synthesize error code zero and preserve all 15 integer GPRs before entering C.
 
-This frame is also the preemptive task context. An interrupted task's saved frame remains on that task's own stack until the task is resumed.
+This frame is also the preemptive kernel-task context. An interrupted kernel task's saved frame remains on that task's own stack until the task is resumed. Ring 3 scheduling is not implemented by this milestone.
 
 ## Bootstrap PIC/PIT timer
 
@@ -231,7 +327,7 @@ deterministic fixed-table round robin
 no priorities
 ```
 
-Every task now carries an owning process pointer. The preemptive path is:
+Every task carries an owning process pointer. The preemptive kernel-task path is:
 
 ```text
 Task A executing
@@ -261,17 +357,17 @@ Task B executes in B's process address space
 
 The CR3 switch happens while executing shared higher-half kernel code and stack mappings. `irq.c` still sends EOI before assembly changes to the target task stack, preserving the previously verified acknowledgement ordering.
 
-Existing PID-0 preemption regression tasks still use the same bootstrap root and therefore do not cause unnecessary CR3 reloads.
+Existing PID-0 preemption regression tasks still use the same bootstrap root and therefore do not cause unnecessary CR3 reloads. The Ring 3 acceptance does not alter this scheduler or place CPL3 code under timer preemption.
 
 ## Fresh tasks and bootstrap restoration
 
-Each new preemptive task receives an independent 16-KiB heap-backed stack plus a synthetic complete IRQ/`iretq` frame on that stack. The frame targets `kernel_task_trampoline`, uses the current kernel CS/SS, has IF set, and supplies a correctly aligned resumed RSP.
+Each new preemptive kernel task receives an independent 16-KiB heap-backed stack plus a synthetic complete IRQ/`iretq` frame on that stack. The frame targets `kernel_task_trampoline`, uses the current kernel CS/SS, has IF set, and supplies a correctly aligned resumed RSP.
 
 Bootstrap remains task ID 0 in process PID 0. When preemption starts, the next real PIT interrupt creates an authentic bootstrap IRQ frame on that stack. The scheduler retains it. When all ordinary preemptive tasks finish, it activates PID 0/bootstrap root if needed and restores that saved bootstrap frame through `iretq`.
 
 ## Full integer-register preservation
 
-Preemption preserves:
+Kernel-task preemption preserves:
 
 ```text
 RAX RBX RCX RDX RSI RDI RBP
@@ -331,20 +427,25 @@ Shared higher-half kernel page tables remain alive because they were never recor
 
 PMM bookkeeping accounts for legitimate retained shared kernel-heap growth while requiring all process-specific page tables and data frames to be reclaimed.
 
+The dedicated Ring 3 test intentionally ends in a controlled halt immediately after validating the fatal #GP privilege-transition path, so it does not exercise normal post-test process destruction. That is an acceptance-mode limitation, not a hidden userspace lifecycle implementation.
+
 ## C / assembly boundary
 
-High-level policy remains in C: memory ownership, address-space policy, process identity, exception diagnostics, PIC/timer dispatch, cooperative selection, preemptive round robin, task/process association, cleanup, and acceptance invariants.
+High-level policy remains in C: memory ownership, address-space policy, process identity, user-page validation, descriptor/TSS construction, exception diagnostics, CPL3-frame validation, PIC/timer dispatch, cooperative selection, preemptive round robin, task/process association, cleanup, and acceptance invariants.
 
-Architecture assembly remains isolated to exception/IRQ entry and restore mechanics, `iretq`, minimal cooperative context save/restore, deliberate fault triggers, register probes, and CPU instructions that C cannot express directly. CR3 read/write and `invlpg` remain tiny isolated architecture-specific operations.
+Architecture assembly remains isolated to exception/IRQ entry and restore mechanics, GDT/segment/TR CPU instructions, `iretq`, minimal cooperative context save/restore, the position-independent Ring 3 test payload, deliberate fault triggers, register probes, and CPU instructions that C cannot express directly. CR3 read/write and `invlpg` remain tiny isolated architecture-specific operations.
 
 ## Current limitations
 
 BoringKernel still does **not** provide:
 
-- ring 3 or untrusted user-mode execution;
-- user CS/SS or TSS privilege-stack switching;
-- syscalls or safe user-memory crossing;
+- a general or long-lived userspace task model beyond the controlled Ring 3 acceptance payload;
+- user-task scheduling or scheduler-managed per-task TSS.RSP0 stacks;
+- a syscall boundary or syscall ABI;
+- `SYSCALL`/`SYSRET` setup;
+- safe user-memory copy/probing helpers;
 - ELF userspace loading or a userspace runtime;
+- recovery from the Ring 3 test exception back into user execution;
 - fork, exec, wait, signals, copy-on-write, or PID namespaces;
 - file descriptors, credentials, process trees, sessions, or process groups;
 - PCID, demand paging, or swap;
@@ -352,9 +453,10 @@ BoringKernel still does **not** provide:
 - sleeping, blocked I/O, wait queues, or wakeups;
 - mutexes, semaphores, or condition variables;
 - priorities or realtime scheduling;
-- SMP or per-CPU scheduler/process state;
+- SMP or per-CPU scheduler/process/TSS state;
 - LAPIC, IOAPIC, APIC timer, HPET, or ACPI/MADT;
+- a Double Fault IST/emergency stack;
 - VFS, RAMFS, BoringFS implementation, or storage drivers;
 - input, networking, USB, audio, graphics, or native BoringWM.
 
-BoringKernel 0.0.9-dev proves **CPL0 process identity and independent x86_64 address spaces with real scheduler-owned CR3 switching**. It does not prove userspace safety. A real Ring 3 transition remains a separate later milestone.
+BoringKernel 0.0.10-dev proves a **real, narrowly controlled x86_64 CPL0 -> CPL3 transition and a real CPL3 -> CPL0 exception transition through TSS.RSP0**, while preserving the complete earlier kernel regression surface. It does not yet implement the system-call boundary that would make general userspace interaction possible.
