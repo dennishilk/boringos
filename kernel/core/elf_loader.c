@@ -400,33 +400,34 @@ static bool add_owned_page(struct boring_elf_image *image,
 }
 
 bool boring_elf_unload(struct boring_elf_image *image) {
-    bool success = true;
-
     if ((image == NULL) || (image->process == NULL)) {
         return false;
     }
 
     while (image->owned_page_count != 0U) {
-        struct boring_elf_owned_page *page;
+        struct boring_elf_owned_page *page =
+            &image->pages[image->owned_page_count - 1U];
 
-        --image->owned_page_count;
-        page = &image->pages[image->owned_page_count];
-        if (page->mapped &&
-            !address_space_unmap_page(&image->process->address_space,
-                                      page->virtual_address)) {
-            success = false;
-        } else {
+        if (page->mapped) {
+            if (!address_space_unmap_page(&image->process->address_space,
+                                          page->virtual_address)) {
+                return false;
+            }
             page->mapped = false;
         }
         if ((page->physical_address != 0ULL) &&
             !pmm_free_frame(page->physical_address)) {
-            success = false;
+            return false;
         }
+
         page->virtual_address = 0U;
         page->physical_address = 0ULL;
+        page->writable = false;
+        page->executable = false;
+        --image->owned_page_count;
     }
 
-    return success;
+    return true;
 }
 
 static bool map_owned_page(struct boring_elf_image *image,
@@ -434,7 +435,7 @@ static bool map_owned_page(struct boring_elf_image *image,
                            bool writable,
                            bool executable,
                            uint8_t **kernel_page) {
-    uint64_t physical_address;
+    uint64_t physical_address = 0ULL;
     struct boring_elf_owned_page *owned;
 
     if ((image == NULL) || (image->process == NULL) ||
