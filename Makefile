@@ -21,8 +21,10 @@ else ifeq ($(TEST_MODE),divide)
 TEST_MODE_VALUE := 1
 else ifeq ($(TEST_MODE),pagefault)
 TEST_MODE_VALUE := 2
+else ifeq ($(TEST_MODE),ring3)
+TEST_MODE_VALUE := 3
 else
-$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, or pagefault)
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, or ring3)
 endif
 
 LIMINE_VERSION := 12.5.2
@@ -48,17 +50,22 @@ KERNEL_C_SOURCES := \
 	kernel/core/task.c \
 	kernel/core/preemption_test.c \
 	kernel/core/process_test.c \
+	kernel/core/ring3_test.c \
 	kernel/arch/x86_64/vmm.c \
 	kernel/arch/x86_64/address_space.c \
+	kernel/arch/x86_64/ring3_memory.c \
+	kernel/arch/x86_64/descriptor.c \
 	kernel/arch/x86_64/exception.c \
 	kernel/arch/x86_64/irq.c \
 	kernel/arch/x86_64/timer.c \
 	kernel/arch/x86_64/serial.c \
 	kernel/arch/x86_64/cpu.c
 KERNEL_ASM_SOURCES := \
+	kernel/arch/x86_64/descriptor_stubs.S \
 	kernel/arch/x86_64/exception_stubs.S \
 	kernel/arch/x86_64/irq_stubs.S \
-	kernel/arch/x86_64/context_switch.S
+	kernel/arch/x86_64/context_switch.S \
+	kernel/arch/x86_64/ring3_entry.S
 KERNEL_C_OBJECTS := $(patsubst %.c,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_C_SOURCES))
 KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCES))
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
@@ -126,6 +133,7 @@ test:
 	./tests/boot-qemu.sh
 	./tests/exception-divide-qemu.sh
 	./tests/exception-pagefault-qemu.sh
+	./tests/ring3-qemu.sh
 
 clean:
 	rm -rf $(BUILD_DIR)

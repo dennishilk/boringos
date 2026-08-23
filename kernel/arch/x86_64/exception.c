@@ -3,7 +3,9 @@
 #include <stdint.h>
 
 #include <boring/cpu.h>
+#include <boring/descriptor.h>
 #include <boring/exception.h>
+#include <boring/ring3_test.h>
 #include <boring/serial.h>
 
 #define IDT_GATE_INTERRUPT 0x8eU
@@ -143,7 +145,8 @@ static bool idt_exception_entry_valid(uint8_t vector, uint16_t selector) {
 bool exception_init(void) {
     struct x86_64_idtr requested;
     struct x86_64_idtr active;
-    uint16_t selector;
+    const uint16_t selector =
+        (uint16_t)X86_64_GDT_KERNEL_CODE_SELECTOR;
     size_t index;
 
     exception_initialized = false;
@@ -152,8 +155,7 @@ bool exception_init(void) {
     exception_state.code_selector = 0U;
     exception_state.configured_vectors = 0U;
 
-    selector = x86_64_read_cs();
-    if ((selector == 0U) || ((selector & 0x3U) != 0U)) {
+    if (!descriptor_init() || (x86_64_read_cs() != selector)) {
         return false;
     }
 
@@ -286,6 +288,10 @@ void x86_64_exception_dispatch(const struct x86_64_trap_frame *frame) {
     if (frame == NULL) {
         serial_write_string("BoringKernel exception\n\nInvalid trap frame\n");
         fatal_halt();
+    }
+
+    if (ring3_test_exception_armed()) {
+        ring3_test_handle_exception(frame);
     }
 
     if (frame->vector == 8ULL) {

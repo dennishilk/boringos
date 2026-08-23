@@ -26,3 +26,6 @@ jobs:
 
       - name: Real page fault exception
         run: ./tests/exception-pagefault-qemu.sh
+
+      - name: Real Ring 3 transition and privileged-operation fault
+        run: ./tests/ring3-qemu.sh

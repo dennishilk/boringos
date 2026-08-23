@@ -8,6 +8,7 @@ uint64_t x86_64_read_cr3(void);
 void x86_64_write_cr3(uint64_t physical_root);
 uint64_t x86_64_read_rflags(void);
 uint16_t x86_64_read_ss(void);
+uintptr_t x86_64_read_rsp(void);
 void x86_64_invalidate_page(uintptr_t virtual_address);
 void x86_64_interrupts_disable(void);
 void x86_64_interrupts_enable(void);
