@@ -13,18 +13,18 @@ It is **not a Linux distribution**, **not a BSD distribution**, and **not based 
 
 **Extremely early bootstrap kernel.**
 
-BoringKernel boots under **QEMU x86_64**. Limine remains the external bootloader. BoringKernel currently provides COM1 serial output, a physical page-frame allocator, selected 4-KiB virtual mappings, a bounded dynamic kernel heap, its own x86_64 IDT, real CPU exception diagnostics, repeated PIT/PIC hardware IRQ0 delivery, cooperative and real hardware-timer-preemptive kernel tasks, and now a deliberately small **process identity plus independent address-space model**.
+BoringKernel boots under **QEMU x86_64**. Limine remains the external bootloader. BoringKernel currently provides COM1 serial output, a physical page-frame allocator, selected 4-KiB virtual mappings, a bounded dynamic kernel heap, its own x86_64 IDT, real CPU exception diagnostics, repeated PIT/PIC hardware IRQ0 delivery, cooperative and real hardware-timer-preemptive kernel tasks, a deliberately small process identity plus independent-address-space model, and a tightly controlled first **CPL0 -> CPL3 privilege transition**.
 
 Current serial output begins with:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.9-dev
+BoringKernel 0.0.10-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```
 
-The original VMM still adopts the active Limine-created x86_64 four-level root for PID 0. BoringKernel 0.0.9-dev additionally creates PMM-backed process roots with an empty private lower half and shared higher-half kernel mappings.
+The original VMM still adopts the active Limine-created x86_64 four-level root for PID 0. BoringKernel 0.0.9-dev introduced PMM-backed process roots with an empty private lower half and shared higher-half kernel mappings. BoringKernel 0.0.10-dev adds only the narrow descriptor, user-mapping and privilege-transition machinery needed for the first real Ring 3 acceptance path.
 
 The current process split is:
 
@@ -33,17 +33,17 @@ PML4 slots   0-255   process-private lower half
 PML4 slots 256-511   shared kernel higher half
 ```
 
-The shared higher half preserves the mappings needed for the kernel image, HHDM, heap, task stacks, PMM/VMM metadata, IDT, IRQ/exception code, scheduler state and still-required bootstrap structures. Shared page tables are never treated as process-owned frames and are never reclaimed by process destruction.
+The shared higher half preserves the mappings needed for the kernel image, HHDM, heap, task stacks, PMM/VMM metadata, IDT, IRQ/exception code, scheduler state and still-required bootstrap structures. Shared page tables are never treated as process-owned frames and are never reclaimed by process destruction. The Ring 3 acceptance additionally verifies that all present shared PML4 entries in slots 256-511 remain supervisor-only (`U/S=0`).
 
 ## Tasks and processes
 
 A **task** is an execution/scheduling entity. A **process** is an identity plus address-space owner. They are intentionally separate concepts.
 
-The bootstrap/kernel process is PID 0. The current acceptance test creates PID 1 and PID 2, each with a distinct PMM-backed root PML4. Process states remain deliberately small: `ALIVE` and `FINISHED`.
+The bootstrap/kernel process is PID 0. The process-address-space acceptance creates PID 1 and PID 2, each with a distinct PMM-backed root PML4. Process states remain deliberately small: `ALIVE` and `FINISHED`.
 
 Each ordinary kernel task still receives an independent **16-KiB heap-backed stack**. Cooperative switching retains the small SysV AMD64 call-boundary context. Timer preemption retains the separate complete **192-byte** interrupt frame required to resume arbitrary integer execution state.
 
-A task now references its owning process. When the scheduler selects a task owned by a different process, it activates that process root with a real CR3 load before returning the selected interrupt frame to assembly. The PIC EOI still occurs before assembly abandons the current IRQ stack.
+A task references its owning process. When the scheduler selects a task owned by a different process, it activates that process root with a real CR3 load before returning the selected interrupt frame to assembly. The PIC EOI still occurs before assembly abandons the current IRQ stack.
 
 ## Independent address-space proof
 
@@ -93,11 +93,25 @@ See [`docs/processes.md`](docs/processes.md) for the exact model and ownership r
 
 ## Current execution-model boundary
 
-This is **still CPL0-only**. Independent process address spaces do not imply userspace.
+BoringKernel now has one deliberately constrained Ring 3 acceptance path; it does **not** yet have a general userspace execution environment.
 
-There is **no Ring 3, user CS/SS, TSS privilege-stack transition, syscall mechanism, userspace runtime, ELF loader, fork/exec/wait/signals, user-memory-copy API, VFS, storage stack, networking, graphical environment, input stack, SMP, PCID, copy-on-write, demand paging, swap, or FPU/SIMD context switching**.
+The kernel installs its own GDT with kernel code/data descriptors, DPL3 user data/code descriptors and one 64-bit available TSS. The current selectors are:
 
-The next execution-boundary work is a separately scoped real Ring 3 transition. It has not been started.
+```text
+0x08  kernel code
+0x10  kernel data
+0x1B  user data, RPL3
+0x23  user code, RPL3
+0x28  TSS
+```
+
+The TSS owns a dedicated 16-KiB RSP0 stack. The Ring 3 test maps one fixed user code page at `0x0000000040000000` as present + user + read-only/executable, and one fixed user stack page at `0x0000000040010000` as present + user + writable. User access is propagated through every required PML4/PDPT/PD/PT level without making the shared higher-half kernel PML4 entries user-accessible.
+
+The CPU enters CPL3 through a real `iretq` frame using CS `0x23`, SS `0x1B` and user RSP `0x0000000040011000`. The copied user payload records its live CS/RSP and writes to the user stack, then executes the privileged `cli` instruction. Running `cli` at CPL3 produces a real **#GP / vector 13**. The exception frame proves CPL3 origin and preserves the user RIP/RSP/SS, while the handler and frame themselves reside inside the dedicated TSS RSP0 kernel stack. The normalized C-facing user RSP/SS copies are checked against the actual hardware privilege-transition RSP/SS words.
+
+There is still **no syscall mechanism, no `SYSCALL`/`SYSRET`, no userspace runtime, no ELF loader, no user-memory-copy API, no fork/exec/wait/signals, no VFS/storage stack, no networking, no graphical environment, no input stack, no SMP, no PCID, no copy-on-write, no demand paging, no swap, and no FPU/SIMD context switching**.
+
+The next execution-boundary milestone after this Ring 3 work is a separately scoped **system-call boundary / syscall ABI**. It is not implemented here.
 
 For the current bootstrap proof, QEMU remains:
 
@@ -127,13 +141,20 @@ make run
 make test
 ```
 
-The full acceptance suite performs real QEMU boots for the normal kernel plus deliberate real Divide Error and Page Fault modes. It preserves all previous PMM, VMM, heap, IRQ, cooperative-task and timer-preemption checks and additionally verifies process creation, distinct roots, same-VA/different-PA isolation, real CR3 switching, kernel mapping continuity, PIT-preemptive address-space switching, bootstrap restoration and cleanup.
+The complete acceptance suite performs real QEMU boots for the normal kernel, deliberate real Divide Error and Page Fault modes, and the dedicated Ring 3 mode. It preserves all previous PMM, VMM, heap, IRQ, cooperative-task, timer-preemption, process/address-space and CR3-switching checks. The Ring 3 mode separately proves the GDT/TSS state, user-page permissions, supervisor-only shared higher half, real `iretq` entry to CPL3, real `cli`-generated #GP, hardware user RSP/SS preservation, and the TSS RSP0 kernel-stack transition.
 
 A successful normal run ends with:
 
 ```text
 BoringKernel process/address-space test passed.
 BoringKernel QEMU boot verification passed.
+```
+
+A successful Ring 3 run ends with:
+
+```text
+BoringKernel Ring 3 test passed.
+BoringKernel Ring 3 verification passed.
 ```
 
 See [`docs/architecture.md`](docs/architecture.md), [`docs/interrupts.md`](docs/interrupts.md), [`docs/tasks.md`](docs/tasks.md), [`docs/processes.md`](docs/processes.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md), and [`docs/boringfs.md`](docs/boringfs.md).
