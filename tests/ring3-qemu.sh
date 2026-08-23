@@ -57,6 +57,7 @@ for line in \
     '  tss-loaded: PASS' \
     '  user-code-mapped: PASS' \
     '  user-stack-mapped: PASS' \
+    '  higher-half-supervisor-only: PASS' \
     'User code VA: 0x0000000040000000' \
     'User stack base: 0x0000000040010000' \
     'User stack top: 0x0000000040011000' \
@@ -65,9 +66,11 @@ for line in \
     'Fault vector: 13' \
     'Saved CS: 0x0000000000000023' \
     'Saved SS: 0x000000000000001B' \
+    'Hardware user SS: 0x000000000000001B' \
     '  entered-cpl3: PASS' \
     '  privileged-operation-blocked: PASS' \
     '  exception-origin-cpl3: PASS' \
+    '  normalized-user-stack-frame: PASS' \
     '  kernel-stack-transition: PASS' \
     '  user-rip-preserved: PASS' \
     '  user-rsp-preserved: PASS' \
@@ -93,6 +96,7 @@ for pattern in \
     '^RSP0 stack top: 0x[0-9A-F]{16}$' \
     '^Saved user RIP: 0x000000004000[0-9A-F]{4}$' \
     '^Saved user RSP: 0x0000000040011000$' \
+    '^Hardware user RSP: 0x0000000040011000$' \
     '^Kernel handler RSP: 0x[0-9A-F]{16}$'
 do
     if ! grep -Eq "${pattern}" "${LOG}"; then
