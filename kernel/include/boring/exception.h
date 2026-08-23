@@ -51,6 +51,8 @@ struct exception_stats {
 bool exception_init(void);
 bool exception_get_stats(struct exception_stats *stats);
 bool exception_install_interrupt_gate(uint8_t vector, uintptr_t handler);
+bool exception_frame_originates_from_cpl3(
+    const struct x86_64_trap_frame *frame);
 void x86_64_exception_dispatch(const struct x86_64_trap_frame *frame)
     __attribute__((noreturn));
 void x86_64_trigger_divide_error(void) __attribute__((noreturn));
