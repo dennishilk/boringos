@@ -32,9 +32,11 @@ process identity + independent x86_64 address spaces
 scheduler-integrated CR3 switching
     ↓
 controlled CPL0 → CPL3 transition + TSS.RSP0 exception return
+    ↓
+real x86_64 SYSCALL/SYSRETQ boundary
 ```
 
-BoringKernel **0.0.10-dev** now has a deliberately constrained real Ring 3 acceptance path in addition to the established task/process split. A task remains an execution/scheduling entity; a process remains an identity plus address-space owner. General userspace execution and a system-call boundary are still not implemented.
+BoringKernel **0.0.11-dev** now has a deliberately constrained real Ring 3 acceptance path plus a separate native x86_64 `SYSCALL` / `SYSRETQ` boundary. A task remains an execution/scheduling entity; a process remains an identity plus address-space owner. General userspace execution, an ELF loader and a userspace runtime are still not implemented.
 
 PID 0 represents the inherited bootstrap/kernel address space. New process roots are allocated from PMM. PML4 slots 0–255 are process-private in the current bootstrap model, while slots 256–511 are shared from the bootstrap root so kernel code/data, HHDM, heap, task stacks, interrupt code and scheduler state remain available in every current process address space.
 
@@ -62,7 +64,9 @@ PID 1 writes and later rereads `0xAAAAAAAAAAAAAAAA` at the shared test VA. PID 2
 
 Milestone 9 adds one fixed lower-half user code page and one fixed user stack page, a BoringKernel-owned CPL0/CPL3 GDT, a loaded 64-bit TSS with a dedicated 16-KiB RSP0 stack, a real `iretq` transition to CPL3 and a real CPL3 `cli` instruction that produces #GP / vector 13. The normalized exception-frame user RSP/SS values are checked against the hardware privilege-transition frame, and the handler/frame locations are verified inside the TSS.RSP0 stack. Shared higher-half mappings are checked for effective supervisor-only access across the complete page-table path.
 
-All earlier PMM, VMM, heap, IRQ/EOI, cooperative task, full-GPR preemption, process/address-space, Divide Error and Page Fault acceptance checks remain green together with the dedicated Ring 3 acceptance.
+Milestone 10 adds the first controlled userspace/kernel call boundary using real x86_64 `SYSCALL` / `SYSRETQ`, a dedicated 16-KiB trusted syscall kernel stack, a provisional register ABI, `GETPID`, bounded debug-only `DEBUG_WRITE`, validated `copy_from_user`, negative BoringOS error returns and checked `SYSRETQ` return state. The final CPL3 `cli` acceptance fault still returns through the independent TSS.RSP0 exception path.
+
+All earlier PMM, VMM, heap, IRQ/EOI, cooperative task, full-GPR preemption, process/address-space, Divide Error, Page Fault and Ring 3 acceptance checks remain green together with the dedicated syscall acceptance.
 
 For the deliberately legacy bootstrap timer proof, QEMU remains:
 
@@ -70,7 +74,7 @@ For the deliberately legacy bootstrap timer proof, QEMU remains:
 -M q35 -cpu qemu64,apic=off -m 128M
 ```
 
-There is still **no syscall boundary or syscall ABI, no `SYSCALL`/`SYSRET`, no ELF userspace loader, no userspace runtime, no VFS, RAMFS, block-device stack, BoringFS implementation, init, shell, networking, SMP or modern APIC timer path**.
+There is still **no ELF userspace loader, no userspace runtime or libc/CRT, no general user-task scheduling, no VFS, RAMFS, block-device stack, BoringFS implementation, init, shell, networking, SMP or modern APIC timer path**.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -342,17 +346,50 @@ Result: SUCCESS
 
 Milestone 9 proves a real, narrowly controlled x86_64 CPL0 → CPL3 transition and a real CPL3 → CPL0 exception transition through TSS.RSP0. It does **not** implement a syscall boundary, `SYSCALL`/`SYSRET`, an ELF loader, a userspace runtime, user-task scheduling, or a general userspace execution environment.
 
-## Milestone 10: system call boundary / syscall ABI — NEXT
+## Milestone 10: system call boundary / syscall ABI — COMPLETE
 
-Define and implement the first controlled userspace/kernel call boundary as a separate milestone. The mechanism, calling convention, argument validation, user-memory crossing rules and error-return model must be made explicit before any ABI is treated as stable.
+Implemented, merged and accepted on `main` in QEMU:
 
-Milestone 10 has **not** been started. This roadmap closeout does not add `SYSCALL`/`SYSRET`, syscall code, ELF loading or userspace runtime support.
+- use native x86_64 `SYSCALL` / `SYSRETQ` as the sole syscall mechanism;
+- enable `IA32_EFER.SCE` and program/read back `IA32_STAR`, `IA32_LSTAR` and `IA32_FMASK`;
+- keep the syscall entry path separate from the existing IDT/TSS exception path;
+- abandon the untrusted user RSP before any normal kernel stack use or C call;
+- switch to a dedicated statically allocated 16-byte-aligned 16-KiB supervisor-only bootstrap syscall stack;
+- use the provisional register ABI `RAX` number, `RDI/RSI/RDX/R10/R8/R9` arguments, `RAX` result, with `RCX/R11` clobbered;
+- implement `GETPID` from the current process identity;
+- implement bounded debug-only `DEBUG_WRITE` without introducing file descriptors or a TTY abstraction;
+- validate complete user ranges and copy page-by-page through the current process address space into a kernel-owned buffer before serial output;
+- return negative BoringOS-specific `ENOSYS`, `EFAULT` and `EINVAL` values;
+- validate canonical lower-half user RIP/RSP, active process/address space, selectors and sanitized return RFLAGS before `SYSRETQ`;
+- reject unmapped lower-half, higher-half kernel and overflowing user ranges without kernel-mode page faults;
+- reject oversized debug writes and unknown syscall numbers safely;
+- prove multiple real `SYSCALL`/`SYSRETQ` round trips, restored user RSP and preserved callee-saved registers;
+- finish with a real CPL3 `cli` → #GP proof that still enters through the independent TSS.RSP0 exception stack;
+- retain the complete normal, Divide Error, Page Fault and Ring 3 regression surface.
+
+The final implementation was squash-merged as:
+
+```text
+212eb7498d66188aae70e013f80299e6b156e4dd
+```
+
+Merged-main verification completed successfully in GitHub Actions:
+
+```text
+BoringKernel boot test
+Run #104
+Event: push
+Branch: main
+Result: SUCCESS
+```
+
+Milestone 10 establishes a real but deliberately provisional syscall boundary. The ABI is not stable, and this milestone does **not** start ELF loading, libc/CRT/userspace runtime work, VFS/RAMFS/BoringFS, user-task scheduling, networking, display work or SMP/APIC work.
 
 ---
 
 # Stage 4 — load and run native BoringOS programs
 
-## Milestone 11: ELF userspace loader
+## Milestone 11: ELF userspace loader — NEXT
 
 Load a deliberately constrained x86_64 userspace ELF with strict validation of class, machine, segments, ranges and permissions.
 
@@ -490,17 +527,17 @@ Networking remains unrelated and deferred.
 
 # Exact next implementation milestone
 
-## System call boundary / syscall ABI
+## ELF userspace loader
 
-The next roadmap item is **Milestone 10**.
+The next roadmap item is **Milestone 11**.
 
 It has **not** been started and requires a separate instruction.
 
 Do not jump ahead to:
 
-- ELF userspace loading;
-- userspace runtime work;
+- userspace runtime or libc/CRT;
 - VFS/RAMFS;
 - BoringFS implementation;
 - storage drivers;
+- user-task scheduling;
 - networking.
