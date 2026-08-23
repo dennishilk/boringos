@@ -12,7 +12,7 @@ These decisions remain deliberately narrow and provisional. This document descri
 - **Bootstrap address space:** PID 0 adopts the active Limine-created four-level root.
 - **Additional process address spaces:** PMM-backed independent roots with private lower-half mappings and shared higher-half kernel mappings.
 
-The current normal boot path proves PMM, selected bootstrap-VMM mappings, the bounded kernel heap, exception infrastructure, repeated hardware PIT/PIC interrupts, cooperative kernel contexts, timer-driven preemptive kernel scheduling, process identity, real CR3 switching, and independent process address spaces. A separate Ring 3 test mode proves the descriptor/TSS state, user-accessible lower-half mappings, real `iretq` entry to CPL3, a real privileged-instruction #GP, preservation of the hardware user return state, and CPU stack switching through TSS.RSP0. A separate syscall mode proves native x86_64 `SYSCALL`/`SYSRETQ`, trusted syscall-stack entry, validated user-memory copying, and multiple CPL3 round trips.
+The current normal boot path proves PMM, selected bootstrap-VMM mappings, the bounded kernel heap, exception infrastructure, repeated hardware PIT/PIC interrupts, cooperative kernel contexts, timer-driven preemptive kernel scheduling, process identity, real CR3 switching, and independent process address spaces. A separate Ring 3 test mode proves the descriptor/TSS state, user-accessible lower-half mappings, real `iretq` entry to CPL3, a real privileged-instruction #GP, preservation of the hardware user return state, and CPU stack switching through TSS.RSP0. A separate syscall mode proves native x86_64 `SYSCALL`/`SYSRETQ`, trusted syscall-stack entry, validated user-memory copying, and multiple CPL3 round trips. A separate ELF mode proves a validated fixed-address ELF64 x86_64 `ET_EXEC` obtained from a Limine boot module, copied into PMM-owned pages in an independent process address space, entered at its ELF entry point in CPL3, and continued through the existing syscall boundary before a deliberate final CPL3 #GP.
 
 ## Physical memory
 
@@ -218,7 +218,7 @@ The dedicated Ring 3 mode creates one process address space and two PMM data fra
 
 The code mapping is `present + user` and deliberately not writable. The stack mapping is `present + user + writable`. The user bit is required and verified at every relevant PML4 -> PDPT -> PD -> PT level. Existing lower-level user tables may be reused only if they are process-owned and already user-accessible; large-page entries are rejected.
 
-The kernel does not add NX handling in this milestone, so the code page is executable under the current paging policy. This is not a general VM permission API.
+The original 0.0.10-dev Ring 3 milestone did not add NX handling and its isolated copied payload remains a separate regression. Milestone 11 later extended the same user-mapping path with explicit executable/NX permissions for BoringKernel-owned ELF mappings and the ELF userspace stack; it did not replace this Ring 3 test with an ELF-specific page-table implementation.
 
 ### Real CPL0 -> CPL3 entry
 
@@ -314,6 +314,18 @@ The dedicated QEMU payload performs seven real `SYSCALL` instructions: valid `GE
 This bootstrap entry state is single-CPU and is not scheduler-integrated for userspace. There are no per-task syscall stacks, per-CPU syscall scratch structures, asynchronous user-mode timer preemption, general process-kill/recovery policy, `copy_to_user`, libc/CRT, or stable ABI/versioning guarantees.
 
 See [`syscalls.md`](syscalls.md) for the exact implemented boundary, measured acceptance values, and current limitations.
+
+## Fixed-address ELF64 userspace bootstrap
+
+BoringKernel 0.0.12-dev adds one bounded ELF64 x86_64 userspace loading path for a deterministic Limine boot module. This is not a filesystem or a general `exec` implementation: Limine supplies the configured module bytes directly, and the kernel validates the image before constructing process memory.
+
+The accepted subset is little-endian x86_64 `ET_EXEC` with page-aligned fixed-address `PT_LOAD` segments. `PT_INTERP`, `PT_DYNAMIC`, `ET_DYN`/PIE, runtime relocations and writable-plus-executable segments are rejected. Header, program-table, file, memory and virtual ranges use bounded overflow-safe validation. The loader copies file-backed bytes into fresh PMM-owned process pages rather than executing module memory directly, leaves the real `p_memsz - p_filesz` BSS tail zero, and tracks image-frame ownership independently from process page-table ownership for rollback and cleanup.
+
+The existing lower-half user mapper now expresses and verifies executable permission. RX executable mappings remain non-writable; non-executable read-only, writable and stack mappings carry the x86_64 XD bit. BoringKernel checks CPU NX support and enables only `IA32_EFER.NXE` with read-modify-write verification before relying on NX. The established effective higher-half audit remains in force, so shared kernel mappings stay supervisor-only.
+
+The acceptance creates a real process, activates its independent CR3, enters the ELF header entry at CPL3 with a separate one-page RW+NX user stack, proves BSS zero/write behavior from the loaded executable, reuses only the already implemented `GETPID` and `DEBUG_WRITE` syscalls, returns to the ELF through `SYSRETQ`, and finally executes privileged `CLI`. That final instruction raises a real #GP from CPL3 through the existing TSS.RSP0 exception path. The final fault is an acceptance endpoint, not a new process-exit mechanism.
+
+See [`elf-userspace.md`](elf-userspace.md) for the exact supported subset, validation limits, permissions, ownership rules, measured ELF layout, malformed-image tests and known limitations.
 
 ## Complete normalized x86_64 trap frame
 
@@ -482,25 +494,25 @@ Shared higher-half kernel page tables remain alive because they were never recor
 
 PMM bookkeeping accounts for legitimate retained shared kernel-heap growth while requiring all process-specific page tables and data frames to be reclaimed.
 
-The dedicated Ring 3 test intentionally ends in a controlled halt immediately after validating the fatal #GP privilege-transition path, so it does not exercise normal post-test process destruction. The syscall acceptance likewise remains an isolated acceptance mode rather than a scheduler-managed userspace lifecycle. These are explicit limitations, not hidden userspace lifecycle implementations.
+The dedicated Ring 3 test intentionally ends in a controlled halt immediately after validating the fatal #GP privilege-transition path, so it does not exercise normal post-test process destruction. The syscall acceptance likewise remains an isolated acceptance mode rather than a scheduler-managed userspace lifecycle. These are explicit limitations, not hidden userspace lifecycle implementations. The ELF acceptance performs its explicit image/process cleanup only after the final CPL3 fault has transferred control through the trusted exception path and the test has restored the bootstrap process context.
 
 ## C / assembly boundary
 
-High-level policy remains in C: memory ownership, address-space policy, process identity, user-page validation, descriptor/TSS construction, exception diagnostics, CPL3-frame validation, syscall dispatch and user-memory validation, `SYSRETQ` return-state policy, PIC/timer dispatch, cooperative selection, preemptive round robin, task/process association, cleanup, and acceptance invariants.
+High-level policy remains in C: memory ownership, address-space policy, process identity, user-page validation, descriptor/TSS construction, exception diagnostics, CPL3-frame validation, syscall dispatch and user-memory validation, `SYSRETQ` return-state policy, ELF validation/loading/ownership policy, PIC/timer dispatch, cooperative selection, preemptive round robin, task/process association, cleanup, and acceptance invariants.
 
-Architecture assembly remains isolated to exception/IRQ entry and restore mechanics, GDT/segment/TR CPU instructions, `iretq`, native `SYSCALL` entry and `SYSRETQ` return mechanics, minimal cooperative context save/restore, the position-independent Ring 3/syscall test payloads, deliberate fault triggers, register probes, and CPU instructions that C cannot express directly. CR3 read/write, MSR read/write, CPUID facility probing, and `invlpg` remain tiny isolated architecture-specific operations.
+Architecture assembly remains isolated to exception/IRQ entry and restore mechanics, GDT/segment/TR CPU instructions, `iretq`, native `SYSCALL` entry and `SYSRETQ` return mechanics, minimal cooperative context save/restore, the position-independent Ring 3/syscall test payloads, the freestanding assembly-only ELF smoke executable, deliberate fault triggers, register probes, and CPU instructions that C cannot express directly. CR3 read/write, MSR read/write, CPUID facility probing, NX enablement verification, and `invlpg` remain tiny isolated architecture-specific operations.
 
 ## Current limitations
 
 BoringKernel still does **not** provide:
 
-- a general or long-lived userspace task model beyond the controlled Ring 3/syscall acceptance payloads;
+- a general or long-lived userspace task model beyond the controlled Ring 3/syscall/ELF acceptance paths;
 - user-task scheduling or scheduler-managed per-task TSS.RSP0 stacks;
 - per-task syscall stacks or per-CPU syscall entry/scratch state;
 - SMP-safe syscall entry or asynchronous user-mode timer preemption;
 - a stable/public syscall ABI or syscall versioning contract;
 - broad user-memory APIs such as `copy_to_user`;
-- ELF userspace loading or a userspace runtime;
+- a general ELF program loader beyond the bounded fixed-address `ET_EXEC` boot-module subset, dynamic linking, PIE/`ET_DYN`, runtime relocations, or a userspace runtime;
 - libc/CRT, process termination/recovery policy for arbitrary userspace, or a general userspace lifecycle;
 - fork, exec, wait, signals, copy-on-write, or PID namespaces;
 - file descriptors, credentials, process trees, sessions, or process groups;
@@ -515,4 +527,4 @@ BoringKernel still does **not** provide:
 - VFS, RAMFS, BoringFS implementation, or storage drivers;
 - input, networking, USB, audio, graphics, or native BoringWM.
 
-BoringKernel 0.0.11-dev proves a **real, narrowly controlled x86_64 CPL3 -> CPL0 `SYSCALL` transition, trusted kernel-stack dispatch, validated user-memory crossing, and checked `SYSRETQ` return to CPL3**, while preserving the independent TSS.RSP0 exception path and the complete earlier kernel regression surface. It does not implement the ELF userspace loader, libc/CRT/runtime, VFS, or scheduler-managed userspace execution.
+BoringKernel 0.0.12-dev proves a **real validated fixed-address ELF64 x86_64 userspace executable loaded from a Limine boot module into PMM-owned pages in an independent process address space, with W^X/NX enforcement, BSS zeroing, CPL3 ELF-entry execution, existing `GETPID`/`DEBUG_WRITE` syscall round trips, checked `SYSRETQ` continuation, and a final privileged `CLI` #GP through TSS.RSP0**, while preserving the complete earlier kernel regression surface. It still does not provide libc/CRT/runtime, dynamic ELF features, VFS, or scheduler-managed userspace execution.

@@ -1,5 +1,8 @@
 #include <boring/cpu.h>
 
+#define IA32_EFER 0xc0000080U
+#define EFER_NXE (1ULL << 11)
+
 static void x86_64_cpuid(uint32_t leaf,
                          uint32_t subleaf,
                          uint32_t *eax,
@@ -92,6 +95,40 @@ bool x86_64_syscall_supported(void) {
 
     x86_64_cpuid(0x80000001U, 0U, 0, 0, 0, &edx);
     return (edx & (1U << 11)) != 0U;
+}
+
+bool x86_64_nx_supported(void) {
+    uint32_t max_extended;
+    uint32_t edx;
+
+    x86_64_cpuid(0x80000000U, 0U, &max_extended, 0, 0, 0);
+    if (max_extended < 0x80000001U) {
+        return false;
+    }
+
+    x86_64_cpuid(0x80000001U, 0U, 0, 0, 0, &edx);
+    return (edx & (1U << 20)) != 0U;
+}
+
+bool x86_64_nx_enabled(void) {
+    return x86_64_nx_supported() &&
+           ((x86_64_read_msr(IA32_EFER) & EFER_NXE) != 0ULL);
+}
+
+bool x86_64_enable_nx(void) {
+    uint64_t before;
+    uint64_t after;
+
+    if (!x86_64_nx_supported()) {
+        return false;
+    }
+
+    before = x86_64_read_msr(IA32_EFER);
+    x86_64_write_msr(IA32_EFER, before | EFER_NXE);
+    after = x86_64_read_msr(IA32_EFER);
+
+    return ((after & EFER_NXE) != 0ULL) &&
+           ((after & ~EFER_NXE) == (before & ~EFER_NXE));
 }
 
 uint64_t x86_64_read_msr(uint32_t msr) {

@@ -7,14 +7,33 @@
 
 struct address_space;
 
+struct ring3_user_mapping_info {
+    uint64_t physical_address;
+    bool writable;
+    bool executable;
+};
+
 bool ring3_user_map_page(struct address_space *space,
                          uintptr_t virtual_address,
                          uint64_t physical_address,
                          bool writable);
+bool ring3_user_map_page_permissions(struct address_space *space,
+                                     uintptr_t virtual_address,
+                                     uint64_t physical_address,
+                                     bool writable,
+                                     bool executable);
 bool ring3_user_mapping_valid(const struct address_space *space,
                               uintptr_t virtual_address,
                               uint64_t physical_address,
                               bool writable);
+bool ring3_user_mapping_permissions_valid(const struct address_space *space,
+                                          uintptr_t virtual_address,
+                                          uint64_t physical_address,
+                                          bool writable,
+                                          bool executable);
+bool ring3_user_query_mapping(const struct address_space *space,
+                              uintptr_t virtual_address,
+                              struct ring3_user_mapping_info *info);
 bool ring3_user_translate(const struct address_space *space,
                           uintptr_t virtual_address,
                           bool require_writable,
