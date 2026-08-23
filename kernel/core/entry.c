@@ -15,6 +15,7 @@
 #include <boring/process_test.h>
 #include <boring/ring3_test.h>
 #include <boring/serial.h>
+#include <boring/syscall_test.h>
 #include <boring/task.h>
 #include <boring/timer.h>
 #include <boring/vmm.h>
@@ -24,6 +25,7 @@
 #define BORING_TEST_MODE_DIVIDE 1
 #define BORING_TEST_MODE_PAGEFAULT 2
 #define BORING_TEST_MODE_RING3 3
+#define BORING_TEST_MODE_SYSCALL 4
 #define IRQ_TEST_TICKS 10ULL
 #define IRQ_TEST_SPIN_LIMIT 500000000ULL
 #define BOOTSTRAP_TIMER_FREQUENCY_HZ 100U
@@ -38,7 +40,8 @@
 #if (BORING_TEST_MODE != BORING_TEST_MODE_NORMAL) && \
     (BORING_TEST_MODE != BORING_TEST_MODE_DIVIDE) && \
     (BORING_TEST_MODE != BORING_TEST_MODE_PAGEFAULT) && \
-    (BORING_TEST_MODE != BORING_TEST_MODE_RING3)
+    (BORING_TEST_MODE != BORING_TEST_MODE_RING3) && \
+    (BORING_TEST_MODE != BORING_TEST_MODE_SYSCALL)
 #error "unsupported BoringKernel test mode"
 #endif
 
@@ -899,6 +902,8 @@ static void run_exception_test_mode(void) {
     x86_64_trigger_page_fault(fault_address);
 #elif BORING_TEST_MODE == BORING_TEST_MODE_RING3
     ring3_test_run();
+#elif BORING_TEST_MODE == BORING_TEST_MODE_SYSCALL
+    syscall_test_run();
 #endif
 }
 #endif
@@ -921,7 +926,7 @@ void boring_kernel_entry(void) {
 
     serial_init();
     serial_write_string("BoringOS booting...\n");
-    serial_write_string("BoringKernel 0.0.10-dev\n");
+    serial_write_string("BoringKernel 0.0.11-dev\n");
     serial_write_string("Arch: x86_64\n");
     serial_write_string("Hello from BoringKernel.\n\n");
 
