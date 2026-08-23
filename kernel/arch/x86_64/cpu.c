@@ -94,6 +94,19 @@ bool x86_64_syscall_supported(void) {
     return (edx & (1U << 11)) != 0U;
 }
 
+bool x86_64_nx_supported(void) {
+    uint32_t max_extended;
+    uint32_t edx;
+
+    x86_64_cpuid(0x80000000U, 0U, &max_extended, 0, 0, 0);
+    if (max_extended < 0x80000001U) {
+        return false;
+    }
+
+    x86_64_cpuid(0x80000001U, 0U, 0, 0, 0, &edx);
+    return (edx & (1U << 20)) != 0U;
+}
+
 uint64_t x86_64_read_msr(uint32_t msr) {
     uint32_t low;
     uint32_t high;
