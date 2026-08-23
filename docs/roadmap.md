@@ -34,9 +34,15 @@ scheduler-integrated CR3 switching
 controlled CPL0 → CPL3 transition + TSS.RSP0 exception return
     ↓
 real x86_64 SYSCALL/SYSRETQ boundary
+    ↓
+validated ELF64 x86_64 ET_EXEC userspace loader from a Limine boot module
+    ↓
+PMM-owned PT_LOAD mappings + W^X/NX + real BSS zeroing
+    ↓
+real ELF entry execution at CPL3 using existing GETPID/DEBUG_WRITE via SYSCALL/SYSRETQ
 ```
 
-BoringKernel **0.0.11-dev** now has a deliberately constrained real Ring 3 acceptance path plus a separate native x86_64 `SYSCALL` / `SYSRETQ` boundary. A task remains an execution/scheduling entity; a process remains an identity plus address-space owner. General userspace execution, an ELF loader and a userspace runtime are still not implemented.
+BoringKernel **0.0.12-dev** now has a deliberately constrained real Ring 3 path, a native x86_64 `SYSCALL` / `SYSRETQ` boundary, and a real constrained ELF64 x86_64 `ET_EXEC` userspace loader. A task remains an execution/scheduling entity; a process remains an identity plus address-space owner. A native userspace runtime and general user-task scheduling are still not implemented.
 
 PID 0 represents the inherited bootstrap/kernel address space. New process roots are allocated from PMM. PML4 slots 0–255 are process-private in the current bootstrap model, while slots 256–511 are shared from the bootstrap root so kernel code/data, HHDM, heap, task stacks, interrupt code and scheduler state remain available in every current process address space.
 
@@ -66,7 +72,9 @@ Milestone 9 adds one fixed lower-half user code page and one fixed user stack pa
 
 Milestone 10 adds the first controlled userspace/kernel call boundary using real x86_64 `SYSCALL` / `SYSRETQ`, a dedicated 16-KiB trusted syscall kernel stack, a provisional register ABI, `GETPID`, bounded debug-only `DEBUG_WRITE`, validated `copy_from_user`, negative BoringOS error returns and checked `SYSRETQ` return state. The final CPL3 `cli` acceptance fault still returns through the independent TSS.RSP0 exception path.
 
-All earlier PMM, VMM, heap, IRQ/EOI, cooperative task, full-GPR preemption, process/address-space, Divide Error, Page Fault and Ring 3 acceptance checks remain green together with the dedicated syscall acceptance.
+Milestone 11 adds a strict ELF64 little-endian x86_64 `ET_EXEC` loader whose bytes arrive through a Limine boot module rather than a filesystem. Validated `PT_LOAD` contents are copied into PMM-owned process pages, W+X is rejected, NX is enabled and enforced for non-executable user mappings, real BSS bytes are zeroed, a separate user stack is mapped, the ELF entry executes at CPL3, and the existing `GETPID` / `DEBUG_WRITE` syscalls return through `SYSRETQ`. The final CPL3 `cli` still produces a real #GP through the TSS.RSP0 exception path.
+
+All earlier PMM, VMM, heap, IRQ/EOI, cooperative task, full-GPR preemption, process/address-space, Divide Error, Page Fault, Ring 3 and syscall acceptance checks remain green together with the dedicated ELF userspace acceptance.
 
 For the deliberately legacy bootstrap timer proof, QEMU remains:
 
@@ -74,7 +82,7 @@ For the deliberately legacy bootstrap timer proof, QEMU remains:
 -M q35 -cpu qemu64,apic=off -m 128M
 ```
 
-There is still **no ELF userspace loader, no userspace runtime or libc/CRT, no general user-task scheduling, no VFS, RAMFS, block-device stack, BoringFS implementation, init, shell, networking, SMP or modern APIC timer path**.
+There is still **no native userspace runtime or libc/CRT, no general user-task scheduling, no VFS, RAMFS, block-device stack, BoringFS implementation, init, shell, networking, SMP or modern APIC timer path**. ELF dynamic linking, `PT_INTERP`, `PT_DYNAMIC`, runtime relocations and PIE / `ET_DYN` are also not implemented.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -389,15 +397,63 @@ Milestone 10 establishes a real but deliberately provisional syscall boundary. T
 
 # Stage 4 — load and run native BoringOS programs
 
-## Milestone 11: ELF userspace loader — NEXT
+## Milestone 11: ELF userspace loader — COMPLETE
 
-Load a deliberately constrained x86_64 userspace ELF with strict validation of class, machine, segments, ranges and permissions.
+Implemented, merged and accepted on `main` in QEMU:
 
-The first executable may arrive as a boot module rather than pretending a filesystem exists.
+- obtain the deterministic smoke executable from a Limine boot module, not from a filesystem abstraction;
+- accept only a deliberately constrained ELF64, little-endian, x86_64, `ET_EXEC` subset;
+- validate ELF/program-header bounds, overflow-safe file and virtual ranges, program-header count, segment count and page limits before image allocation;
+- load only validated `PT_LOAD` segments and reject unsupported dynamic/PIE forms;
+- require the constrained fixed-address alignment policy and reject higher-half or overlapping user segments;
+- reject writable + executable segments under W^X;
+- require CPU NX support, enable `IA32_EFER.NXE` without clobbering unrelated EFER state, and enforce executable vs NX user mappings;
+- map executable segments RX, read-only non-executable segments R+NX, writable data segments RW+NX, and the separate user stack RW+NX;
+- allocate process image pages from PMM and copy executable bytes out of Limine module memory into PMM-owned process pages rather than executing the module in place;
+- track loader-owned physical frames explicitly and roll back partial mappings/frames on failure;
+- zero the real BSS tail where `p_memsz > p_filesz` and verify it before entering userspace;
+- require the ELF entry point to resolve inside an executable loaded segment;
+- create a real process with an independent address-space root and preserve shared higher-half supervisor-only mappings;
+- enter the ELF header entry point at CPL3 using the existing Ring 3 machinery;
+- reuse only the existing `GETPID` and bounded debug-only `DEBUG_WRITE` syscall ABI through real `SYSCALL` / `SYSRETQ`;
+- prove `SYSRETQ` resumes the loaded ELF at CPL3 after both calls;
+- finish with a real CPL3 `cli` → #GP / vector 13 and verify exception entry through the existing TSS.RSP0 stack;
+- clean up the ELF process mappings, owned frames and process address space after the acceptance;
+- retain the complete normal boot, Divide Error, Page Fault, Ring 3 and syscall regression surface.
 
-## Milestone 12: minimal native userspace runtime
+The accepted ELF artifact is a 13,176-byte static `ET_EXEC` with entry `0x0000000040000000` and three `PT_LOAD` segments:
+
+```text
+0x40000000 - 0x400000EB  filesz=235  memsz=235  R-X
+0x40001000 - 0x40001021  filesz=33   memsz=33   R--
+0x40002000 - 0x40002108  filesz=96   memsz=264  RW-
+```
+
+The final implementation was squash-merged as:
+
+```text
+92ceb628b44dd9718c68567a5d2e9c191d8f1bcb
+```
+
+Merged-main verification completed successfully in GitHub Actions:
+
+```text
+BoringKernel boot test
+Run #117
+Event: push
+Branch: main
+Commit: 92ceb628b44dd9718c68567a5d2e9c191d8f1bcb
+Result: SUCCESS
+boot-qemu: SUCCESS
+```
+
+Milestone 11 proves real constrained ELF64 x86_64 userspace execution from a Limine boot module through PMM-owned process mappings and the existing syscall boundary. It does **not** add libc/CRT, a C userspace runtime, dynamic linking, `PT_INTERP`, `PT_DYNAMIC`, relocations, PIE / `ET_DYN`, user-task scheduling, VFS/RAMFS/BoringFS, storage, networking or display work.
+
+## Milestone 12: minimal native userspace runtime — NEXT
 
 Provide BoringOS-owned C entry glue, syscall wrappers and tiny string/memory helpers. No host libc.
+
+Milestone 12 has not been started.
 
 ## Milestone 13: serial console / TTY path for userspace
 
@@ -527,17 +583,17 @@ Networking remains unrelated and deferred.
 
 # Exact next implementation milestone
 
-## ELF userspace loader
+## Minimal native userspace runtime
 
-The next roadmap item is **Milestone 11**.
+The next roadmap item is **Milestone 12**.
 
 It has **not** been started and requires a separate instruction.
 
-Do not jump ahead to:
+The current repository still has no libc/CRT or C userspace runtime. Do not jump ahead from the deliberately scoped Milestone 12 to:
 
-- userspace runtime or libc/CRT;
+- dynamic linking, `PT_INTERP`, `PT_DYNAMIC`, relocations or PIE / `ET_DYN`;
 - VFS/RAMFS;
 - BoringFS implementation;
 - storage drivers;
 - user-task scheduling;
-- networking.
+- networking or display work.
