@@ -27,6 +27,18 @@ static bool canonical_lower(uintptr_t address) {
             (uint64_t)ADDRESS_SPACE_SHARED_PML4_START);
 }
 
+bool ring3_user_range_valid(uintptr_t start, size_t length) {
+    uintptr_t end;
+
+    if ((length == 0U) || !canonical_lower(start) ||
+        ((uintptr_t)(length - 1U) > (UINTPTR_MAX - start))) {
+        return false;
+    }
+
+    end = start + (uintptr_t)(length - 1U);
+    return canonical_lower(end);
+}
+
 static uint64_t table_index(uintptr_t address, unsigned int shift) {
     return ((uint64_t)address >> shift) & 0x1ffULL;
 }
@@ -270,6 +282,61 @@ bool ring3_user_mapping_valid(const struct address_space *space,
         if (((level > 0U) &&
              ((entry & USER_ENTRY_LARGE_PAGE) != 0ULL)) ||
             !table_pointer(entry & USER_ENTRY_ADDRESS_MASK, &table)) {
+            return false;
+        }
+    }
+
+    return false;
+}
+
+bool ring3_user_translate(const struct address_space *space,
+                          uintptr_t virtual_address,
+                          bool require_writable,
+                          uint64_t *physical_address) {
+    uint64_t *table;
+    uint64_t entry;
+    uint64_t child_physical;
+    static const unsigned int shifts[4] = { 39U, 30U, 21U, 12U };
+    size_t level;
+
+    if ((space == NULL) || (physical_address == NULL) ||
+        !space->initialized || space->bootstrap ||
+        !canonical_lower(virtual_address) ||
+        !table_pointer(space->root_physical, &table)) {
+        return false;
+    }
+
+    for (level = 0U; level < 4U; ++level) {
+        entry = table[table_index(virtual_address, shifts[level])];
+        if (((entry & USER_ENTRY_PRESENT) == 0ULL) ||
+            ((entry & USER_ENTRY_USER) == 0ULL)) {
+            return false;
+        }
+
+        if (level == 3U) {
+            const uint64_t page_physical = entry & USER_ENTRY_ADDRESS_MASK;
+            const uint64_t page_offset =
+                (uint64_t)virtual_address & (VMM_PAGE_SIZE - 1ULL);
+
+            if (require_writable &&
+                ((entry & USER_ENTRY_WRITABLE) == 0ULL)) {
+                return false;
+            }
+            if (!pmm_frame_is_usable(page_physical)) {
+                return false;
+            }
+            *physical_address = page_physical + page_offset;
+            return true;
+        }
+
+        if (((level > 0U) &&
+             ((entry & USER_ENTRY_LARGE_PAGE) != 0ULL))) {
+            return false;
+        }
+
+        child_physical = entry & USER_ENTRY_ADDRESS_MASK;
+        if (!owned_contains(space, child_physical) ||
+            !table_pointer(child_physical, &table)) {
             return false;
         }
     }
