@@ -214,6 +214,12 @@ void ring3_test_run(void) {
     }
     serial_write_string("  user-stack-mapped: PASS\n");
 
+    if (!ring3_shared_higher_half_supervisor_only(
+            &process->address_space)) {
+        ring3_fail("higher-half-supervisor-only");
+    }
+    serial_write_string("  higher-half-supervisor-only: PASS\n");
+
     serial_write_string("GDT base: ");
     serial_write_hex_u64((uint64_t)descriptors.gdtr_base);
     serial_write_string("\nKernel CS: ");
@@ -239,7 +245,9 @@ void ring3_test_run(void) {
     ring3_state.expected_user_rsp = (uintptr_t)RING3_USER_STACK_TOP;
     x86_64_interrupts_disable();
     if (!process_activate(process) ||
-        !address_space_kernel_mappings_valid(&process->address_space)) {
+        !address_space_kernel_mappings_valid(&process->address_space) ||
+        !ring3_shared_higher_half_supervisor_only(
+            &process->address_space)) {
         ring3_fail("cr3-activate");
     }
 
@@ -274,6 +282,10 @@ void ring3_test_handle_exception(const struct x86_64_trap_frame *frame) {
     serial_write_hex_u64(frame->rip);
     serial_write_string("\nSaved user RSP: ");
     serial_write_hex_u64(frame->rsp);
+    serial_write_string("\nHardware user RSP: ");
+    serial_write_hex_u64(frame->hardware_rsp);
+    serial_write_string("\nHardware user SS: ");
+    serial_write_hex_u64(frame->hardware_ss);
     serial_write_string("\nKernel handler RSP: ");
     serial_write_hex_u64((uint64_t)handler_rsp);
     serial_write_string("\n");
@@ -291,13 +303,18 @@ void ring3_test_handle_exception(const struct x86_64_trap_frame *frame) {
     }
     serial_write_string("  privileged-operation-blocked: PASS\n");
 
-    if (((frame->cs & 0x3ULL) != 0x3ULL) ||
+    if (!exception_frame_originates_from_cpl3(frame) ||
         (frame->cs != (uint64_t)X86_64_GDT_USER_CODE_SELECTOR) ||
-        ((frame->ss & 0x3ULL) != 0x3ULL) ||
         (frame->ss != (uint64_t)X86_64_GDT_USER_DATA_SELECTOR)) {
         ring3_fail("exception-origin-cpl3");
     }
     serial_write_string("  exception-origin-cpl3: PASS\n");
+
+    if ((frame->rsp != frame->hardware_rsp) ||
+        (frame->ss != frame->hardware_ss)) {
+        ring3_fail("normalized-user-stack-frame");
+    }
+    serial_write_string("  normalized-user-stack-frame: PASS\n");
 
     if (!descriptor_rsp0_stack_contains(handler_rsp) ||
         !descriptor_rsp0_stack_contains((uintptr_t)frame) ||
