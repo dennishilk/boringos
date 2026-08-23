@@ -33,7 +33,7 @@ PML4-Slots   0-255   prozessprivate Lower Half
 PML4-Slots 256-511   gemeinsam genutzte Kernel-Higher-Half
 ```
 
-Die gemeinsam genutzte Higher Half erhält die benötigten Mappings für Kernel-Image, HHDM, Heap, Task-Stacks, PMM/VMM-Metadaten, IDT, IRQ-/Exception-Code, Scheduler-State und weiterhin benötigte Bootstrap-Strukturen. Gemeinsam genutzte Page Tables gelten niemals als prozesseigene Frames und werden bei der Prozesszerstörung nicht freigegeben. Der Ring-3-Acceptance-Test prüft zusätzlich explizit, dass alle vorhandenen gemeinsam genutzten PML4-Einträge in Slots 256-511 supervisor-only (`U/S=0`) bleiben.
+Die gemeinsam genutzte Higher Half erhält die benötigten Mappings für Kernel-Image, HHDM, Heap, Task-Stacks, PMM/VMM-Metadaten, IDT, IRQ-/Exception-Code, Scheduler-State und weiterhin benötigte Bootstrap-Strukturen. Gemeinsam genutzte Page Tables gelten niemals als prozesseigene Frames und werden bei der Prozesszerstörung nicht freigegeben. Der Ring-3-Acceptance-Test prüft, dass die kopierten Shared-Root-Einträge weiterhin exakt der Bootstrap-Root entsprechen, und läuft jeden gemeinsamen Übersetzungspfad ab, dessen obere Ebenen user-enabled bleiben; kein vorhandenes Higher-Half-Leaf darf mit `U/S=1` auf jeder Paging-Ebene aus CPL3 erreichbar sein.
 
 ## Tasks und Prozesse
 
@@ -105,7 +105,7 @@ Der Kernel lädt eine eigene GDT mit Kernel-Code/Data-Deskriptoren, DPL3-User-Da
 0x28  TSS
 ```
 
-Der TSS besitzt einen dedizierten 16-KiB-RSP0-Stack. Der Ring-3-Test mappt genau eine feste User-Code-Seite bei `0x0000000040000000` als present + user + read-only/executable und genau eine feste User-Stack-Seite bei `0x0000000040010000` als present + user + writable. User-Zugriff wird auf jeder nötigen Ebene PML4/PDPT/PD/PT propagiert, ohne die gemeinsam genutzten Higher-Half-Kernel-PML4-Einträge user-accessible zu machen.
+Der TSS besitzt einen dedizierten 16-KiB-RSP0-Stack. Der Ring-3-Test mappt genau eine feste User-Code-Seite bei `0x0000000040000000` als present + user + read-only/executable und genau eine feste User-Stack-Seite bei `0x0000000040010000` als present + user + writable. User-Zugriff wird auf jeder nötigen Ebene PML4/PDPT/PD/PT propagiert, ohne irgendein effektives gemeinsam genutztes Higher-Half-Kernel-Mapping aus CPL3 erreichbar zu machen.
 
 Die CPU wechselt über einen echten `iretq`-Frame nach CPL3 mit CS `0x23`, SS `0x1B` und User-RSP `0x0000000040011000`. Der kopierte User-Payload zeichnet seinen tatsächlich laufenden CS/RSP auf und schreibt auf den User-Stack; anschließend führt er die privilegierte Instruktion `cli` aus. `cli` in CPL3 erzeugt einen echten **#GP / Vector 13**. Der Exception-Frame beweist den CPL3-Ursprung und erhält User-RIP/RSP/SS; Handler und Frame selbst liegen dagegen innerhalb des dedizierten TSS-RSP0-Kernelstacks. Die normalisierten C-facing User-RSP/SS-Kopien werden zusätzlich bitgenau gegen die tatsächlichen Hardware-RSP/SS-Wörter des Privilegwechsels geprüft.
 
@@ -141,7 +141,7 @@ make run
 make test
 ```
 
-Die vollständige Acceptance-Suite führt echte QEMU-Boots für den normalen Kernel sowie absichtliche echte Divide-Error-, Page-Fault- und den dedizierten Ring-3-Modus aus. Sie erhält alle bisherigen PMM-, VMM-, Heap-, IRQ-, Cooperative-Task-, Timer-Preemption-, Prozess-/Adressraum- und CR3-Wechsel-Prüfungen. Der Ring-3-Modus beweist separat GDT/TSS-Zustand, User-Page-Permissions, supervisor-only Shared Higher Half, echten `iretq`-Eintritt nach CPL3, echten durch `cli` erzeugten #GP, Erhalt der Hardware-User-RSP/SS-Werte und den TSS-RSP0-Kernelstack-Wechsel.
+Die vollständige Acceptance-Suite führt echte QEMU-Boots für den normalen Kernel sowie absichtliche echte Divide-Error-, Page-Fault- und den dedizierten Ring-3-Modus aus. Sie erhält alle bisherigen PMM-, VMM-, Heap-, IRQ-, Cooperative-Task-, Timer-Preemption-, Prozess-/Adressraum- und CR3-Wechsel-Prüfungen. Der Ring-3-Modus beweist separat GDT/TSS-Zustand, User-Page-Permissions, effektiv supervisor-only Shared Higher Half, echten `iretq`-Eintritt nach CPL3, echten durch `cli` erzeugten #GP, Erhalt der Hardware-User-RSP/SS-Werte und den TSS-RSP0-Kernelstack-Wechsel.
 
 Ein erfolgreicher normaler Lauf endet mit:
 
