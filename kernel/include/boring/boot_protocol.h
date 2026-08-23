@@ -33,6 +33,9 @@
 #define BORING_LIMINE_MEMMAP_REQUEST_ID \
     { BORING_LIMINE_COMMON_MAGIC, \
       0x67cf3d9d378a806fULL, 0xe304acdfc50c3c62ULL }
+#define BORING_LIMINE_MODULE_REQUEST_ID \
+    { BORING_LIMINE_COMMON_MAGIC, \
+      0x3e7e279702be32afULL, 0xca1c4f3bd1280ceeULL }
 
 #define BORING_LIMINE_PAGING_MODE_X86_64_4LVL 0ULL
 #define BORING_LIMINE_PAGING_MODE_X86_64_5LVL 1ULL
@@ -46,6 +49,30 @@
 #define BORING_LIMINE_MEMMAP_EXECUTABLE_AND_MODULES 6ULL
 #define BORING_LIMINE_MEMMAP_FRAMEBUFFER            7ULL
 #define BORING_LIMINE_MEMMAP_RESERVED_MAPPED        8ULL
+
+struct boring_limine_uuid {
+    uint32_t a;
+    uint16_t b;
+    uint16_t c;
+    uint8_t d[8];
+};
+
+struct boring_limine_file {
+    uint64_t revision;
+    void *address;
+    uint64_t size;
+    char *path;
+    char *string;
+    uint32_t media_type;
+    uint32_t unused;
+    uint8_t tftp_ipv4[4];
+    uint32_t tftp_port;
+    uint32_t partition_index;
+    uint32_t mbr_disk_id;
+    struct boring_limine_uuid gpt_disk_uuid;
+    struct boring_limine_uuid gpt_part_uuid;
+    struct boring_limine_uuid part_uuid;
+};
 
 struct boring_limine_hhdm_response {
     uint64_t revision;
@@ -88,6 +115,26 @@ struct boring_limine_memmap_request {
     uint64_t id[4];
     uint64_t revision;
     struct boring_limine_memmap_response *response;
+};
+
+struct boring_limine_internal_module {
+    const char *path;
+    const char *string;
+    uint64_t flags;
+};
+
+struct boring_limine_module_response {
+    uint64_t revision;
+    uint64_t module_count;
+    struct boring_limine_file **modules;
+};
+
+struct boring_limine_module_request {
+    uint64_t id[4];
+    uint64_t revision;
+    struct boring_limine_module_response *response;
+    uint64_t internal_module_count;
+    struct boring_limine_internal_module **internal_modules;
 };
 
 #endif
