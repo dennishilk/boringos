@@ -27,6 +27,13 @@ uint16_t x86_64_read_ss(void) {
     return value;
 }
 
+uintptr_t x86_64_read_rsp(void) {
+    uintptr_t value;
+
+    __asm__ volatile ("mov %%rsp, %0" : "=r" (value));
+    return value;
+}
+
 void x86_64_invalidate_page(uintptr_t virtual_address) {
     /* invlpg invalidates the current address-space translation for one page. */
     __asm__ volatile ("invlpg (%0)" : : "r" (virtual_address) : "memory");

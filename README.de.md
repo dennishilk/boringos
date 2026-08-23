@@ -13,18 +13,18 @@ Es ist **keine Linux-Distribution**, **keine BSD-Distribution** und **basiert we
 
 **Extrem früher Bootstrap-Kernel.**
 
-BoringKernel bootet unter **QEMU x86_64**. Limine bleibt der externe Bootloader. BoringKernel besitzt aktuell COM1-Seriellenausgabe, einen Physical-Page-Frame-Allocator, ausgewählte 4-KiB-Virtual-Mappings, einen begrenzten dynamischen Kernel-Heap, eine eigene x86_64-IDT, echte CPU-Exception-Diagnostik, wiederholte PIT/PIC-IRQ0-Auslieferung, kooperative und echte hardware-timerpräemptive Kernel-Tasks und jetzt zusätzlich ein bewusst kleines **Prozessidentitäts- und unabhängiges Adressraummodell**.
+BoringKernel bootet unter **QEMU x86_64**. Limine bleibt der externe Bootloader. BoringKernel besitzt aktuell COM1-Seriellenausgabe, einen Physical-Page-Frame-Allocator, ausgewählte 4-KiB-Virtual-Mappings, einen begrenzten dynamischen Kernel-Heap, eine eigene x86_64-IDT, echte CPU-Exception-Diagnostik, wiederholte PIT/PIC-IRQ0-Auslieferung, kooperative und echte hardware-timerpräemptive Kernel-Tasks, ein bewusst kleines Prozessidentitäts- und unabhängiges Adressraummodell und jetzt zusätzlich einen streng begrenzten ersten **CPL0 -> CPL3-Privilegübergang**.
 
 Die aktuelle serielle Ausgabe beginnt mit:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.9-dev
+BoringKernel 0.0.10-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```
 
-Der ursprüngliche VMM übernimmt für PID 0 weiterhin die aktive, von Limine erzeugte vierstufige x86_64-Root. BoringKernel 0.0.9-dev erzeugt zusätzlich PMM-gestützte Prozess-Roots mit leerer privater Lower Half und gemeinsam genutzten Higher-Half-Kernel-Mappings.
+Der ursprüngliche VMM übernimmt für PID 0 weiterhin die aktive, von Limine erzeugte vierstufige x86_64-Root. BoringKernel 0.0.9-dev führte PMM-gestützte Prozess-Roots mit leerer privater Lower Half und gemeinsam genutzten Higher-Half-Kernel-Mappings ein. BoringKernel 0.0.10-dev ergänzt ausschließlich die engen Descriptor-, User-Mapping- und Privilegwechsel-Bausteine für den ersten echten Ring-3-Acceptance-Pfad.
 
 Die aktuelle Aufteilung ist bewusst einfach:
 
@@ -33,17 +33,17 @@ PML4-Slots   0-255   prozessprivate Lower Half
 PML4-Slots 256-511   gemeinsam genutzte Kernel-Higher-Half
 ```
 
-Die gemeinsam genutzte Higher Half erhält die benötigten Mappings für Kernel-Image, HHDM, Heap, Task-Stacks, PMM/VMM-Metadaten, IDT, IRQ-/Exception-Code, Scheduler-State und weiterhin benötigte Bootstrap-Strukturen. Gemeinsam genutzte Page Tables gelten niemals als prozesseigene Frames und werden bei der Prozesszerstörung nicht freigegeben.
+Die gemeinsam genutzte Higher Half erhält die benötigten Mappings für Kernel-Image, HHDM, Heap, Task-Stacks, PMM/VMM-Metadaten, IDT, IRQ-/Exception-Code, Scheduler-State und weiterhin benötigte Bootstrap-Strukturen. Gemeinsam genutzte Page Tables gelten niemals als prozesseigene Frames und werden bei der Prozesszerstörung nicht freigegeben. Der Ring-3-Acceptance-Test prüft, dass die kopierten Shared-Root-Einträge weiterhin exakt der Bootstrap-Root entsprechen, und läuft jeden gemeinsamen Übersetzungspfad ab, dessen obere Ebenen user-enabled bleiben; kein vorhandenes Higher-Half-Leaf darf mit `U/S=1` auf jeder Paging-Ebene aus CPL3 erreichbar sein.
 
 ## Tasks und Prozesse
 
 Ein **Task** ist eine Ausführungs-/Scheduling-Einheit. Ein **Prozess** ist Identität plus Adressraumbesitz. Beide Konzepte bleiben bewusst getrennt.
 
-Der Bootstrap-/Kernelprozess ist PID 0. Der aktuelle Acceptance-Test erzeugt PID 1 und PID 2, jeweils mit einer eigenen PMM-gestützten Root-PML4. Die Prozesszustände bleiben bewusst klein: `ALIVE` und `FINISHED`.
+Der Bootstrap-/Kernelprozess ist PID 0. Der Prozess-/Adressraum-Acceptance-Test erzeugt PID 1 und PID 2, jeweils mit einer eigenen PMM-gestützten Root-PML4. Die Prozesszustände bleiben bewusst klein: `ALIVE` und `FINISHED`.
 
 Jeder normale Kernel-Task erhält weiterhin einen unabhängigen **16-KiB-Stack aus dem Kernel-Heap**. Kooperatives Umschalten behält den kleinen SysV-AMD64-Call-Boundary-Kontext. Timerpräemption verwendet weiterhin den separaten vollständigen **192-Byte**-Interrupt-Frame zum Fortsetzen beliebiger Integer-Ausführungszustände.
 
-Ein Task referenziert jetzt seinen besitzenden Prozess. Wählt der Scheduler einen Task eines anderen Prozesses, aktiviert er dessen Prozess-Root mit einem echten CR3-Load, bevor der ausgewählte Interrupt-Frame an Assembly zurückgegeben wird. Der PIC-EOI wird weiterhin gesendet, bevor Assembly den aktuellen IRQ-Stack verlässt.
+Ein Task referenziert seinen besitzenden Prozess. Wählt der Scheduler einen Task eines anderen Prozesses, aktiviert er dessen Prozess-Root mit einem echten CR3-Load, bevor der ausgewählte Interrupt-Frame an Assembly zurückgegeben wird. Der PIC-EOI wird weiterhin gesendet, bevor Assembly den aktuellen IRQ-Stack verlässt.
 
 ## Nachweis unabhängiger Adressräume
 
@@ -93,11 +93,25 @@ Siehe [`docs/processes.md`](docs/processes.md) für das exakte Modell und die Be
 
 ## Aktuelle Grenze des Ausführungsmodells
 
-Das System ist **weiterhin ausschließlich CPL0**. Unabhängige Prozessadressräume bedeuten noch keinen Userspace.
+BoringKernel besitzt jetzt einen bewusst eng begrenzten Ring-3-Acceptance-Pfad; eine allgemeine Userspace-Ausführungsumgebung existiert **noch nicht**.
 
-Es gibt **kein Ring 3, keine User-CS/SS, keinen TSS-Privilege-Stack-Wechsel, keinen Syscall-Mechanismus, keine Userspace-Runtime, keinen ELF-Loader, kein fork/exec/wait/signals, keine User-Memory-Copy-API, kein VFS, keinen Storage-Stack, kein Networking, keine grafische Umgebung, keinen Input-Stack, kein SMP, kein PCID, kein Copy-on-Write, kein Demand Paging, keinen Swap und kein FPU/SIMD-Kontextwechsel**.
+Der Kernel lädt eine eigene GDT mit Kernel-Code/Data-Deskriptoren, DPL3-User-Data/Code-Deskriptoren und genau einem verfügbaren 64-Bit-TSS. Die aktuellen Selektoren sind:
 
-Die nächste Grenze des Ausführungsmodells ist ein separat zu definierender echter Ring-3-Übergang. Er wurde nicht begonnen.
+```text
+0x08  kernel code
+0x10  kernel data
+0x1B  user data, RPL3
+0x23  user code, RPL3
+0x28  TSS
+```
+
+Der TSS besitzt einen dedizierten 16-KiB-RSP0-Stack. Der Ring-3-Test mappt genau eine feste User-Code-Seite bei `0x0000000040000000` als present + user + read-only/executable und genau eine feste User-Stack-Seite bei `0x0000000040010000` als present + user + writable. User-Zugriff wird auf jeder nötigen Ebene PML4/PDPT/PD/PT propagiert, ohne irgendein effektives gemeinsam genutztes Higher-Half-Kernel-Mapping aus CPL3 erreichbar zu machen.
+
+Die CPU wechselt über einen echten `iretq`-Frame nach CPL3 mit CS `0x23`, SS `0x1B` und User-RSP `0x0000000040011000`. Der kopierte User-Payload zeichnet seinen tatsächlich laufenden CS/RSP auf und schreibt auf den User-Stack; anschließend führt er die privilegierte Instruktion `cli` aus. `cli` in CPL3 erzeugt einen echten **#GP / Vector 13**. Der Exception-Frame beweist den CPL3-Ursprung und erhält User-RIP/RSP/SS; Handler und Frame selbst liegen dagegen innerhalb des dedizierten TSS-RSP0-Kernelstacks. Die normalisierten C-facing User-RSP/SS-Kopien werden zusätzlich bitgenau gegen die tatsächlichen Hardware-RSP/SS-Wörter des Privilegwechsels geprüft.
+
+Es gibt weiterhin **keinen Syscall-Mechanismus, kein `SYSCALL`/`SYSRET`, keine Userspace-Runtime, keinen ELF-Loader, keine User-Memory-Copy-API, kein fork/exec/wait/signals, kein VFS/Storage-Stack, kein Networking, keine grafische Umgebung, keinen Input-Stack, kein SMP, kein PCID, kein Copy-on-Write, kein Demand Paging, keinen Swap und keinen FPU/SIMD-Kontextwechsel**.
+
+Der nächste Ausführungsgrenzen-Meilenstein nach dieser Ring-3-Arbeit ist eine separat gescopte **System-Call-Grenze / Syscall-ABI**. Sie wird hier nicht implementiert.
 
 Für den aktuellen Bootstrap-Nachweis bleibt QEMU:
 
@@ -127,13 +141,20 @@ make run
 make test
 ```
 
-Die vollständige Acceptance-Suite führt echte QEMU-Boots für den normalen Kernel sowie absichtliche echte Divide-Error- und Page-Fault-Modi aus. Sie erhält alle bisherigen PMM-, VMM-, Heap-, IRQ-, Cooperative-Task- und Timer-Preemption-Prüfungen und prüft zusätzlich Prozesserzeugung, unterschiedliche Roots, Same-VA/Different-PA-Isolation, echte CR3-Wechsel, Erhalt der Kernel-Mappings, PIT-präemptive Adressraumwechsel, Bootstrap-Rückkehr und Cleanup.
+Die vollständige Acceptance-Suite führt echte QEMU-Boots für den normalen Kernel sowie absichtliche echte Divide-Error-, Page-Fault- und den dedizierten Ring-3-Modus aus. Sie erhält alle bisherigen PMM-, VMM-, Heap-, IRQ-, Cooperative-Task-, Timer-Preemption-, Prozess-/Adressraum- und CR3-Wechsel-Prüfungen. Der Ring-3-Modus beweist separat GDT/TSS-Zustand, User-Page-Permissions, effektiv supervisor-only Shared Higher Half, echten `iretq`-Eintritt nach CPL3, echten durch `cli` erzeugten #GP, Erhalt der Hardware-User-RSP/SS-Werte und den TSS-RSP0-Kernelstack-Wechsel.
 
 Ein erfolgreicher normaler Lauf endet mit:
 
 ```text
 BoringKernel process/address-space test passed.
 BoringKernel QEMU boot verification passed.
+```
+
+Ein erfolgreicher Ring-3-Lauf endet mit:
+
+```text
+BoringKernel Ring 3 test passed.
+BoringKernel Ring 3 verification passed.
 ```
 
 Siehe [`docs/architecture.md`](docs/architecture.md), [`docs/interrupts.md`](docs/interrupts.md), [`docs/tasks.md`](docs/tasks.md), [`docs/processes.md`](docs/processes.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md) und [`docs/boringfs.md`](docs/boringfs.md).
