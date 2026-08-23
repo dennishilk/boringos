@@ -73,7 +73,7 @@ slot 511 → linked higher-half kernel image
 
 Sharing the full current higher half preserves the mappings used by kernel code/data, HHDM physical access, heap, task stacks, PMM/VMM metadata, IDT, exception/IRQ code, scheduler metadata, GDT/TSS state, and still-referenced Limine structures.
 
-The Ring 3 mapping acceptance adds an explicit permission invariant: every **present** shared root entry in PML4 slots 256-511 must have `U/S=0`. User mapping creation is restricted to canonical lower-half addresses below `ADDRESS_SPACE_SHARED_PML4_START`; after user mappings are installed and again after the test process root is activated, the acceptance scans all shared root entries and rejects any accidental user bit.
+The Ring 3 mapping acceptance adds an explicit effective-permission invariant. `address_space_kernel_mappings_valid()` first requires shared PML4 entries 256-511 in the process root to remain bit-for-bit identical to the bootstrap root, proving the user mapper did not mutate the shared root. Because x86_64 user access requires `U/S=1` on every paging level, `ring3_shared_higher_half_supervisor_only()` then walks each present shared translation path whose ancestors remain user-enabled and rejects any 1-GiB, 2-MiB, or 4-KiB leaf that would be reachable with `U/S=1` at every level. An inherited `U/S=1` on an upper non-leaf entry is therefore not misreported as user access when a lower level still enforces supervisor-only access. User mapping creation remains restricted to canonical lower-half addresses below `ADDRESS_SPACE_SHARED_PML4_START`, and the effective higher-half check runs both after user mappings are installed and again after the test process root is activated.
 
 ### Ownership rule
 
