@@ -18,6 +18,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential binutils curl xorriso qemu-system-x86
 
+      - name: Audit generated ELF userspace artifact
+        run: sh ./tests/elf-build-audit.sh
+
       - name: Normal boot, hardware IRQ, cooperative and preemptive scheduling
         run: ./tests/boot-qemu.sh
 
@@ -32,3 +35,6 @@ jobs:
 
       - name: Real SYSCALL and SYSRETQ boundary
         run: ./tests/syscall-qemu.sh
+
+      - name: Real ELF boot-module load and userspace execution
+        run: sh ./tests/elf-qemu.sh
