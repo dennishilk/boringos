@@ -20,16 +20,24 @@ XORRISO = xorriso
 TEST_MODE ?= normal
 ifeq ($(TEST_MODE),normal)
 TEST_MODE_VALUE := 0
+TEST_HARNESS_C := kernel/core/syscall_test.c
 else ifeq ($(TEST_MODE),divide)
 TEST_MODE_VALUE := 1
+TEST_HARNESS_C := kernel/core/syscall_test.c
 else ifeq ($(TEST_MODE),pagefault)
 TEST_MODE_VALUE := 2
+TEST_HARNESS_C := kernel/core/syscall_test.c
 else ifeq ($(TEST_MODE),ring3)
 TEST_MODE_VALUE := 3
+TEST_HARNESS_C := kernel/core/syscall_test.c
 else ifeq ($(TEST_MODE),syscall)
 TEST_MODE_VALUE := 4
+TEST_HARNESS_C := kernel/core/syscall_test.c
 else ifeq ($(TEST_MODE),elf)
-TEST_MODE_VALUE := 5
+# Keep entry.c untouched during bring-up: this isolated build substitutes the
+# special-mode harness while the external acceptance mode remains TEST_MODE=elf.
+TEST_MODE_VALUE := 4
+TEST_HARNESS_C := kernel/core/elf_test.c kernel/core/elf_test_adapter.c
 else
 $(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, or elf)
 endif
@@ -63,8 +71,9 @@ KERNEL_C_SOURCES := \
 	kernel/core/process_test.c \
 	kernel/core/ring3_test.c \
 	kernel/core/syscall.c \
-	kernel/core/syscall_test.c \
+	kernel/core/elf_boot.c \
 	kernel/core/elf_loader.c \
+	$(TEST_HARNESS_C) \
 	kernel/arch/x86_64/vmm.c \
 	kernel/arch/x86_64/address_space.c \
 	kernel/arch/x86_64/ring3_memory.c \
