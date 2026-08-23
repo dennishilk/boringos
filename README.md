@@ -33,7 +33,7 @@ PML4 slots   0-255   process-private lower half
 PML4 slots 256-511   shared kernel higher half
 ```
 
-The shared higher half preserves the mappings needed for the kernel image, HHDM, heap, task stacks, PMM/VMM metadata, IDT, IRQ/exception code, scheduler state and still-required bootstrap structures. Shared page tables are never treated as process-owned frames and are never reclaimed by process destruction. The Ring 3 acceptance additionally verifies that all present shared PML4 entries in slots 256-511 remain supervisor-only (`U/S=0`).
+The shared higher half preserves the mappings needed for the kernel image, HHDM, heap, task stacks, PMM/VMM metadata, IDT, IRQ/exception code, scheduler state and still-required bootstrap structures. Shared page tables are never treated as process-owned frames and are never reclaimed by process destruction. The Ring 3 acceptance verifies that the copied shared root entries still match the bootstrap root and walks every shared translation path whose upper levels remain user-enabled; no present higher-half leaf may be reachable with `U/S=1` at every paging level.
 
 ## Tasks and processes
 
@@ -105,7 +105,7 @@ The kernel installs its own GDT with kernel code/data descriptors, DPL3 user dat
 0x28  TSS
 ```
 
-The TSS owns a dedicated 16-KiB RSP0 stack. The Ring 3 test maps one fixed user code page at `0x0000000040000000` as present + user + read-only/executable, and one fixed user stack page at `0x0000000040010000` as present + user + writable. User access is propagated through every required PML4/PDPT/PD/PT level without making the shared higher-half kernel PML4 entries user-accessible.
+The TSS owns a dedicated 16-KiB RSP0 stack. The Ring 3 test maps one fixed user code page at `0x0000000040000000` as present + user + read-only/executable, and one fixed user stack page at `0x0000000040010000` as present + user + writable. User access is propagated through every required PML4/PDPT/PD/PT level without making any effective shared higher-half kernel mapping user-accessible.
 
 The CPU enters CPL3 through a real `iretq` frame using CS `0x23`, SS `0x1B` and user RSP `0x0000000040011000`. The copied user payload records its live CS/RSP and writes to the user stack, then executes the privileged `cli` instruction. Running `cli` at CPL3 produces a real **#GP / vector 13**. The exception frame proves CPL3 origin and preserves the user RIP/RSP/SS, while the handler and frame themselves reside inside the dedicated TSS RSP0 kernel stack. The normalized C-facing user RSP/SS copies are checked against the actual hardware privilege-transition RSP/SS words.
 
@@ -141,7 +141,7 @@ make run
 make test
 ```
 
-The complete acceptance suite performs real QEMU boots for the normal kernel, deliberate real Divide Error and Page Fault modes, and the dedicated Ring 3 mode. It preserves all previous PMM, VMM, heap, IRQ, cooperative-task, timer-preemption, process/address-space and CR3-switching checks. The Ring 3 mode separately proves the GDT/TSS state, user-page permissions, supervisor-only shared higher half, real `iretq` entry to CPL3, real `cli`-generated #GP, hardware user RSP/SS preservation, and the TSS RSP0 kernel-stack transition.
+The complete acceptance suite performs real QEMU boots for the normal kernel, deliberate real Divide Error and Page Fault modes, and the dedicated Ring 3 mode. It preserves all previous PMM, VMM, heap, IRQ, cooperative-task, timer-preemption, process/address-space and CR3-switching checks. The Ring 3 mode separately proves the GDT/TSS state, user-page permissions, effective supervisor-only shared higher half, real `iretq` entry to CPL3, real `cli`-generated #GP, hardware user RSP/SS preservation, and the TSS RSP0 kernel-stack transition.
 
 A successful normal run ends with:
 
