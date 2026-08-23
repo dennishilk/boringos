@@ -78,7 +78,7 @@ ELF_USER_CPPFLAGS := -Ikernel/include
 USER_ASFLAGS := -ffreestanding -fno-pic -fno-pie -m64 -mno-red-zone
 USER_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 	-T user/elf-smoke/linker.ld
-RUNTIME_USER_CPPFLAGS := -Ikernel/include -Iuser/runtime/include
+RUNTIME_USER_CPPFLAGS := -Iuser/runtime/include -Ikernel/include
 RUNTIME_USER_CFLAGS := -std=c11 -ffreestanding -fno-stack-protector \
 	-fno-pic -fno-pie -fno-builtin -fno-asynchronous-unwind-tables \
 	-fno-unwind-tables -m64 -mno-red-zone -mno-80387 -mno-mmx \
