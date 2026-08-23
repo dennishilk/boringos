@@ -14,5 +14,7 @@ bool ring3_user_mapping_valid(const struct address_space *space,
                               uintptr_t virtual_address,
                               uint64_t physical_address,
                               bool writable);
+bool ring3_shared_higher_half_supervisor_only(
+    const struct address_space *space);
 
 #endif
