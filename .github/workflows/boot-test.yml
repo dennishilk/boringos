@@ -21,6 +21,9 @@ jobs:
       - name: Audit generated ELF userspace artifact
         run: sh ./tests/elf-build-audit.sh
 
+      - name: Audit generated native C runtime artifact
+        run: sh ./tests/runtime-build-audit.sh
+
       - name: Normal boot, hardware IRQ, cooperative and preemptive scheduling
         run: ./tests/boot-qemu.sh
 
@@ -38,3 +41,6 @@ jobs:
 
       - name: Real ELF boot-module load and userspace execution
         run: sh ./tests/elf-qemu.sh
+
+      - name: Real native C userspace runtime execution
+        run: sh ./tests/runtime-qemu.sh
