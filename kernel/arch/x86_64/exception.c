@@ -225,6 +225,19 @@ bool exception_install_interrupt_gate(uint8_t vector, uintptr_t handler) {
     return idt_entry_matches(vector, exception_state.code_selector, handler);
 }
 
+bool exception_frame_originates_from_cpl3(
+    const struct x86_64_trap_frame *frame) {
+    if (frame == NULL) {
+        return false;
+    }
+
+    return ((frame->cs & 0x3ULL) == 0x3ULL) &&
+           ((frame->ss & 0x3ULL) == 0x3ULL) &&
+           ((frame->hardware_ss & 0x3ULL) == 0x3ULL) &&
+           (frame->rsp == frame->hardware_rsp) &&
+           (frame->ss == frame->hardware_ss);
+}
+
 static const char *exception_name(uint64_t vector) {
     if (vector >= (uint64_t)X86_64_EXCEPTION_VECTOR_COUNT) {
         return "Unknown";
