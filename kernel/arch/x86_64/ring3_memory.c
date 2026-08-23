@@ -140,6 +140,55 @@ static bool get_or_create_user_child(struct address_space *space,
     return true;
 }
 
+/*
+ * User access to an x86_64 mapping requires U/S=1 in every paging entry on
+ * the translation path. A shared PML4 entry inherited from Limine may carry
+ * U/S=1 while a lower entry still makes the effective mapping supervisor-only.
+ * Walk only paths whose ancestors remain user-enabled; any leaf reached with
+ * user_path=true would be an actual user-accessible higher-half mapping.
+ */
+static bool shared_table_supervisor_only(const uint64_t *table,
+                                         unsigned int level,
+                                         bool user_path) {
+    size_t index;
+
+    if (table == NULL) {
+        return false;
+    }
+
+    for (index = 0U; index < (size_t)USER_PAGE_ENTRIES; ++index) {
+        const uint64_t entry = table[index];
+        const bool entry_user = (entry & USER_ENTRY_USER) != 0ULL;
+        const bool next_user_path = user_path && entry_user;
+        uint64_t *child;
+
+        if ((entry & USER_ENTRY_PRESENT) == 0ULL) {
+            continue;
+        }
+
+        if (!next_user_path) {
+            continue;
+        }
+
+        if (level == 0U) {
+            return false;
+        }
+
+        if (((level == 2U) || (level == 1U)) &&
+            ((entry & USER_ENTRY_LARGE_PAGE) != 0ULL)) {
+            return false;
+        }
+
+        if (!table_pointer(entry & USER_ENTRY_ADDRESS_MASK, &child) ||
+            !shared_table_supervisor_only(child, level - 1U,
+                                          next_user_path)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 bool ring3_user_map_page(struct address_space *space,
                          uintptr_t virtual_address,
                          uint64_t physical_address,
@@ -241,8 +290,19 @@ bool ring3_shared_higher_half_supervisor_only(
 
     for (index = (size_t)ADDRESS_SPACE_SHARED_PML4_START;
          index < (size_t)ADDRESS_SPACE_PML4_ENTRY_COUNT; ++index) {
-        if (((root[index] & USER_ENTRY_PRESENT) != 0ULL) &&
-            ((root[index] & USER_ENTRY_USER) != 0ULL)) {
+        const uint64_t entry = root[index];
+        uint64_t *pdpt;
+
+        if ((entry & USER_ENTRY_PRESENT) == 0ULL) {
+            continue;
+        }
+
+        if ((entry & USER_ENTRY_USER) == 0ULL) {
+            continue;
+        }
+
+        if (!table_pointer(entry & USER_ENTRY_ADDRESS_MASK, &pdpt) ||
+            !shared_table_supervisor_only(pdpt, 2U, true)) {
             return false;
         }
     }
