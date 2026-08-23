@@ -7,6 +7,7 @@
 #include <boring/exception.h>
 #include <boring/ring3_test.h>
 #include <boring/serial.h>
+#include <boring/syscall_test.h>
 
 #define IDT_GATE_INTERRUPT 0x8eU
 #define IDT_IST_NONE 0U
@@ -301,6 +302,10 @@ void x86_64_exception_dispatch(const struct x86_64_trap_frame *frame) {
     if (frame == NULL) {
         serial_write_string("BoringKernel exception\n\nInvalid trap frame\n");
         fatal_halt();
+    }
+
+    if (syscall_test_exception_armed()) {
+        syscall_test_handle_exception(frame);
     }
 
     if (ring3_test_exception_armed()) {

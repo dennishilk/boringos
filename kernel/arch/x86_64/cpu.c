@@ -1,5 +1,35 @@
 #include <boring/cpu.h>
 
+static void x86_64_cpuid(uint32_t leaf,
+                         uint32_t subleaf,
+                         uint32_t *eax,
+                         uint32_t *ebx,
+                         uint32_t *ecx,
+                         uint32_t *edx) {
+    uint32_t out_a;
+    uint32_t out_b;
+    uint32_t out_c;
+    uint32_t out_d;
+
+    __asm__ volatile (
+        "cpuid"
+        : "=a" (out_a), "=b" (out_b), "=c" (out_c), "=d" (out_d)
+        : "a" (leaf), "c" (subleaf));
+
+    if (eax != 0) {
+        *eax = out_a;
+    }
+    if (ebx != 0) {
+        *ebx = out_b;
+    }
+    if (ecx != 0) {
+        *ecx = out_c;
+    }
+    if (edx != 0) {
+        *edx = out_d;
+    }
+}
+
 uint64_t x86_64_read_cr3(void) {
     uint64_t value;
 
@@ -49,6 +79,35 @@ void x86_64_interrupts_enable(void) {
 
 bool x86_64_interrupts_enabled(void) {
     return (x86_64_read_rflags() & (1ULL << 9)) != 0ULL;
+}
+
+bool x86_64_syscall_supported(void) {
+    uint32_t max_extended;
+    uint32_t edx;
+
+    x86_64_cpuid(0x80000000U, 0U, &max_extended, 0, 0, 0);
+    if (max_extended < 0x80000001U) {
+        return false;
+    }
+
+    x86_64_cpuid(0x80000001U, 0U, 0, 0, 0, &edx);
+    return (edx & (1U << 11)) != 0U;
+}
+
+uint64_t x86_64_read_msr(uint32_t msr) {
+    uint32_t low;
+    uint32_t high;
+
+    __asm__ volatile ("rdmsr" : "=a" (low), "=d" (high) : "c" (msr));
+    return ((uint64_t)high << 32U) | (uint64_t)low;
+}
+
+void x86_64_write_msr(uint32_t msr, uint64_t value) {
+    const uint32_t low = (uint32_t)(value & 0xffffffffULL);
+    const uint32_t high = (uint32_t)(value >> 32U);
+
+    __asm__ volatile ("wrmsr" : : "c" (msr), "a" (low), "d" (high)
+                      : "memory");
 }
 
 void x86_64_pause(void) {

@@ -13,18 +13,18 @@ It is **not a Linux distribution**, **not a BSD distribution**, and **not based 
 
 **Extremely early bootstrap kernel.**
 
-BoringKernel boots under **QEMU x86_64**. Limine remains the external bootloader. BoringKernel currently provides COM1 serial output, a physical page-frame allocator, selected 4-KiB virtual mappings, a bounded dynamic kernel heap, its own x86_64 IDT, real CPU exception diagnostics, repeated PIT/PIC hardware IRQ0 delivery, cooperative and real hardware-timer-preemptive kernel tasks, a deliberately small process identity plus independent-address-space model, and a tightly controlled first **CPL0 -> CPL3 privilege transition**.
+BoringKernel boots under **QEMU x86_64**. Limine remains the external bootloader. BoringKernel currently provides COM1 serial output, a physical page-frame allocator, selected 4-KiB virtual mappings, a bounded dynamic kernel heap, its own x86_64 IDT, real CPU exception diagnostics, repeated PIT/PIC hardware IRQ0 delivery, cooperative and real hardware-timer-preemptive kernel tasks, a deliberately small process identity plus independent-address-space model, a tightly controlled first **CPL0 -> CPL3 privilege transition**, and a narrow real **SYSCALL -> CPL0 -> SYSRETQ** boundary.
 
 Current serial output begins with:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.10-dev
+BoringKernel 0.0.11-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```
 
-The original VMM still adopts the active Limine-created x86_64 four-level root for PID 0. BoringKernel 0.0.9-dev introduced PMM-backed process roots with an empty private lower half and shared higher-half kernel mappings. BoringKernel 0.0.10-dev adds only the narrow descriptor, user-mapping and privilege-transition machinery needed for the first real Ring 3 acceptance path.
+The original VMM still adopts the active Limine-created x86_64 four-level root for PID 0. BoringKernel 0.0.9-dev introduced PMM-backed process roots with an empty private lower half and shared higher-half kernel mappings. BoringKernel 0.0.10-dev added only the narrow descriptor, user-mapping and privilege-transition machinery needed for the first real Ring 3 acceptance path. BoringKernel 0.0.11-dev adds a separately scoped native x86_64 syscall boundary with a dedicated trusted kernel stack, provisional register ABI, two bootstrap syscalls, validated user-memory copying, and checked `SYSRETQ` return state.
 
 The current process split is:
 
@@ -33,7 +33,7 @@ PML4 slots   0-255   process-private lower half
 PML4 slots 256-511   shared kernel higher half
 ```
 
-The shared higher half preserves the mappings needed for the kernel image, HHDM, heap, task stacks, PMM/VMM metadata, IDT, IRQ/exception code, scheduler state and still-required bootstrap structures. Shared page tables are never treated as process-owned frames and are never reclaimed by process destruction. The Ring 3 acceptance verifies that the copied shared root entries still match the bootstrap root and walks every shared translation path whose upper levels remain user-enabled; no present higher-half leaf may be reachable with `U/S=1` at every paging level.
+The shared higher half preserves the mappings needed for the kernel image, HHDM, heap, task stacks, PMM/VMM metadata, IDT, IRQ/exception code, scheduler state and still-required bootstrap structures. Shared page tables are never treated as process-owned frames and are never reclaimed by process destruction. The Ring 3 and syscall acceptances verify that the copied shared root entries still match the bootstrap root and walk every shared translation path whose upper levels remain user-enabled; no present higher-half leaf may be reachable with `U/S=1` at every paging level.
 
 ## Tasks and processes
 
@@ -93,7 +93,7 @@ See [`docs/processes.md`](docs/processes.md) for the exact model and ownership r
 
 ## Current execution-model boundary
 
-BoringKernel now has one deliberately constrained Ring 3 acceptance path; it does **not** yet have a general userspace execution environment.
+BoringKernel now has deliberately constrained Ring 3 and syscall acceptance paths; it does **not** yet have a general userspace execution environment.
 
 The kernel installs its own GDT with kernel code/data descriptors, DPL3 user data/code descriptors and one 64-bit available TSS. The current selectors are:
 
@@ -107,11 +107,15 @@ The kernel installs its own GDT with kernel code/data descriptors, DPL3 user dat
 
 The TSS owns a dedicated 16-KiB RSP0 stack. The Ring 3 test maps one fixed user code page at `0x0000000040000000` as present + user + read-only/executable, and one fixed user stack page at `0x0000000040010000` as present + user + writable. User access is propagated through every required PML4/PDPT/PD/PT level without making any effective shared higher-half kernel mapping user-accessible.
 
-The CPU enters CPL3 through a real `iretq` frame using CS `0x23`, SS `0x1B` and user RSP `0x0000000040011000`. The copied user payload records its live CS/RSP and writes to the user stack, then executes the privileged `cli` instruction. Running `cli` at CPL3 produces a real **#GP / vector 13**. The exception frame proves CPL3 origin and preserves the user RIP/RSP/SS, while the handler and frame themselves reside inside the dedicated TSS RSP0 kernel stack. The normalized C-facing user RSP/SS copies are checked against the actual hardware privilege-transition RSP/SS words.
+The CPU enters CPL3 through a real `iretq` frame using CS `0x23`, SS `0x1B` and user RSP `0x0000000040011000`. The original Ring 3 acceptance executes privileged `cli` and proves the resulting real **#GP / vector 13** returns through the separate TSS.RSP0 exception path.
 
-There is still **no syscall mechanism, no `SYSCALL`/`SYSRET`, no userspace runtime, no ELF loader, no user-memory-copy API, no fork/exec/wait/signals, no VFS/storage stack, no networking, no graphical environment, no input stack, no SMP, no PCID, no copy-on-write, no demand paging, no swap, and no FPU/SIMD context switching**.
+The syscall acceptance uses the same controlled CPL3 mapping model but executes real x86_64 `SYSCALL`. BoringKernel enables `IA32_EFER.SCE`, programs and reads back `IA32_STAR`, `IA32_LSTAR`, and `IA32_FMASK`, saves the still-user-controlled RSP before any normal stack use, and immediately switches to a dedicated supervisor-only **16-KiB syscall kernel stack**. The provisional ABI is `RAX` for the syscall number, `RDI/RSI/RDX/R10/R8/R9` for arguments, and `RAX` for the result; `RCX/R11` are architectural clobbers. The only current calls are `GETPID` and bounded debug-only `DEBUG_WRITE`.
 
-The next execution-boundary milestone after this Ring 3 work is a separately scoped **system-call boundary / syscall ABI**. It is not implemented here.
+`DEBUG_WRITE` never passes a raw userspace pointer to the serial layer. Its `copy_from_user` path validates the complete lower-half range, walks the current process page tables with effective Present + U/S checks, resolves physical memory through the trusted HHDM alias, and copies first into a kernel-owned buffer. `SYSRETQ` is attempted only after validating the saved user RIP/RSP, active process/address space, expected selectors, and sanitized return RFLAGS. The test executes seven real syscall dispatches, proves multiple `SYSRETQ` returns to CPL3, then executes `cli`; that final real #GP still enters through TSS.RSP0 rather than the syscall stack.
+
+The syscall ABI is **provisional**, not a stable public userspace contract. There is still **no userspace runtime, no ELF loader, no general or scheduled CPL3 task model, no per-task/per-CPU syscall stack state, no user-mode timer preemption, no libc/CRT, no fork/exec/wait/signals, no VFS/storage stack, no networking, no graphical environment, no input stack, no SMP, no PCID, no copy-on-write, no demand paging, no swap, and no FPU/SIMD context switching**.
+
+See [`docs/syscalls.md`](docs/syscalls.md) for the exact implemented syscall boundary and current limitations.
 
 For the current bootstrap proof, QEMU remains:
 
@@ -141,7 +145,7 @@ make run
 make test
 ```
 
-The complete acceptance suite performs real QEMU boots for the normal kernel, deliberate real Divide Error and Page Fault modes, and the dedicated Ring 3 mode. It preserves all previous PMM, VMM, heap, IRQ, cooperative-task, timer-preemption, process/address-space and CR3-switching checks. The Ring 3 mode separately proves the GDT/TSS state, user-page permissions, effective supervisor-only shared higher half, real `iretq` entry to CPL3, real `cli`-generated #GP, hardware user RSP/SS preservation, and the TSS RSP0 kernel-stack transition.
+The complete acceptance suite performs real QEMU boots for the normal kernel, deliberate real Divide Error and Page Fault modes, the existing dedicated Ring 3 mode, and the dedicated syscall mode. It preserves all previous PMM, VMM, heap, IRQ, cooperative-task, timer-preemption, process/address-space and CR3-switching checks. The Ring 3 mode separately proves GDT/TSS state, user-page permissions, effective supervisor-only shared higher half, real `iretq` entry to CPL3, real `cli`-generated #GP, hardware user RSP/SS preservation, and the TSS RSP0 kernel-stack transition. The syscall mode proves MSR configuration, trusted syscall-stack use, GETPID, bounded safe user copying for DEBUG_WRITE, negative pointer/range/error cases, multiple real `SYSCALL`/`SYSRETQ` round trips, user-RSP and callee-saved-register preservation, and a final CPL3 `cli` -> #GP through TSS.RSP0.
 
 A successful normal run ends with:
 
@@ -157,7 +161,14 @@ BoringKernel Ring 3 test passed.
 BoringKernel Ring 3 verification passed.
 ```
 
-See [`docs/architecture.md`](docs/architecture.md), [`docs/interrupts.md`](docs/interrupts.md), [`docs/tasks.md`](docs/tasks.md), [`docs/processes.md`](docs/processes.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md), and [`docs/boringfs.md`](docs/boringfs.md).
+A successful syscall run ends with:
+
+```text
+BoringKernel syscall boundary test passed.
+BoringKernel syscall verification passed.
+```
+
+See [`docs/architecture.md`](docs/architecture.md), [`docs/interrupts.md`](docs/interrupts.md), [`docs/tasks.md`](docs/tasks.md), [`docs/processes.md`](docs/processes.md), [`docs/syscalls.md`](docs/syscalls.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md), and [`docs/boringfs.md`](docs/boringfs.md).
 
 ## Native desktop direction
 
