@@ -227,3 +227,25 @@ bool ring3_user_mapping_valid(const struct address_space *space,
 
     return false;
 }
+
+bool ring3_shared_higher_half_supervisor_only(
+    const struct address_space *space) {
+    uint64_t *root;
+    size_t index;
+
+    if ((space == NULL) || !space->initialized || space->bootstrap ||
+        !address_space_kernel_mappings_valid(space) ||
+        !table_pointer(space->root_physical, &root)) {
+        return false;
+    }
+
+    for (index = (size_t)ADDRESS_SPACE_SHARED_PML4_START;
+         index < (size_t)ADDRESS_SPACE_PML4_ENTRY_COUNT; ++index) {
+        if (((root[index] & USER_ENTRY_PRESENT) != 0ULL) &&
+            ((root[index] & USER_ENTRY_USER) != 0ULL)) {
+            return false;
+        }
+    }
+
+    return true;
+}
