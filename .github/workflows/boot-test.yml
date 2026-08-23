@@ -29,3 +29,6 @@ jobs:
 
       - name: Real Ring 3 transition and privileged-operation fault
         run: ./tests/ring3-qemu.sh
+
+      - name: Real SYSCALL and SYSRETQ boundary
+        run: ./tests/syscall-qemu.sh
