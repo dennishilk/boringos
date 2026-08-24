@@ -44,12 +44,24 @@ process CWD
 VFS
     ↓
 real mutable RAMFS
+
+host-side BoringFS path:
+
+docs/boringfs.md
+    ↓
+explicit little-endian BoringFS v0 codec
+    ↓
+read-only shared structural validator
+    ↓
+deterministic mkboringfs formatter
+    ↓
+read-only boringfsck inspector (Milestone 20 in progress)
 ```
 
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.18-dev
+BoringKernel 0.0.20-dev
 ```
 
 The current syscall ABI is exactly:
@@ -66,7 +78,7 @@ The current syscall ABI is exactly:
 8 FS_CHDIR
 ```
 
-There is still no numeric file-descriptor table, no stdin/stdout/stderr abstraction, no userspace file-content syscall API, no executable loading from VFS/RAMFS, no BoringFS/block-storage implementation, no networking, no display/input stack, no BoringWM integration, no APIC migration and no SMP.
+There is still no numeric file-descriptor table, no stdin/stdout/stderr abstraction, no userspace file-content syscall API, no executable loading from VFS/RAMFS, no kernel BoringFS backend or block-storage implementation, no networking, no display/input stack, no BoringWM integration, no APIC migration and no SMP.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -292,11 +304,11 @@ success: NOT CLAIMED
 
 # Stage 7 — BoringFS host tooling before kernel writes
 
-## Milestone 18: pure BoringFS format codec and validator — NEXT / NOT STARTED
+## Milestone 18: pure BoringFS format codec and validator — COMPLETE
 
-Implement the documented BoringFS v0 binary encoding/decoding rules and structural validator as **host-side / format-layer work first**, with small BoringOS-owned C modules suitable for later reuse.
+Milestone 18 implements the documented BoringFS v0 binary encoding/decoding rules and a read-only structural validator as small BoringOS-owned C modules suitable for reuse by host tools and later kernel integration.
 
-Milestone 18 ends at:
+Accepted boundary:
 
 ```text
 raw BoringFS v0 bytes
@@ -308,15 +320,66 @@ decoded format values
 read-only structural validator
 ```
 
-Milestone 18 does **not** imply a kernel BoringFS mount, block-device support, persistence, `mkboringfs`, `boringfsck`, writable BoringFS, executable loading from BoringFS, or any Milestone 19+ implementation.
+Acceptance record:
 
-## Milestone 19: `mkboringfs` — PLANNED
+```text
+final PR: #28
+final PR head: 8b99063b2402fc1b4a8605c70a7c0456b5be20f0
+final PR CI: Run #173 / ID 32734788941 / SUCCESS
+final version: BoringKernel 0.0.19-dev
+merged main: 266ff57071011330480c0bae6f64306d8b1b89b3
+```
 
-Create deterministic valid BoringFS images containing an empty root directory using the shared codec and validator established earlier.
+The Milestone 18 merged-main push workflow was not independently observable:
 
-## Milestone 20: `boringfsck` — PLANNED
+```text
+merged-main push CI: NOT OBSERVABLE
+success: NOT CLAIMED
+```
 
-Create a read-only inspector around the shared structural validator. Initial versions report corruption and return non-zero; they do not attempt aggressive repair.
+Milestone 18 did not add a kernel BoringFS mount, block-device support, persistence, formatter/checker CLI, writable BoringFS or executable loading from BoringFS.
+
+## Milestone 19: `mkboringfs` — COMPLETE
+
+Milestone 19 adds a deterministic host-side formatter that creates valid empty-root BoringFS v0 images through the shared codec and requires the shared structural validator to accept the completed bytes before publication.
+
+Acceptance record:
+
+```text
+final PR: #29
+frozen green implementation: d1fa22ba045d9882abeb747edf43096233b71e74
+final PR head: 7afb51a8509c7098338bcb48341d0f48d53cbe6a
+final PR CI: Run #176 / ID 32742096005 / SUCCESS
+final version: BoringKernel 0.0.20-dev
+merged main: c1c6614eb12c3942aa5f9c99741e1c7d839aaccb
+```
+
+The Milestone 19 merged-main push workflow was not independently observable:
+
+```text
+merged-main push CI: NOT OBSERVABLE
+success: NOT CLAIMED
+```
+
+Milestone 19 did not add `boringfsck`, repair, kernel BoringFS, block devices, storage or a persistent root.
+
+## Milestone 20: `boringfsck` — CURRENT / IN PROGRESS
+
+Milestone 20 adds the first real read-only host checker around the same shared BoringFS v0 codec and structural validator. Its implementation target is:
+
+```text
+mkboringfs
+    ↓
+real BoringFS image bytes
+    ↓
+read-only boringfsck
+    ↓
+shared structural validator
+    ↓
+VALID or precise CORRUPT result
+```
+
+The checker must distinguish corruption from host-I/O/resource failures, expose shared validator locations when present, prove non-mutation of valid and corrupt images, and remain strictly inspection-only. No repair mode is part of Milestone 20.
 
 ---
 
@@ -324,7 +387,7 @@ Create a read-only inspector around the shared structural validator. Initial ver
 
 ## Milestone 21: generic block-device layer — PLANNED
 
-Create a filesystem-independent bounded block-device interface.
+Create a filesystem-independent bounded block-device interface. Milestone 21 has not begun.
 
 ## Milestone 22: QEMU VirtIO-block driver — PLANNED
 
@@ -368,22 +431,22 @@ Networking remains unrelated and deferred.
 
 ---
 
-# Exact next implementation milestone
+# Exact current implementation milestone
 
-## Milestone 18 — pure BoringFS v0 format codec and structural validator
+## Milestone 20 — read-only `boringfsck`
 
-The next implementation item is **Milestone 18**. It is **NEXT / NOT STARTED** by this roadmap reconciliation.
+The current implementation item is **Milestone 20**. It is **CURRENT / IN PROGRESS** in this reconciliation.
 
 Its architectural boundary is only:
 
 ```text
-docs/boringfs.md
+existing BoringFS v0 bytes
     ↓
-BoringFS v0 codec
+shared codec
     ↓
-exact bytes / decoded format values
+shared structural validator
     ↓
-BoringFS v0 structural validator
+read-only boringfsck presentation / exit status
 ```
 
-M18 is host-side / format-layer work first. It must not mount BoringFS in the kernel, add storage, implement a formatter or checker CLI, alter the syscall ABI, or begin Milestone 19.
+Milestone 20 must not repair images, mount BoringFS in the kernel, add block devices/storage, alter the syscall ABI, introduce an FD layer or begin Milestone 21.

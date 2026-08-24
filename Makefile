@@ -30,6 +30,7 @@ SHELL_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(SHELL_MAIN_OBJECT)
 SHELL_ELF := $(USER_BUILD_DIR)/boring-shell.elf
 ISO := $(BUILD_DIR)/boringos.iso
 MKBORINGFS := $(BUILD_DIR)/mkboringfs
+BORINGFSCK := $(BUILD_DIR)/boringfsck
 MKBORINGFS_VERIFY := $(BUILD_DIR)/mkboringfs-test/mkboringfs-verify
 BORINGFS_HEADER := libs/boringfs/include/boring/boringfs.h
 BORINGFS_CODEC := libs/boringfs/codec.c
@@ -180,7 +181,7 @@ KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCE
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
 
-.PHONY: all kernel user-elf user-runtime user-console user-init user-shell elf-audit runtime-audit console-audit init-audit shell-audit boringfs-host-test mkboringfs mkboringfs-test run run-headless test clean distclean
+.PHONY: all kernel user-elf user-runtime user-console user-init user-shell elf-audit runtime-audit console-audit init-audit shell-audit boringfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test run run-headless test clean distclean
 
 all: $(ISO)
 
@@ -219,10 +220,20 @@ mkboringfs: $(MKBORINGFS)
 mkboringfs-test: $(MKBORINGFS) $(MKBORINGFS_VERIFY)
 	sh ./tests/mkboringfs-test.sh
 
+boringfsck: $(BORINGFSCK)
+
+boringfsck-test: $(MKBORINGFS) $(BORINGFSCK)
+	sh ./tests/boringfsck-test.sh
+
 $(MKBORINGFS): tools/mkboringfs.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) $(BORINGFS_HEADER)
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) \
 		tools/mkboringfs.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) -o $@
+
+$(BORINGFSCK): tools/boringfsck.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) $(BORINGFS_HEADER)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) \
+		tools/boringfsck.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) -o $@
 
 $(MKBORINGFS_VERIFY): tests/mkboringfs-verify.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) $(BORINGFS_HEADER)
 	@mkdir -p $(dir $@)
@@ -390,6 +401,7 @@ test:
 	sh ./tests/shell-qemu.sh
 	sh ./tests/boringfs-host-test.sh
 	$(MAKE) mkboringfs-test
+	$(MAKE) boringfsck-test
 
 clean:
 	rm -rf $(BUILD_DIR)
