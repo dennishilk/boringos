@@ -9,12 +9,10 @@ ARTIFACT="${ROOT}/build/boringfs-empty.img"
 REPEAT="${BUILD}/boringfs-empty-repeat.img"
 SMALL="${BUILD}/boringfs-minimum.img"
 CORRUPT="${BUILD}/boringfs-corrupt.img"
+BAD="${BUILD}/bad.img"
+SENTINEL="${BUILD}/existing.img"
+PUBLISH_DIR="${BUILD}/publish-destination"
 VALIDATOR_LOG="${BUILD}/validator-reject.log"
-CC=${HOST_CC:-cc}
-COMMON_FLAGS='-std=c11 -fno-builtin -fno-tree-loop-distribute-patterns -Wall -Wextra -Werror -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes'
-INCLUDE="-I${ROOT}/libs/boringfs/include"
-CODEC="${ROOT}/libs/boringfs/codec.c"
-VALIDATE="${ROOT}/libs/boringfs/validate.c"
 
 fail() {
     echo "mkboringfs host test FAILED: $1" >&2
@@ -31,28 +29,22 @@ expect_fail() {
 
 mkdir -p "${BUILD}"
 rm -f "${ARTIFACT}" "${REPEAT}" "${SMALL}" "${CORRUPT}" \
-      "${VALIDATOR_LOG}"
+      "${BAD}" "${SENTINEL}" "${VALIDATOR_LOG}"
+rm -rf "${PUBLISH_DIR}"
 
-if [ ! -x "${TOOL}" ]; then
-    make -C "${ROOT}" mkboringfs
-fi
-
-# Build an independent raw-byte verifier that also invokes the shared M18
-# decoder/validator on the real image file.
-# shellcheck disable=SC2086
-${CC} ${COMMON_FLAGS} ${INCLUDE} \
-    "${ROOT}/tests/mkboringfs-verify.c" "${CODEC}" "${VALIDATE}" \
-    -o "${VERIFY}"
+[ -x "${TOOL}" ] || fail 'build/mkboringfs is missing or not executable'
+[ -x "${VERIFY}" ] || fail 'mkboringfs verifier is missing or not executable'
 
 "${TOOL}" --help > /dev/null
 
-# Minimum useful v0 geometry: one superblock, one bitmap block and two object
-# table blocks for 64 object records. No data allocation is needed for root.
+# Minimum practical v0 geometry: one superblock, one bitmap block and two
+# object-table blocks for 64 object records. Root is empty and owns no data.
 "${TOOL}" --blocks 64 --objects 64 "${SMALL}"
 "${VERIFY}" "${SMALL}" 64 64
 [ "$(wc -c < "${SMALL}")" -eq 262144 ] || fail 'minimum image size mismatch'
 
-# Human-visible acceptance artifact and deterministic reproduction proof.
+# Human-visible acceptance artifact. 4096 objects deliberately changes the
+# object-table geometry while keeping the CI artifact small.
 "${TOOL}" --blocks 256 --objects 4096 "${ARTIFACT}"
 "${TOOL}" --blocks 256 --objects 4096 "${REPEAT}"
 "${VERIFY}" "${ARTIFACT}" 256 4096
@@ -64,9 +56,8 @@ SHA_A=$(sha256sum "${ARTIFACT}" | awk '{print $1}')
 SHA_B=$(sha256sum "${REPEAT}" | awk '{print $1}')
 [ "${SHA_A}" = "${SHA_B}" ] || fail 'deterministic SHA-256 mismatch'
 
-# The shared validator must reject a real corrupted image, demonstrating that
-# the M19 acceptance path is still the M18 validator rather than a private
-# formatter-only check.
+# The shared validator must reject a real corrupted image, proving that the
+# M19 acceptance path reaches the M18 validator rather than a private checker.
 cp "${ARTIFACT}" "${CORRUPT}"
 printf 'X' | dd of="${CORRUPT}" bs=1 seek=0 conv=notrunc status=none
 if "${VERIFY}" "${CORRUPT}" 256 4096 > /dev/null 2> "${VALIDATOR_LOG}"; then
@@ -75,24 +66,45 @@ fi
 grep -F 'shared validator rejected image:' "${VALIDATOR_LOG}" > /dev/null ||
     fail 'corruption did not reach the shared validator rejection path'
 
-# Formatter input rejection matrix.
+# Formatter input rejection matrix. Rejected invocations must not create BAD.
 expect_fail 'missing arguments' "${TOOL}"
-expect_fail 'malformed block count' "${TOOL}" --blocks nope --objects 64 "${BUILD}/bad.img"
-expect_fail 'numeric overflow' "${TOOL}" --blocks 18446744073709551616 --objects 64 "${BUILD}/bad.img"
-expect_fail 'zero block count' "${TOOL}" --blocks 0 --objects 64 "${BUILD}/bad.img"
-expect_fail 'object count zero' "${TOOL}" --blocks 64 --objects 0 "${BUILD}/bad.img"
-expect_fail 'object count below minimum' "${TOOL}" --blocks 64 --objects 63 "${BUILD}/bad.img"
-expect_fail 'object count above maximum' "${TOOL}" --blocks 1024 --objects 16385 "${BUILD}/bad.img"
-expect_fail 'volume too small for metadata' "${TOOL}" --blocks 3 --objects 64 "${BUILD}/bad.img"
-expect_fail 'volume beyond v0 maximum' "${TOOL}" --blocks 1048577 --objects 64 "${BUILD}/bad.img"
+expect_fail 'missing --blocks' "${TOOL}" --objects 64 "${BAD}"
+expect_fail 'missing --objects' "${TOOL}" --blocks 64 "${BAD}"
+expect_fail 'missing output path' "${TOOL}" --blocks 64 --objects 64
+expect_fail 'duplicate --blocks' "${TOOL}" --blocks 64 --blocks 64 --objects 64 "${BAD}"
+expect_fail 'duplicate --objects' "${TOOL}" --blocks 64 --objects 64 --objects 64 "${BAD}"
+expect_fail 'unknown option' "${TOOL}" --blocks 64 --objects 64 --unknown "${BAD}"
+expect_fail 'malformed block count' "${TOOL}" --blocks nope --objects 64 "${BAD}"
+expect_fail 'malformed object count' "${TOOL}" --blocks 64 --objects nope "${BAD}"
+expect_fail 'numeric overflow' "${TOOL}" --blocks 18446744073709551616 --objects 64 "${BAD}"
+expect_fail 'zero block count' "${TOOL}" --blocks 0 --objects 64 "${BAD}"
+expect_fail 'object count zero' "${TOOL}" --blocks 64 --objects 0 "${BAD}"
+expect_fail 'object count below minimum' "${TOOL}" --blocks 64 --objects 63 "${BAD}"
+expect_fail 'object count above maximum' "${TOOL}" --blocks 1024 --objects 16385 "${BAD}"
+expect_fail 'volume too small for metadata' "${TOOL}" --blocks 3 --objects 64 "${BAD}"
+expect_fail 'volume beyond v0 maximum' "${TOOL}" --blocks 1048577 --objects 64 "${BAD}"
 expect_fail 'output open failure' "${TOOL}" --blocks 64 --objects 64 "${BUILD}/missing-dir/image.img"
-[ ! -e "${BUILD}/bad.img" ] || fail 'rejected input left an output image'
+[ ! -e "${BAD}" ] || fail 'rejected input left an output image'
+
+# Failure atomicity: invalid input must not touch an existing destination, and
+# a publish-time rename failure must preserve the pre-existing directory and
+# remove the temporary file.
+printf 'keep-me\n' > "${SENTINEL}"
+expect_fail 'existing destination preserved on validation failure' \
+    "${TOOL}" --blocks 3 --objects 64 "${SENTINEL}"
+[ "$(cat "${SENTINEL}")" = 'keep-me' ] || fail 'failed format replaced existing output'
+mkdir "${PUBLISH_DIR}"
+expect_fail 'publish rename failure' "${TOOL}" --blocks 64 --objects 64 "${PUBLISH_DIR}"
+[ -d "${PUBLISH_DIR}" ] || fail 'publish failure damaged existing destination'
+if find "${BUILD}" -maxdepth 1 -name 'publish-destination.tmp.*' -print | grep . > /dev/null; then
+    fail 'publish failure left temporary output behind'
+fi
 
 printf 'mkboringfs deterministic SHA-256 A: %s\n' "${SHA_A}"
 printf 'mkboringfs deterministic SHA-256 B: %s\n' "${SHA_B}"
 echo 'mkboringfs cmp A B: identical'
-echo 'mkboringfs acceptance header (first 64 bytes):'
-od -Ax -tx1 -N64 "${ARTIFACT}"
+echo 'mkboringfs acceptance header (first 128 bytes):'
+od -Ax -tx1 -N128 "${ARTIFACT}"
 echo 'mkboringfs acceptance root object (128 bytes):'
 od -Ax -tx1 -j 8192 -N128 "${ARTIFACT}"
 echo 'mkboringfs host verification passed.'
