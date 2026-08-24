@@ -48,9 +48,17 @@ _start → int boring_main(void) with no host libc/CRT
 bounded userspace CONSOLE_WRITE/CONSOLE_READ through kernel-only COM1
     ↓
 real named-pipe serial input → SYSRETQ → same compiled C program resumes
+    ↓
+filesystem-independent VFS core
+    ↓
+bounded absolute/process-relative path walking + mount traversal
+    ↓
+retained process cwd references + kernel-internal open handles
+    ↓
+filesystem-independent backend operation dispatch
 ```
 
-BoringKernel **0.0.14-dev** now has a deliberately constrained real Ring 3 path, a native x86_64 `SYSCALL` / `SYSRETQ` boundary, a real constrained ELF64 x86_64 `ET_EXEC` userspace loader, a BoringOS-owned freestanding C userspace runtime, and a bounded early userspace serial-console path. A task remains an execution/scheduling entity; a process remains an identity plus address-space owner. General user-task scheduling is still not implemented.
+BoringKernel **0.0.15-dev** now has a deliberately constrained real Ring 3 path, a native x86_64 `SYSCALL` / `SYSRETQ` boundary, a real constrained ELF64 x86_64 `ET_EXEC` userspace loader, a BoringOS-owned freestanding C userspace runtime, a bounded early userspace serial-console path, and a real filesystem-independent VFS core. A task remains an execution/scheduling entity; a process remains an identity plus address-space owner. General user-task scheduling is still not implemented.
 
 PID 0 represents the inherited bootstrap/kernel address space. New process roots are allocated from PMM. PML4 slots 0–255 are process-private in the current bootstrap model, while slots 256–511 are shared from the bootstrap root so kernel code/data, HHDM, heap, task stacks, interrupt code and scheduler state remain available in every current process address space.
 
@@ -86,7 +94,9 @@ Milestone 12 adds the BoringOS-owned freestanding C userspace runtime. Its `_sta
 
 Milestone 13 adds bounded early userspace serial-console I/O through provisional `CONSOLE_WRITE` syscall 2 and `CONSOLE_READ` syscall 3. Transfers are limited to 64 bytes, COM1 remains kernel-only, writes use bounded `copy_from_user`, and reads validate the complete writable destination before any COM1 RX byte is consumed and then use bounded `copy_to_user`. RX remains deliberately blocking/polled. The real QEMU named-pipe acceptance runs a compiled C program that writes `console write from BoringOS userspace`, receives exactly host-injected `K` / ASCII 75 through BoringKernel, resumes the same C program through `SYSRETQ`, echoes `K`, returns 43 from `boring_main()`, and still finishes with the existing CPL3 `cli` → #GP → TSS.RSP0 proof.
 
-All earlier PMM, VMM, heap, IRQ/EOI, cooperative task, full-GPR preemption, process/address-space, Divide Error, Page Fault, Ring 3, syscall, ELF userspace, native C runtime and userspace serial-console acceptance checks remain green.
+Milestone 14 adds the filesystem-independent VFS core: bounded absolute and process-relative path walking, repeated-slash handling, `.` and `..` semantics with global-root containment, child-mount entry and mount-parent exit, retained process cwd references, kernel-internal caller-owned open handles with deterministic offsets, and dispatch through a filesystem-independent backend operation table. Dedicated `TEST_MODE=vfs` / `BORING_TEST_MODE=7` acceptance proves these semantics without implementing a real mutable filesystem backend.
+
+All earlier PMM, VMM, heap, IRQ/EOI, cooperative task, full-GPR preemption, process/address-space, Divide Error, Page Fault, Ring 3, syscall, ELF userspace, native C runtime and userspace serial-console acceptance checks remain green, and the Milestone 14 VFS build/QEMU gates are green as well.
 
 For the deliberately legacy bootstrap timer proof, QEMU remains:
 
@@ -94,7 +104,7 @@ For the deliberately legacy bootstrap timer proof, QEMU remains:
 -M q35 -cpu qemu64,apic=off -m 128M
 ```
 
-The current serial-console path is **not** a TTY, line discipline, stdin/stdout/stderr, file-descriptor layer, asynchronous I/O path, UART IRQ receive path, or scheduler-aware blocking-I/O design. There is still no general user-task scheduling, VFS, RAMFS, block-device stack, BoringFS implementation, init, shell, networking, SMP or modern APIC timer path. ELF dynamic linking, `PT_INTERP`, `PT_DYNAMIC`, runtime relocations and PIE / `ET_DYN` are also not implemented.
+The current serial-console path is **not** a TTY, line discipline, stdin/stdout/stderr, file-descriptor layer, asynchronous I/O path, UART IRQ receive path, or scheduler-aware blocking-I/O design. The current VFS is filesystem-independent and has no real RAMFS backend yet. There is still no general user-task scheduling, RAMFS, block-device stack, BoringFS implementation, init, shell, networking, SMP or modern APIC timer path. ELF dynamic linking, `PT_INTERP`, `PT_DYNAMIC`, runtime relocations and PIE / `ET_DYN` are also not implemented.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -505,32 +515,50 @@ The Milestone 13 console is intentionally **not** a TTY, line discipline, stdin/
 
 # Stage 5 — VFS and RAMFS
 
-## Milestone 14: VFS core
+## Milestone 14: VFS core — COMPLETE
 
-Introduce filesystem-independent kernel objects, path walking, mount relationships, open handles and process working directories.
+Implemented, merged and accepted on `main` in QEMU:
 
-Initial backend operations should remain close to:
+- filesystem-independent `vfs_filesystem`, `vfs_mount`, `vfs_path`, `vfs_node` and kernel-internal `vfs_handle` objects;
+- bounded `VFS_PATH_MAX=1024`, `VFS_NAME_MAX=255`, `VFS_MOUNT_MAX=8` and `VFS_IO_MAX=4096` bootstrap contracts;
+- iterative absolute and process-relative path walking;
+- repeated slash handling;
+- `.` and `..` traversal with global-root containment;
+- child-mount entry and child-mount `..` exit through the established mount-parent relationship;
+- retained process cwd references rather than cwd text strings;
+- kernel-internal caller-owned open handles retaining VFS identity, access intent and deterministic byte offset;
+- filesystem-independent backend dispatch for `lookup`, `create`, `mkdir`, `unlink`, `rmdir`, `rename`, `read`, `write`, `truncate` and `readdir`;
+- same-filesystem rename requirement with explicit cross-filesystem rejection;
+- dedicated `TEST_MODE=vfs` / `BORING_TEST_MODE=7` acceptance using a deliberately synthetic test backend only to prove the generic VFS contract;
+- retained green artifact, boot, exception, Ring 3, syscall, ELF, runtime and serial-console regressions.
+
+The final Milestone 14 implementation was squash-merged as:
 
 ```text
-lookup
-create
-mkdir
-unlink
-rmdir
-rename
-read
-write
-truncate
-readdir
+94e7a5c7b82e9c1b83e68a304e88851400f26393
 ```
 
-Milestone 14 has **not** been started in this roadmap closeout.
+Merged-main verification completed successfully in GitHub Actions:
+
+```text
+BoringKernel boot test
+Run #139
+Run ID: 32697392544
+Event: push
+Branch: main
+Commit: 94e7a5c7b82e9c1b83e68a304e88851400f26393
+Result: SUCCESS
+```
+
+Milestone 14 deliberately does **not** provide a real mutable filesystem backend, file descriptors, userspace filesystem syscalls, RAMFS, BoringFS, block I/O, init or shell. The next implementation milestone is the real RAMFS backend underneath this already-landed VFS.
 
 ## Milestone 15: RAMFS backend
 
 Implement a tiny real in-memory filesystem supporting nested directories and ordinary file operations through the VFS boundary.
 
 RAMFS should precede persistent BoringFS so path/syscall semantics are proven independently from block I/O and on-disk corruption handling.
+
+RAMFS has **not** been implemented at this Milestone 14 roadmap closeout.
 
 ---
 
@@ -546,9 +574,13 @@ BoringKernel
 boring-init
 ```
 
+Milestone 16 has **not** started.
+
 ## Milestone 17: `boring-shell`
 
 Launch a native C shell from `boring-init` in userspace. Filesystem commands must operate through real VFS/syscall state; no simulated directory listings.
+
+Milestone 17 has **not** started.
 
 ---
 
@@ -627,15 +659,15 @@ Networking remains unrelated and deferred.
 
 # Exact next implementation milestone
 
-## Milestone 14 — VFS core
+## Milestone 15 — RAMFS backend
 
-The next roadmap item is **Milestone 14**.
+The next roadmap item is **Milestone 15**.
 
 It has **not** been started by this roadmap reconciliation and requires a separate implementation change.
 
-The intended Milestone 14 scope remains deliberately limited to filesystem-independent kernel objects, bounded path walking, mount relationships, kernel-internal open handles and process working directories. Do not jump ahead from this VFS foundation to:
+The intended Milestone 15 scope remains deliberately limited to a tiny real mutable in-memory filesystem underneath the existing filesystem-independent VFS. It must support nested directories and ordinary file operations through the VFS boundary without adding:
 
-- RAMFS or BoringFS implementation;
+- BoringFS implementation or persistent on-disk structures;
 - block devices, partitions or persistent storage;
 - file descriptors, stdin/stdout/stderr or file-related userspace syscalls;
 - boring-init or boring-shell;
