@@ -22,6 +22,12 @@ CONSOLE_SMOKE := $(USER_BUILD_DIR)/console-smoke.elf
 INIT_MAIN_OBJECT := $(USER_BUILD_DIR)/boring-init/main.o
 INIT_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(INIT_MAIN_OBJECT)
 INIT_ELF := $(USER_BUILD_DIR)/boring-init.elf
+SHELL_INIT_MAIN_OBJECT := $(USER_BUILD_DIR)/boring-init-shell/main.o
+SHELL_INIT_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(SHELL_INIT_MAIN_OBJECT)
+SHELL_INIT_ELF := $(USER_BUILD_DIR)/boring-init-shell.elf
+SHELL_MAIN_OBJECT := $(USER_BUILD_DIR)/boring-shell/main.o
+SHELL_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(SHELL_MAIN_OBJECT)
+SHELL_ELF := $(USER_BUILD_DIR)/boring-shell.elf
 ISO := $(BUILD_DIR)/boringos.iso
 
 CC = gcc
@@ -34,6 +40,8 @@ XORRISO = xorriso
 
 BOOT_USER_ELF := $(ELF_SMOKE)
 BOOT_USER_NAME := elf-smoke.elf
+BOOT_EXTRA_USER_ELF :=
+BOOT_EXTRA_USER_NAME :=
 BOOT_LIMINE_CONF := limine.conf
 
 TEST_MODE ?= normal
@@ -81,8 +89,16 @@ TEST_HARNESS_C := kernel/core/init_test.c
 BOOT_USER_ELF := $(INIT_ELF)
 BOOT_USER_NAME := boring-init.elf
 BOOT_LIMINE_CONF := limine-init.conf
+else ifeq ($(TEST_MODE),shell)
+TEST_MODE_VALUE := 10
+TEST_HARNESS_C := kernel/core/shell_test.c
+BOOT_USER_ELF := $(SHELL_INIT_ELF)
+BOOT_USER_NAME := boring-init.elf
+BOOT_EXTRA_USER_ELF := $(SHELL_ELF)
+BOOT_EXTRA_USER_NAME := boring-shell.elf
+BOOT_LIMINE_CONF := limine-shell.conf
 else
-$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, or init)
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, or shell)
 endif
 
 LIMINE_VERSION := 12.5.2
@@ -114,6 +130,8 @@ RUNTIME_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 	-T user/runtime-smoke/linker.ld
 INIT_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 	-T user/boring-init/linker.ld
+SHELL_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
+	-T user/boring-shell/linker.ld
 
 KERNEL_C_SOURCES := \
 	kernel/core/entry.c \
@@ -152,7 +170,7 @@ KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCE
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
 
-.PHONY: all kernel user-elf user-runtime user-console user-init elf-audit runtime-audit console-audit init-audit run run-headless test clean distclean
+.PHONY: all kernel user-elf user-runtime user-console user-init user-shell elf-audit runtime-audit console-audit init-audit shell-audit run run-headless test clean distclean
 
 all: $(ISO)
 
@@ -166,6 +184,8 @@ user-console: $(CONSOLE_SMOKE)
 
 user-init: $(INIT_ELF)
 
+user-shell: $(SHELL_INIT_ELF) $(SHELL_ELF)
+
 elf-audit: $(ELF_SMOKE)
 	sh ./tests/elf-build-audit.sh
 
@@ -177,6 +197,9 @@ console-audit: $(CONSOLE_SMOKE)
 
 init-audit: $(INIT_ELF)
 	sh ./tests/init-build-audit.sh
+
+shell-audit: $(SHELL_ELF)
+	sh ./tests/shell-build-audit.sh
 
 $(MODE_STAMP):
 	@mkdir -p $(BUILD_DIR)
@@ -247,13 +270,38 @@ $(CONSOLE_SMOKE): $(CONSOLE_OBJECTS) user/runtime-smoke/linker.ld
 
 $(INIT_MAIN_OBJECT): user/boring-init/main.c \
 	user/runtime/include/boring/runtime.h \
-	user/runtime/include/boring/syscall.h
+	user/runtime/include/boring/syscall.h \
+	kernel/include/boring/syscall_abi.h
 	@mkdir -p $(dir $@)
 	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
 
 $(INIT_ELF): $(INIT_OBJECTS) user/boring-init/linker.ld
 	@mkdir -p $(dir $@)
 	$(LD) $(INIT_LDFLAGS) $(INIT_OBJECTS) -o $@
+
+$(SHELL_INIT_MAIN_OBJECT): user/boring-init/main.c \
+	user/runtime/include/boring/runtime.h \
+	user/runtime/include/boring/syscall.h \
+	kernel/include/boring/syscall_abi.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) \
+		-DBORING_INIT_LAUNCH_SHELL=1 -c $< -o $@
+
+$(SHELL_INIT_ELF): $(SHELL_INIT_OBJECTS) user/boring-init/linker.ld
+	@mkdir -p $(dir $@)
+	$(LD) $(INIT_LDFLAGS) $(SHELL_INIT_OBJECTS) -o $@
+
+$(SHELL_MAIN_OBJECT): user/boring-shell/main.c \
+	user/runtime/include/boring/runtime.h \
+	user/runtime/include/boring/syscall.h \
+	user/runtime/include/boring/string.h \
+	kernel/include/boring/syscall_abi.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(SHELL_ELF): $(SHELL_OBJECTS) user/boring-shell/linker.ld
+	@mkdir -p $(dir $@)
+	$(LD) $(SHELL_LDFLAGS) $(SHELL_OBJECTS) -o $@
 
 $(LIMINE_ARCHIVE):
 	@mkdir -p $(dir $@)
@@ -265,11 +313,14 @@ $(LIMINE_DIR)/limine: $(LIMINE_ARCHIVE)
 	tar -xzf $(LIMINE_ARCHIVE) -C $(BUILD_DIR)/deps
 	$(MAKE) -C $(LIMINE_DIR) CC="$(HOST_CC)"
 
-$(ISO): $(KERNEL_ELF) $(BOOT_USER_ELF) $(LIMINE_DIR)/limine $(BOOT_LIMINE_CONF)
+$(ISO): $(KERNEL_ELF) $(BOOT_USER_ELF) $(BOOT_EXTRA_USER_ELF) $(LIMINE_DIR)/limine $(BOOT_LIMINE_CONF)
 	rm -rf $(ISO_ROOT)
 	mkdir -p $(ISO_ROOT)/boot/limine $(ISO_ROOT)/boot/user $(ISO_ROOT)/EFI/BOOT
 	cp $(KERNEL_ELF) $(ISO_ROOT)/boot/kernel.elf
 	cp $(BOOT_USER_ELF) $(ISO_ROOT)/boot/user/$(BOOT_USER_NAME)
+	@if [ -n "$(BOOT_EXTRA_USER_ELF)" ]; then \
+		cp $(BOOT_EXTRA_USER_ELF) $(ISO_ROOT)/boot/user/$(BOOT_EXTRA_USER_NAME); \
+	fi
 	cp $(BOOT_LIMINE_CONF) $(ISO_ROOT)/boot/limine/limine.conf
 	cp $(LIMINE_DIR)/limine-bios.sys $(ISO_ROOT)/boot/limine/
 	cp $(LIMINE_DIR)/limine-bios-cd.bin $(ISO_ROOT)/boot/limine/
@@ -307,6 +358,8 @@ test:
 	sh ./tests/vfs-qemu.sh
 	sh ./tests/ramfs-qemu.sh
 	sh ./tests/init-qemu.sh
+	sh ./tests/shell-build-audit.sh
+	sh ./tests/shell-qemu.sh
 
 clean:
 	rm -rf $(BUILD_DIR)
