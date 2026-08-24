@@ -86,3 +86,6 @@ jobs:
 
       - name: Deterministic mkboringfs formatter
         run: make mkboringfs-test
+
+      - name: Read-only boringfsck inspector
+        run: make boringfsck-test
