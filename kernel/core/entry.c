@@ -13,6 +13,7 @@
 #include <boring/preemption_test.h>
 #include <boring/process.h>
 #include <boring/process_test.h>
+#include <boring/ramfs_test.h>
 #include <boring/ring3_test.h>
 #include <boring/serial.h>
 #include <boring/syscall_test.h>
@@ -30,6 +31,7 @@
 #define BORING_TEST_MODE_RUNTIME 5
 #define BORING_TEST_MODE_CONSOLE 6
 #define BORING_TEST_MODE_VFS 7
+#define BORING_TEST_MODE_RAMFS 8
 #define IRQ_TEST_TICKS 10ULL
 #define IRQ_TEST_SPIN_LIMIT 500000000ULL
 #define BOOTSTRAP_TIMER_FREQUENCY_HZ 100U
@@ -48,7 +50,8 @@
     (BORING_TEST_MODE != BORING_TEST_MODE_SYSCALL) && \
     (BORING_TEST_MODE != BORING_TEST_MODE_RUNTIME) && \
     (BORING_TEST_MODE != BORING_TEST_MODE_CONSOLE) && \
-    (BORING_TEST_MODE != BORING_TEST_MODE_VFS)
+    (BORING_TEST_MODE != BORING_TEST_MODE_VFS) && \
+    (BORING_TEST_MODE != BORING_TEST_MODE_RAMFS)
 #error "unsupported BoringKernel test mode"
 #endif
 
@@ -917,6 +920,8 @@ static void run_exception_test_mode(void) {
     syscall_test_run();
 #elif BORING_TEST_MODE == BORING_TEST_MODE_VFS
     vfs_test_run();
+#elif BORING_TEST_MODE == BORING_TEST_MODE_RAMFS
+    ramfs_test_run();
 #endif
 }
 #endif
@@ -939,7 +944,7 @@ void boring_kernel_entry(void) {
 
     serial_init();
     serial_write_string("BoringOS booting...\n");
-    serial_write_string("BoringKernel 0.0.15-dev\n");
+    serial_write_string("BoringKernel 0.0.16-dev\n");
     serial_write_string("Arch: x86_64\n");
     serial_write_string("Hello from BoringKernel.\n\n");
 
