@@ -18,6 +18,7 @@
 #include <boring/syscall_test.h>
 #include <boring/task.h>
 #include <boring/timer.h>
+#include <boring/vfs_test.h>
 #include <boring/vmm.h>
 
 #define VMM_TEST_PATTERN 0x424f52494e474f53ULL
@@ -28,6 +29,7 @@
 #define BORING_TEST_MODE_SYSCALL 4
 #define BORING_TEST_MODE_RUNTIME 5
 #define BORING_TEST_MODE_CONSOLE 6
+#define BORING_TEST_MODE_VFS 7
 #define IRQ_TEST_TICKS 10ULL
 #define IRQ_TEST_SPIN_LIMIT 500000000ULL
 #define BOOTSTRAP_TIMER_FREQUENCY_HZ 100U
@@ -45,7 +47,8 @@
     (BORING_TEST_MODE != BORING_TEST_MODE_RING3) && \
     (BORING_TEST_MODE != BORING_TEST_MODE_SYSCALL) && \
     (BORING_TEST_MODE != BORING_TEST_MODE_RUNTIME) && \
-    (BORING_TEST_MODE != BORING_TEST_MODE_CONSOLE)
+    (BORING_TEST_MODE != BORING_TEST_MODE_CONSOLE) && \
+    (BORING_TEST_MODE != BORING_TEST_MODE_VFS)
 #error "unsupported BoringKernel test mode"
 #endif
 
@@ -912,6 +915,8 @@ static void run_exception_test_mode(void) {
     syscall_test_run();
 #elif BORING_TEST_MODE == BORING_TEST_MODE_CONSOLE
     syscall_test_run();
+#elif BORING_TEST_MODE == BORING_TEST_MODE_VFS
+    vfs_test_run();
 #endif
 }
 #endif
