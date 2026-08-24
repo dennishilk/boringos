@@ -19,6 +19,9 @@ RUNTIME_SMOKE := $(USER_BUILD_DIR)/runtime-smoke.elf
 CONSOLE_MAIN_OBJECT := $(USER_BUILD_DIR)/console-smoke/main.o
 CONSOLE_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(CONSOLE_MAIN_OBJECT)
 CONSOLE_SMOKE := $(USER_BUILD_DIR)/console-smoke.elf
+INIT_MAIN_OBJECT := $(USER_BUILD_DIR)/boring-init/main.o
+INIT_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(INIT_MAIN_OBJECT)
+INIT_ELF := $(USER_BUILD_DIR)/boring-init.elf
 ISO := $(BUILD_DIR)/boringos.iso
 
 CC = gcc
@@ -72,8 +75,14 @@ TEST_HARNESS_C := kernel/core/vfs_test.c
 else ifeq ($(TEST_MODE),ramfs)
 TEST_MODE_VALUE := 8
 TEST_HARNESS_C := kernel/core/ramfs_test.c
+else ifeq ($(TEST_MODE),init)
+TEST_MODE_VALUE := 9
+TEST_HARNESS_C := kernel/core/init_test.c
+BOOT_USER_ELF := $(INIT_ELF)
+BOOT_USER_NAME := boring-init.elf
+BOOT_LIMINE_CONF := limine-init.conf
 else
-$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, or ramfs)
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, or init)
 endif
 
 LIMINE_VERSION := 12.5.2
@@ -103,6 +112,8 @@ RUNTIME_USER_CFLAGS := -std=c11 -ffreestanding -fno-stack-protector \
 RUNTIME_USER_ASFLAGS := -ffreestanding -fno-pic -fno-pie -m64 -mno-red-zone
 RUNTIME_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 	-T user/runtime-smoke/linker.ld
+INIT_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
+	-T user/boring-init/linker.ld
 
 KERNEL_C_SOURCES := \
 	kernel/core/entry.c \
@@ -141,7 +152,7 @@ KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCE
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
 
-.PHONY: all kernel user-elf user-runtime user-console elf-audit runtime-audit console-audit run run-headless test clean distclean
+.PHONY: all kernel user-elf user-runtime user-console user-init elf-audit runtime-audit console-audit init-audit run run-headless test clean distclean
 
 all: $(ISO)
 
@@ -153,6 +164,8 @@ user-runtime: $(RUNTIME_SMOKE)
 
 user-console: $(CONSOLE_SMOKE)
 
+user-init: $(INIT_ELF)
+
 elf-audit: $(ELF_SMOKE)
 	sh ./tests/elf-build-audit.sh
 
@@ -161,6 +174,9 @@ runtime-audit: $(RUNTIME_SMOKE)
 
 console-audit: $(CONSOLE_SMOKE)
 	sh ./tests/console-build-audit.sh
+
+init-audit: $(INIT_ELF)
+	sh ./tests/init-build-audit.sh
 
 $(MODE_STAMP):
 	@mkdir -p $(BUILD_DIR)
@@ -229,6 +245,16 @@ $(CONSOLE_SMOKE): $(CONSOLE_OBJECTS) user/runtime-smoke/linker.ld
 	@mkdir -p $(dir $@)
 	$(LD) $(RUNTIME_LDFLAGS) $(CONSOLE_OBJECTS) -o $@
 
+$(INIT_MAIN_OBJECT): user/boring-init/main.c \
+	user/runtime/include/boring/runtime.h \
+	user/runtime/include/boring/syscall.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(INIT_ELF): $(INIT_OBJECTS) user/boring-init/linker.ld
+	@mkdir -p $(dir $@)
+	$(LD) $(INIT_LDFLAGS) $(INIT_OBJECTS) -o $@
+
 $(LIMINE_ARCHIVE):
 	@mkdir -p $(dir $@)
 	$(CURL) --fail --location --retry 3 --output $@ $(LIMINE_URL)
@@ -269,6 +295,7 @@ test:
 	sh ./tests/elf-build-audit.sh
 	sh ./tests/runtime-build-audit.sh
 	sh ./tests/console-build-audit.sh
+	sh ./tests/init-build-audit.sh
 	./tests/boot-qemu.sh
 	./tests/exception-divide-qemu.sh
 	./tests/exception-pagefault-qemu.sh
@@ -279,6 +306,7 @@ test:
 	sh ./tests/console-qemu.sh
 	sh ./tests/vfs-qemu.sh
 	sh ./tests/ramfs-qemu.sh
+	sh ./tests/init-qemu.sh
 
 clean:
 	rm -rf $(BUILD_DIR)
