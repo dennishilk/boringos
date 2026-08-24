@@ -56,3 +56,9 @@ jobs:
 
       - name: Filesystem-independent VFS core
         run: sh ./tests/vfs-qemu.sh
+
+      - name: Build RAMFS test mode
+        run: make TEST_MODE=ramfs
+
+      - name: Real RAMFS backend
+        run: sh ./tests/ramfs-qemu.sh
