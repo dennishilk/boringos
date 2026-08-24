@@ -17,6 +17,7 @@
 #include <boring/ramfs_test.h>
 #include <boring/ring3_test.h>
 #include <boring/serial.h>
+#include <boring/shell_test.h>
 #include <boring/syscall_test.h>
 #include <boring/task.h>
 #include <boring/timer.h>
@@ -34,6 +35,7 @@
 #define BORING_TEST_MODE_VFS 7
 #define BORING_TEST_MODE_RAMFS 8
 #define BORING_TEST_MODE_INIT 9
+#define BORING_TEST_MODE_SHELL 10
 #define IRQ_TEST_TICKS 10ULL
 #define IRQ_TEST_SPIN_LIMIT 500000000ULL
 #define BOOTSTRAP_TIMER_FREQUENCY_HZ 100U
@@ -54,7 +56,8 @@
     (BORING_TEST_MODE != BORING_TEST_MODE_CONSOLE) && \
     (BORING_TEST_MODE != BORING_TEST_MODE_VFS) && \
     (BORING_TEST_MODE != BORING_TEST_MODE_RAMFS) && \
-    (BORING_TEST_MODE != BORING_TEST_MODE_INIT)
+    (BORING_TEST_MODE != BORING_TEST_MODE_INIT) && \
+    (BORING_TEST_MODE != BORING_TEST_MODE_SHELL)
 #error "unsupported BoringKernel test mode"
 #endif
 
@@ -927,6 +930,8 @@ static void run_exception_test_mode(void) {
     ramfs_test_run();
 #elif BORING_TEST_MODE == BORING_TEST_MODE_INIT
     init_test_run();
+#elif BORING_TEST_MODE == BORING_TEST_MODE_SHELL
+    shell_test_run();
 #endif
 }
 #endif
