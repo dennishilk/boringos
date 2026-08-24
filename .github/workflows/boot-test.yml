@@ -50,3 +50,6 @@ jobs:
 
       - name: Real userspace serial console I/O
         run: sh ./tests/console-qemu.sh
+
+      - name: Filesystem-independent VFS core
+        run: sh ./tests/vfs-qemu.sh
