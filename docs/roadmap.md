@@ -40,9 +40,17 @@ validated ELF64 x86_64 ET_EXEC userspace loader from a Limine boot module
 PMM-owned PT_LOAD mappings + W^X/NX + real BSS zeroing
     ↓
 real ELF entry execution at CPL3 using existing GETPID/DEBUG_WRITE via SYSCALL/SYSRETQ
+    ↓
+BoringOS-owned freestanding C userspace runtime
+    ↓
+_start → int boring_main(void) with no host libc/CRT
+    ↓
+bounded userspace CONSOLE_WRITE/CONSOLE_READ through kernel-only COM1
+    ↓
+real named-pipe serial input → SYSRETQ → same compiled C program resumes
 ```
 
-BoringKernel **0.0.12-dev** now has a deliberately constrained real Ring 3 path, a native x86_64 `SYSCALL` / `SYSRETQ` boundary, and a real constrained ELF64 x86_64 `ET_EXEC` userspace loader. A task remains an execution/scheduling entity; a process remains an identity plus address-space owner. A native userspace runtime and general user-task scheduling are still not implemented.
+BoringKernel **0.0.14-dev** now has a deliberately constrained real Ring 3 path, a native x86_64 `SYSCALL` / `SYSRETQ` boundary, a real constrained ELF64 x86_64 `ET_EXEC` userspace loader, a BoringOS-owned freestanding C userspace runtime, and a bounded early userspace serial-console path. A task remains an execution/scheduling entity; a process remains an identity plus address-space owner. General user-task scheduling is still not implemented.
 
 PID 0 represents the inherited bootstrap/kernel address space. New process roots are allocated from PMM. PML4 slots 0–255 are process-private in the current bootstrap model, while slots 256–511 are shared from the bootstrap root so kernel code/data, HHDM, heap, task stacks, interrupt code and scheduler state remain available in every current process address space.
 
@@ -74,7 +82,11 @@ Milestone 10 adds the first controlled userspace/kernel call boundary using real
 
 Milestone 11 adds a strict ELF64 little-endian x86_64 `ET_EXEC` loader whose bytes arrive through a Limine boot module rather than a filesystem. Validated `PT_LOAD` contents are copied into PMM-owned process pages, W+X is rejected, NX is enabled and enforced for non-executable user mappings, real BSS bytes are zeroed, a separate user stack is mapped, the ELF entry executes at CPL3, and the existing `GETPID` / `DEBUG_WRITE` syscalls return through `SYSRETQ`. The final CPL3 `cli` still produces a real #GP through the TSS.RSP0 exception path.
 
-All earlier PMM, VMM, heap, IRQ/EOI, cooperative task, full-GPR preemption, process/address-space, Divide Error, Page Fault, Ring 3 and syscall acceptance checks remain green together with the dedicated ELF userspace acceptance.
+Milestone 12 adds the BoringOS-owned freestanding C userspace runtime. Its `_start` glue invokes `int boring_main(void)`, the runtime links without a host libc/CRT, exposes native `GETPID` and `DEBUG_WRITE` wrappers, and supplies tiny `memcpy`, `memset` and `strlen` helpers. A real compiled static `ET_EXEC` C program executes at CPL3, performs real `SYSCALL` / `SYSRETQ` round trips, returns normally from `boring_main()`, and then retains the existing final CPL3 `cli` → #GP → TSS.RSP0 privilege proof.
+
+Milestone 13 adds bounded early userspace serial-console I/O through provisional `CONSOLE_WRITE` syscall 2 and `CONSOLE_READ` syscall 3. Transfers are limited to 64 bytes, COM1 remains kernel-only, writes use bounded `copy_from_user`, and reads validate the complete writable destination before any COM1 RX byte is consumed and then use bounded `copy_to_user`. RX remains deliberately blocking/polled. The real QEMU named-pipe acceptance runs a compiled C program that writes `console write from BoringOS userspace`, receives exactly host-injected `K` / ASCII 75 through BoringKernel, resumes the same C program through `SYSRETQ`, echoes `K`, returns 43 from `boring_main()`, and still finishes with the existing CPL3 `cli` → #GP → TSS.RSP0 proof.
+
+All earlier PMM, VMM, heap, IRQ/EOI, cooperative task, full-GPR preemption, process/address-space, Divide Error, Page Fault, Ring 3, syscall, ELF userspace, native C runtime and userspace serial-console acceptance checks remain green.
 
 For the deliberately legacy bootstrap timer proof, QEMU remains:
 
@@ -82,7 +94,7 @@ For the deliberately legacy bootstrap timer proof, QEMU remains:
 -M q35 -cpu qemu64,apic=off -m 128M
 ```
 
-There is still **no native userspace runtime or libc/CRT, no general user-task scheduling, no VFS, RAMFS, block-device stack, BoringFS implementation, init, shell, networking, SMP or modern APIC timer path**. ELF dynamic linking, `PT_INTERP`, `PT_DYNAMIC`, runtime relocations and PIE / `ET_DYN` are also not implemented.
+The current serial-console path is **not** a TTY, line discipline, stdin/stdout/stderr, file-descriptor layer, asynchronous I/O path, UART IRQ receive path, or scheduler-aware blocking-I/O design. There is still no general user-task scheduling, VFS, RAMFS, block-device stack, BoringFS implementation, init, shell, networking, SMP or modern APIC timer path. ELF dynamic linking, `PT_INTERP`, `PT_DYNAMIC`, runtime relocations and PIE / `ET_DYN` are also not implemented.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -449,15 +461,45 @@ boot-qemu: SUCCESS
 
 Milestone 11 proves real constrained ELF64 x86_64 userspace execution from a Limine boot module through PMM-owned process mappings and the existing syscall boundary. It does **not** add libc/CRT, a C userspace runtime, dynamic linking, `PT_INTERP`, `PT_DYNAMIC`, relocations, PIE / `ET_DYN`, user-task scheduling, VFS/RAMFS/BoringFS, storage, networking or display work.
 
-## Milestone 12: minimal native userspace runtime — NEXT
+## Milestone 12: minimal native userspace runtime — COMPLETE
 
-Provide BoringOS-owned C entry glue, syscall wrappers and tiny string/memory helpers. No host libc.
+Implemented, merged and accepted on `main` in QEMU:
 
-Milestone 12 has not been started.
+- add BoringOS-owned freestanding C userspace entry glue with `_start -> int boring_main(void)`;
+- link the runtime and smoke program without host libc or CRT;
+- provide native `GETPID` and `DEBUG_WRITE` wrappers over the existing x86_64 syscall ABI;
+- provide tiny BoringOS-owned `memcpy`, `memset` and `strlen` helpers;
+- build a real compiled static ELF64 x86_64 `ET_EXEC` C userspace program;
+- execute that program at CPL3 in an independent process address space;
+- perform real `SYSCALL` / `SYSRETQ` round trips from compiled C;
+- return normally from `boring_main()` with acceptance value 42;
+- continue in runtime `_start` after the C return;
+- finish with the existing real CPL3 `cli` → #GP / vector 13 through TSS.RSP0;
+- preserve all earlier artifact and QEMU acceptance gates.
 
-## Milestone 13: serial console / TTY path for userspace
+Milestone 12 establishes a minimal native C execution environment for BoringOS programs. It is deliberately **not** a host libc/CRT, full libc, dynamic loader, POSIX runtime, general userspace scheduler, VFS or filesystem API.
 
-Expose real console input/output through the kernel API so early native programs can use the QEMU serial terminal.
+## Milestone 13: early userspace serial console — COMPLETE
+
+Implemented, merged and accepted on `main` in QEMU:
+
+- keep provisional syscall 0 `GETPID` and syscall 1 `DEBUG_WRITE` unchanged;
+- add provisional syscall 2 `CONSOLE_WRITE` and syscall 3 `CONSOLE_READ`;
+- bound each console transfer to 1..64 bytes;
+- keep all COM1 port access in the kernel;
+- validate and copy complete userspace write ranges through bounded `copy_from_user` before any COM1 TX output;
+- validate the complete userspace read destination as present, userspace and writable before consuming any COM1 RX byte;
+- receive through deliberately blocking/polled COM1 RX and copy received bytes to userspace through bounded `copy_to_user`;
+- use a separate compiled C `console-smoke.elf` linked from the same BoringOS-owned runtime objects as Milestone 12;
+- use a real QEMU named serial pipe for bidirectional acceptance rather than pre-seeded stdin;
+- wait for the compiled C program to write `console write from BoringOS userspace`, then inject exactly `K` from the host;
+- receive `K` as ASCII 75 in BoringKernel and copy it into a real local C stack variable;
+- return through `SYSRETQ` to the same compiled C program and echo `K` through `CONSOLE_WRITE`;
+- return 43 normally from `boring_main()`;
+- retain the final real CPL3 `cli` → #GP / vector 13 → TSS.RSP0 privilege-transition proof;
+- preserve all earlier artifact and QEMU acceptance gates.
+
+The Milestone 13 console is intentionally **not** a TTY, line discipline, stdin/stdout/stderr layer, file-descriptor API, asynchronous I/O design, UART IRQ receive path, or scheduler-aware blocking-I/O mechanism. Those abstractions remain future work.
 
 ---
 
@@ -481,6 +523,8 @@ write
 truncate
 readdir
 ```
+
+Milestone 14 has **not** been started in this roadmap closeout.
 
 ## Milestone 15: RAMFS backend
 
@@ -583,17 +627,17 @@ Networking remains unrelated and deferred.
 
 # Exact next implementation milestone
 
-## Minimal native userspace runtime
+## Milestone 14 — VFS core
 
-The next roadmap item is **Milestone 12**.
+The next roadmap item is **Milestone 14**.
 
-It has **not** been started and requires a separate instruction.
+It has **not** been started by this roadmap reconciliation and requires a separate implementation change.
 
-The current repository still has no libc/CRT or C userspace runtime. Do not jump ahead from the deliberately scoped Milestone 12 to:
+The intended Milestone 14 scope remains deliberately limited to filesystem-independent kernel objects, bounded path walking, mount relationships, kernel-internal open handles and process working directories. Do not jump ahead from this VFS foundation to:
 
-- dynamic linking, `PT_INTERP`, `PT_DYNAMIC`, relocations or PIE / `ET_DYN`;
-- VFS/RAMFS;
-- BoringFS implementation;
-- storage drivers;
-- user-task scheduling;
-- networking or display work.
+- RAMFS or BoringFS implementation;
+- block devices, partitions or persistent storage;
+- file descriptors, stdin/stdout/stderr or file-related userspace syscalls;
+- boring-init or boring-shell;
+- POSIX compatibility;
+- networking, display/input, APIC migration or SMP.
