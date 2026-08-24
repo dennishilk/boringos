@@ -34,24 +34,39 @@ filesystem-independent VFS
 real bounded mutable RAMFS
     ↓
 real PID 1 boring-init at CPL3
+    ↓
+native PID 2 boring-shell at CPL3
+    ↓
+userspace filesystem syscalls
+    ↓
+process CWD
+    ↓
+VFS
+    ↓
+real mutable RAMFS
 ```
 
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.17-dev
+BoringKernel 0.0.18-dev
 ```
 
-The current syscall ABI remains exactly:
+The current syscall ABI is exactly:
 
 ```text
 0 GETPID
 1 DEBUG_WRITE
 2 CONSOLE_WRITE
 3 CONSOLE_READ
+4 LAUNCH
+5 FS_READDIR
+6 FS_MKDIR
+7 FS_RMDIR
+8 FS_CHDIR
 ```
 
-There is still no numeric file-descriptor table, no stdin/stdout/stderr model, no userspace file-content syscall API, no executable loading from VFS/RAMFS, no BoringFS/block-storage implementation, no networking, no display/input stack, no BoringWM integration, no APIC migration and no SMP.
+There is still no numeric file-descriptor table, no stdin/stdout/stderr abstraction, no userspace file-content syscall API, no executable loading from VFS/RAMFS, no BoringFS/block-storage implementation, no networking, no display/input stack, no BoringWM integration, no APIC migration and no SMP.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -105,7 +120,7 @@ BoringKernel owns CPL0/CPL3 descriptors and a 64-bit TSS with dedicated RSP0 sta
 
 ## Milestone 10: system call boundary / syscall ABI — COMPLETE
 
-Native x86_64 `SYSCALL` / `SYSRETQ` is the sole userspace call boundary. The bootstrap ABI provides `GETPID`, bounded `DEBUG_WRITE`, validated user copies, deterministic negative native errors and checked user return state on a dedicated trusted syscall stack.
+Native x86_64 `SYSCALL` / `SYSRETQ` is the sole userspace call boundary. The bootstrap ABI began with `GETPID` and bounded `DEBUG_WRITE`; later milestones extended the same checked boundary without introducing a file-descriptor layer.
 
 ---
 
@@ -145,15 +160,7 @@ Merged-main verification was independently observed as BoringKernel boot test Ru
 
 Milestone 15 adds a **real bounded mutable RAMFS backend** underneath the existing generic VFS rather than a synthetic test filesystem.
 
-Implemented and accepted behavior includes:
-
-- nested directories;
-- real heap-backed regular-file bytes;
-- stable VFS node identity;
-- real `lookup`, `create`, `mkdir`, `read`, `write`, `truncate`, `readdir`, `rename`, `unlink` and `rmdir` behavior;
-- VFS mount integration, including a second RAMFS instance through the existing mount model;
-- process CWD use through retained VFS references;
-- bounded node/file/data capacity and cleanup/bookkeeping proof.
+Implemented and accepted behavior includes nested directories, heap-backed regular-file bytes, stable VFS node identity, real VFS backend operations, mount integration, process CWD use through retained VFS references, bounded capacity and cleanup/bookkeeping proof.
 
 Final version after Milestone 15:
 
@@ -179,17 +186,7 @@ Milestone 15 did **not** add userspace filesystem syscalls, file descriptors, Bo
 
 Milestone 16 adds a real freestanding native `boring-init.elf` as the first long-lived BoringOS userspace process.
 
-Accepted behavior:
-
-- real ELF64 x86_64 static `ET_EXEC` built from the existing BoringOS-owned C runtime;
-- delivered as a Limine boot module and loaded through the existing constrained ELF loader;
-- real deterministic PID 1;
-- independent PMM-backed process address space;
-- entry at CPL3 with existing W^X/NX and supervisor-only higher-half rules;
-- userspace proves PID 1 through existing `GETPID`;
-- output uses existing `CONSOLE_WRITE` only;
-- no new syscall was added for Milestone 16;
-- PID 1 remains alive/long-lived rather than inventing an exit/reaping model.
+Accepted behavior includes a real static ELF64 `ET_EXEC`, deterministic PID 1, an independent address space, CPL3 execution, `GETPID` proof, `CONSOLE_WRITE` output, and a long-lived `PROCESS_ALIVE` PID 1 without inventing an exit/reaping model.
 
 Final version after Milestone 16:
 
@@ -214,33 +211,112 @@ Result: SUCCESS
 
 The merged-main push CI for Milestone 16 was not independently observable through the available connector and is **not claimed**.
 
-Milestone 16 did **not** add a shell, file descriptors, file syscalls, executable loading from VFS/RAMFS, BoringFS, storage, networking, display/input, APIC migration or SMP.
+## Milestone 17: `boring-shell` — COMPLETE
 
-## Milestone 17: `boring-shell` — NEXT / NOT STARTED
+Milestone 17 adds a real freestanding static `boring-shell.elf` launched from real userspace `boring-init`.
 
-Launch a native C shell from `boring-init` in userspace.
+Accepted architecture and behavior:
 
-The defining contract remains:
+- `boring-init` is PID 1 and initiates `LAUNCH`;
+- `boring-shell` becomes PID 2 in an independent address space;
+- successful launch performs a trusted-syscall-stack-safe PID1 -> PID2 handoff by reusing the existing syscall return frame rather than nesting live PID1/PID2 syscall frames;
+- PID 1 remains `PROCESS_ALIVE`;
+- PID 2 inherits process CWD through retained VFS references;
+- shell input/output use `CONSOLE_READ` / `CONSOLE_WRITE`;
+- userspace filesystem syscalls are `FS_READDIR`, `FS_MKDIR`, `FS_RMDIR`, and `FS_CHDIR`;
+- there is no FD table, stdin/stdout/stderr abstraction, or userspace file-content syscall API;
+- shell commands are `help`, `ls [path]`, `mkdir <name>`, `rmdir <name>`, and `cd <path>`;
+- shell input has a 128-byte line bound.
 
-> Filesystem commands operate through real VFS/syscall state. No simulated directory listings.
+Real interactive acceptance proved the real namespace path rather than a shadow model:
 
-Milestone 17 has **not** been started by this roadmap reconciliation. It requires a separate implementation branch/PR.
+```text
+mkdir Test
+ls
+Test
+
+mkdir Test
+-> already exists
+
+cd Test
+mkdir Inner
+ls
+Inner
+
+cd ..
+rmdir Test
+-> directory not empty
+
+cd Test
+rmdir Inner
+cd ..
+rmdir Test
+ls
+-> Test is no longer present
+```
+
+The mutation and later independent observation path is:
+
+```text
+boring-shell
+    ↓
+userspace syscall
+    ↓
+process CWD
+    ↓
+VFS
+    ↓
+real mutable RAMFS
+```
+
+There is no shell shadow filesystem and no fake directory listing.
+
+Acceptance record:
+
+```text
+final implementation PR: #26
+frozen green implementation: b95466a14d7372d2681471e3b0c39c55d8df65f6
+final PR head: c38686138279d6276936b6f7ff80dd4779f29509
+final PR CI: Run #168 / ID 32718959564 / SUCCESS
+merged main: f063c2ef4a36cf759ff39814a8110a3cb13459f6
+```
+
+The push-triggered merged-main workflow was not independently observable:
+
+```text
+merged-main push CI: NOT OBSERVABLE
+success: NOT CLAIMED
+```
 
 ---
 
 # Stage 7 — BoringFS host tooling before kernel writes
 
-## Milestone 18: pure BoringFS format codec and validator — PLANNED
+## Milestone 18: pure BoringFS format codec and validator — NEXT / NOT STARTED
 
-Implement the documented BoringFS v0 encoding/decoding rules in small C modules suitable for host tests and later kernel reuse where practical.
+Implement the documented BoringFS v0 binary encoding/decoding rules and structural validator as **host-side / format-layer work first**, with small BoringOS-owned C modules suitable for later reuse.
+
+Milestone 18 ends at:
+
+```text
+raw BoringFS v0 bytes
+    ↓
+explicit little-endian codec
+    ↓
+decoded format values
+    ↓
+read-only structural validator
+```
+
+Milestone 18 does **not** imply a kernel BoringFS mount, block-device support, persistence, `mkboringfs`, `boringfsck`, writable BoringFS, executable loading from BoringFS, or any Milestone 19+ implementation.
 
 ## Milestone 19: `mkboringfs` — PLANNED
 
-Create deterministic valid BoringFS images containing an empty root directory.
+Create deterministic valid BoringFS images containing an empty root directory using the shared codec and validator established earlier.
 
 ## Milestone 20: `boringfsck` — PLANNED
 
-Create a read-only structural validator/inspector. Initial versions report corruption and return non-zero; they do not attempt aggressive repair.
+Create a read-only inspector around the shared structural validator. Initial versions report corruption and return non-zero; they do not attempt aggressive repair.
 
 ---
 
@@ -294,28 +370,20 @@ Networking remains unrelated and deferred.
 
 # Exact next implementation milestone
 
-## Milestone 17 — `boring-shell`
+## Milestone 18 — pure BoringFS v0 format codec and structural validator
 
-The next roadmap item is **Milestone 17**.
+The next implementation item is **Milestone 18**. It is **NEXT / NOT STARTED** by this roadmap reconciliation.
 
-It is **NOT STARTED** by this reconciliation.
-
-The required core contract is:
+Its architectural boundary is only:
 
 ```text
-boring-init
+docs/boringfs.md
     ↓
-native C boring-shell at CPL3
+BoringFS v0 codec
     ↓
-userspace command parsing
+exact bytes / decoded format values
     ↓
-BoringOS syscall boundary
-    ↓
-process CWD + existing VFS
-    ↓
-real RAMFS namespace
+BoringFS v0 structural validator
 ```
 
-Filesystem commands must manipulate and observe the **real** landed VFS/RAMFS state. No hard-coded listings, shell-local fake filesystem, kernel-print substitute or other simulated directory state is acceptable.
-
-Milestone 17 remains separate from BoringFS, block storage, package management, networking, display/input, BoringWM and every Milestone 18+ item.
+M18 is host-side / format-layer work first. It must not mount BoringFS in the kernel, add storage, implement a formatter or checker CLI, alter the syscall ABI, or begin Milestone 19.
