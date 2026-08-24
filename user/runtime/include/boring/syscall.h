@@ -6,5 +6,7 @@
 
 uint64_t boring_getpid(void);
 long boring_debug_write(const void *buffer, size_t length);
+long boring_console_write(const void *buffer, size_t length);
+long boring_console_read(void *buffer, size_t length);
 
 #endif

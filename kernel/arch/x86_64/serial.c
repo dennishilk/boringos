@@ -30,11 +30,30 @@ void serial_init(void) {
     x86_64_out8((uint16_t)COM1_MODEM_CONTROL, 0x0bu);
 }
 
+void serial_write_bytes(const char *data, size_t length) {
+    size_t index;
+
+    if (data == NULL) {
+        return;
+    }
+
+    for (index = 0U; index < length; ++index) {
+        serial_write_char(data[index]);
+    }
+}
+
 void serial_write_string(const char *text) {
     while (*text != '\0') {
         serial_write_char(*text);
         ++text;
     }
+}
+
+char serial_read_char_blocking(void) {
+    while ((x86_64_in8((uint16_t)COM1_LINE_STATUS) & 0x01u) == 0u) {
+    }
+
+    return (char)x86_64_in8((uint16_t)COM1_DATA);
 }
 
 void serial_write_u64(uint64_t value) {

@@ -44,3 +44,6 @@ jobs:
 
       - name: Real native C userspace runtime execution
         run: sh ./tests/runtime-qemu.sh
+
+      - name: Real userspace serial console I/O
+        run: sh ./tests/console-qemu.sh

@@ -92,6 +92,46 @@ static uint64_t sanitize_user_rflags(uint64_t user_rflags) {
     return (user_rflags & SYSRET_ALLOWED_STATUS_FLAGS) | RFLAGS_RESERVED1;
 }
 
+static bool syscall_user_range_accessible(uintptr_t user_address,
+                                          size_t length,
+                                          bool require_writable) {
+    struct process *process;
+    uintptr_t current;
+    size_t remaining;
+
+    if (!ring3_user_range_valid(user_address, length)) {
+        return false;
+    }
+
+    process = process_current();
+    if ((process == NULL) || !process_is_alive(process) ||
+        process->address_space.bootstrap) {
+        return false;
+    }
+
+    current = user_address;
+    remaining = length;
+    while (remaining != 0U) {
+        uint64_t physical;
+        const size_t page_offset =
+            (size_t)((uint64_t)current & (VMM_PAGE_SIZE - 1ULL));
+        size_t chunk = (size_t)VMM_PAGE_SIZE - page_offset;
+
+        if (chunk > remaining) {
+            chunk = remaining;
+        }
+        if (!ring3_user_translate(&process->address_space, current,
+                                  require_writable, &physical)) {
+            return false;
+        }
+
+        current += (uintptr_t)chunk;
+        remaining -= chunk;
+    }
+
+    return true;
+}
+
 static bool syscall_copy_from_user(void *destination,
                                    uintptr_t user_address,
                                    size_t length) {
@@ -151,6 +191,66 @@ static bool syscall_copy_from_user(void *destination,
     return true;
 }
 
+static bool syscall_copy_to_user(uintptr_t user_address,
+                                 const void *source_buffer,
+                                 size_t length) {
+    struct process *process;
+    struct vmm_stats vmm_stats;
+    const uint8_t *input = (const uint8_t *)source_buffer;
+    uintptr_t current;
+    size_t remaining;
+
+    if ((source_buffer == NULL) ||
+        !ring3_user_range_valid(user_address, length) ||
+        !vmm_get_stats(&vmm_stats)) {
+        return false;
+    }
+
+    process = process_current();
+    if ((process == NULL) || !process_is_alive(process) ||
+        process->address_space.bootstrap) {
+        return false;
+    }
+
+    current = user_address;
+    remaining = length;
+    while (remaining != 0U) {
+        uint64_t physical;
+        uint64_t kernel_virtual;
+        const size_t page_offset =
+            (size_t)((uint64_t)current & (VMM_PAGE_SIZE - 1ULL));
+        size_t chunk = (size_t)VMM_PAGE_SIZE - page_offset;
+        size_t index;
+        uint8_t *destination;
+
+        if (chunk > remaining) {
+            chunk = remaining;
+        }
+
+        if (!ring3_user_translate(&process->address_space, current, true,
+                                  &physical) ||
+            (physical > UINT64_MAX - vmm_stats.hhdm_offset)) {
+            return false;
+        }
+
+        kernel_virtual = vmm_stats.hhdm_offset + physical;
+        if ((kernel_virtual >> 48U) != 0xffffULL) {
+            return false;
+        }
+        destination = (uint8_t *)(uintptr_t)kernel_virtual;
+
+        for (index = 0U; index < chunk; ++index) {
+            destination[index] = input[index];
+        }
+
+        input += chunk;
+        current += (uintptr_t)chunk;
+        remaining -= chunk;
+    }
+
+    return true;
+}
+
 static uint64_t syscall_getpid(void) {
     const struct process *process = process_current();
 
@@ -179,6 +279,53 @@ static uint64_t syscall_debug_write(uint64_t user_buffer, uint64_t length) {
     serial_write_string("Syscall DEBUG_WRITE: ");
     serial_write_string(&buffer[0]);
     serial_write_string("\n");
+    return length;
+}
+
+static uint64_t syscall_console_write(uint64_t user_buffer, uint64_t length) {
+    char buffer[BORING_SYSCALL_CONSOLE_IO_MAX];
+    size_t safe_length;
+
+    if ((length == 0ULL) ||
+        (length > (uint64_t)BORING_SYSCALL_CONSOLE_IO_MAX)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+
+    safe_length = (size_t)length;
+    if (!syscall_copy_from_user(&buffer[0], (uintptr_t)user_buffer,
+                                safe_length)) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+
+    serial_write_bytes(&buffer[0], safe_length);
+    return length;
+}
+
+static uint64_t syscall_console_read(uint64_t user_buffer, uint64_t length) {
+    char buffer[BORING_SYSCALL_CONSOLE_IO_MAX];
+    size_t safe_length;
+    size_t index;
+
+    if ((length == 0ULL) ||
+        (length > (uint64_t)BORING_SYSCALL_CONSOLE_IO_MAX)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+
+    safe_length = (size_t)length;
+    if (!syscall_user_range_accessible((uintptr_t)user_buffer,
+                                       safe_length, true)) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+
+    for (index = 0U; index < safe_length; ++index) {
+        buffer[index] = serial_read_char_blocking();
+    }
+
+    if (!syscall_copy_to_user((uintptr_t)user_buffer, &buffer[0],
+                              safe_length)) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+
     return length;
 }
 
@@ -320,6 +467,12 @@ void x86_64_syscall_dispatch(struct x86_64_syscall_frame *frame) {
             break;
         case BORING_SYS_DEBUG_WRITE:
             result = syscall_debug_write(frame->rdi, frame->rsi);
+            break;
+        case BORING_SYS_CONSOLE_WRITE:
+            result = syscall_console_write(frame->rdi, frame->rsi);
+            break;
+        case BORING_SYS_CONSOLE_READ:
+            result = syscall_console_read(frame->rdi, frame->rsi);
             break;
         default:
             result = syscall_error(BORING_SYSCALL_ENOSYS);
