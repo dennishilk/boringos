@@ -71,3 +71,12 @@ jobs:
 
       - name: Real first userspace process boring-init
         run: sh ./tests/init-qemu.sh
+
+      - name: Audit generated boring-shell artifact
+        run: sh ./tests/shell-build-audit.sh
+
+      - name: Build boring-shell test mode
+        run: make TEST_MODE=shell
+
+      - name: Real interactive boring-shell
+        run: sh ./tests/shell-qemu.sh
