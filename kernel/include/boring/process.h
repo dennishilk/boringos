@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include <boring/address_space.h>
+#include <boring/vfs.h>
 
 #define KERNEL_BOOTSTRAP_PID 0ULL
 #define KERNEL_PROCESS_MAX 4U
@@ -17,7 +18,9 @@ enum process_state {
 struct process {
     uint64_t pid;
     struct address_space address_space;
+    struct vfs_path cwd;
     enum process_state state;
+    bool cwd_valid;
     bool slot_used;
 };
 
@@ -36,6 +39,9 @@ bool process_activate(struct process *process);
 bool process_mark_finished(struct process *process);
 bool process_destroy(struct process *process);
 bool process_is_alive(const struct process *process);
+bool process_set_cwd(struct process *process, const struct vfs_path *cwd);
+bool process_clear_cwd(struct process *process);
+bool process_get_cwd(const struct process *process, struct vfs_path *cwd_out);
 bool process_get_stats(struct process_stats *stats);
 
 #endif
