@@ -11,10 +11,14 @@ RUNTIME_ENTRY_OBJECT := $(USER_BUILD_DIR)/runtime/entry.o
 RUNTIME_SYSCALL_OBJECT := $(USER_BUILD_DIR)/runtime/syscall.o
 RUNTIME_MEMORY_OBJECT := $(USER_BUILD_DIR)/runtime/memory.o
 RUNTIME_STRING_OBJECT := $(USER_BUILD_DIR)/runtime/string.o
+RUNTIME_COMMON_OBJECTS := $(RUNTIME_ENTRY_OBJECT) $(RUNTIME_SYSCALL_OBJECT) \
+	$(RUNTIME_MEMORY_OBJECT) $(RUNTIME_STRING_OBJECT)
 RUNTIME_MAIN_OBJECT := $(USER_BUILD_DIR)/runtime-smoke/main.o
-RUNTIME_OBJECTS := $(RUNTIME_ENTRY_OBJECT) $(RUNTIME_SYSCALL_OBJECT) \
-	$(RUNTIME_MEMORY_OBJECT) $(RUNTIME_STRING_OBJECT) $(RUNTIME_MAIN_OBJECT)
+RUNTIME_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(RUNTIME_MAIN_OBJECT)
 RUNTIME_SMOKE := $(USER_BUILD_DIR)/runtime-smoke.elf
+CONSOLE_MAIN_OBJECT := $(USER_BUILD_DIR)/console-smoke/main.o
+CONSOLE_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(CONSOLE_MAIN_OBJECT)
+CONSOLE_SMOKE := $(USER_BUILD_DIR)/console-smoke.elf
 ISO := $(BUILD_DIR)/boringos.iso
 
 CC = gcc
@@ -56,8 +60,14 @@ TEST_HARNESS_C := kernel/core/runtime_test.c kernel/core/runtime_test_adapter.c
 BOOT_USER_ELF := $(RUNTIME_SMOKE)
 BOOT_USER_NAME := runtime-smoke.elf
 BOOT_LIMINE_CONF := limine-runtime.conf
+else ifeq ($(TEST_MODE),console)
+TEST_MODE_VALUE := 6
+TEST_HARNESS_C := kernel/core/console_test.c kernel/core/console_test_adapter.c
+BOOT_USER_ELF := $(CONSOLE_SMOKE)
+BOOT_USER_NAME := console-smoke.elf
+BOOT_LIMINE_CONF := limine-console.conf
 else
-$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, or runtime)
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, or console)
 endif
 
 LIMINE_VERSION := 12.5.2
@@ -123,7 +133,7 @@ KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCE
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
 
-.PHONY: all kernel user-elf user-runtime elf-audit runtime-audit run run-headless test clean distclean
+.PHONY: all kernel user-elf user-runtime user-console elf-audit runtime-audit console-audit run run-headless test clean distclean
 
 all: $(ISO)
 
@@ -133,11 +143,16 @@ user-elf: $(ELF_SMOKE)
 
 user-runtime: $(RUNTIME_SMOKE)
 
+user-console: $(CONSOLE_SMOKE)
+
 elf-audit: $(ELF_SMOKE)
 	sh ./tests/elf-build-audit.sh
 
 runtime-audit: $(RUNTIME_SMOKE)
 	sh ./tests/runtime-build-audit.sh
+
+console-audit: $(CONSOLE_SMOKE)
+	sh ./tests/console-build-audit.sh
 
 $(MODE_STAMP):
 	@mkdir -p $(BUILD_DIR)
@@ -193,6 +208,19 @@ $(RUNTIME_SMOKE): $(RUNTIME_OBJECTS) user/runtime-smoke/linker.ld
 	@mkdir -p $(dir $@)
 	$(LD) $(RUNTIME_LDFLAGS) $(RUNTIME_OBJECTS) -o $@
 
+$(CONSOLE_MAIN_OBJECT): user/console-smoke/main.c \
+	user/runtime/include/boring/runtime.h \
+	user/runtime/include/boring/syscall.h \
+	user/runtime/include/boring/memory.h \
+	user/runtime/include/boring/string.h \
+	kernel/include/boring/console_smoke.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(CONSOLE_SMOKE): $(CONSOLE_OBJECTS) user/runtime-smoke/linker.ld
+	@mkdir -p $(dir $@)
+	$(LD) $(RUNTIME_LDFLAGS) $(CONSOLE_OBJECTS) -o $@
+
 $(LIMINE_ARCHIVE):
 	@mkdir -p $(dir $@)
 	$(CURL) --fail --location --retry 3 --output $@ $(LIMINE_URL)
@@ -232,6 +260,7 @@ run-headless: run
 test:
 	sh ./tests/elf-build-audit.sh
 	sh ./tests/runtime-build-audit.sh
+	sh ./tests/console-build-audit.sh
 	./tests/boot-qemu.sh
 	./tests/exception-divide-qemu.sh
 	./tests/exception-pagefault-qemu.sh
@@ -239,6 +268,7 @@ test:
 	./tests/syscall-qemu.sh
 	sh ./tests/elf-qemu.sh
 	sh ./tests/runtime-qemu.sh
+	sh ./tests/console-qemu.sh
 
 clean:
 	rm -rf $(BUILD_DIR)

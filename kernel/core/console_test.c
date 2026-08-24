@@ -16,8 +16,8 @@
 #include <boring/syscall.h>
 #include <boring/vmm.h>
 
-#define CONSOLE_EXPECTED_MODULE_PATH "/boot/user/runtime-smoke.elf"
-#define CONSOLE_EXPECTED_MODULE_STRING "boringos-runtime-smoke"
+#define CONSOLE_EXPECTED_MODULE_PATH "/boot/user/console-smoke.elf"
+#define CONSOLE_EXPECTED_MODULE_STRING "boringos-console-smoke"
 #define CONSOLE_GP_VECTOR 13ULL
 #define CONSOLE_LOAD_EXPECTED 3U
 #define CONSOLE_EXPECTED_SYSCALLS 4ULL
@@ -237,6 +237,8 @@ void console_test_run(const struct boring_limine_module_response *modules) {
     struct process *process = NULL;
     struct ring3_user_mapping_info entry_info;
     uint64_t bss_initial = UINT64_MAX;
+    const uintptr_t unmapped_test_address =
+        (uintptr_t)(BORING_CONSOLE_SMOKE_STACK_TOP + BORING_ELF_PAGE_SIZE);
 
     console_state.process = NULL;
     console_state.armed = false;
@@ -314,6 +316,13 @@ void console_test_run(const struct boring_limine_module_response *modules) {
         !ring3_shared_higher_half_supervisor_only(&process->address_space)) {
         console_fail("process-activate");
     }
+
+    if (!syscall_console_safety_self_test(
+            (uintptr_t)BORING_CONSOLE_SMOKE_RODATA_VA,
+            unmapped_test_address)) {
+        console_fail("console-syscall-safety");
+    }
+    serial_write_string("  console-syscall-safety: PASS\n");
 
     console_state.armed = true;
     x86_64_enter_ring3(console_state.image.entry,
@@ -431,7 +440,9 @@ void console_test_handle_exception(const struct x86_64_trap_frame *frame) {
     }
     serial_write_string("  final-tss-rsp0: PASS\n");
 
-    serial_write_string("Console input byte: ");
+    serial_write_string("Console final fault RIP: ");
+    serial_write_hex_u64(frame->rip);
+    serial_write_string("\nConsole input byte: ");
     serial_write_u64(result.read_value);
     serial_write_string("\nConsole boring_main return: ");
     serial_write_u64(frame->r12);
@@ -449,6 +460,9 @@ void console_test_handle_exception(const struct x86_64_trap_frame *frame) {
         console_fail("cleanup");
     }
     serial_write_string("  cleanup: PASS\n");
+    serial_write_string("Console PMM free frames restored: ");
+    serial_write_u64(pmm_after.free_frames);
+    serial_write_string("\n");
 
     serial_write_string("BoringKernel userspace serial console test passed.\n");
     x86_64_halt_forever();

@@ -329,6 +329,35 @@ static uint64_t syscall_console_read(uint64_t user_buffer, uint64_t length) {
     return length;
 }
 
+bool syscall_console_safety_self_test(uintptr_t read_only_user_address,
+                                      uintptr_t unmapped_user_address) {
+    const uint64_t kernel_pointer = 0xffff800000000000ULL;
+    const uint64_t overflow_pointer = UINT64_MAX - 1ULL;
+    const uint64_t oversized =
+        (uint64_t)BORING_SYSCALL_CONSOLE_IO_MAX + 1ULL;
+    const uint64_t efault = syscall_error(BORING_SYSCALL_EFAULT);
+    const uint64_t einval = syscall_error(BORING_SYSCALL_EINVAL);
+
+    if (!syscall_initialized ||
+        (syscall_console_write(0ULL, 1ULL) != efault) ||
+        (syscall_console_write(kernel_pointer, 1ULL) != efault) ||
+        (syscall_console_write((uint64_t)unmapped_user_address, 1ULL) != efault) ||
+        (syscall_console_write(overflow_pointer, 4ULL) != efault) ||
+        (syscall_console_write((uint64_t)read_only_user_address, 0ULL) != einval) ||
+        (syscall_console_write((uint64_t)read_only_user_address, oversized) != einval) ||
+        (syscall_console_read(0ULL, 1ULL) != efault) ||
+        (syscall_console_read(kernel_pointer, 1ULL) != efault) ||
+        (syscall_console_read((uint64_t)unmapped_user_address, 1ULL) != efault) ||
+        (syscall_console_read((uint64_t)read_only_user_address, 1ULL) != efault) ||
+        (syscall_console_read(overflow_pointer, 4ULL) != efault) ||
+        (syscall_console_read((uint64_t)unmapped_user_address, 0ULL) != einval) ||
+        (syscall_console_read((uint64_t)unmapped_user_address, oversized) != einval)) {
+        return false;
+    }
+
+    return true;
+}
+
 static bool syscall_return_state_valid(struct x86_64_syscall_frame *frame) {
     struct process *process;
     struct descriptor_stats descriptors;
