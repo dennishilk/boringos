@@ -29,6 +29,11 @@ SHELL_MAIN_OBJECT := $(USER_BUILD_DIR)/boring-shell/main.o
 SHELL_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(SHELL_MAIN_OBJECT)
 SHELL_ELF := $(USER_BUILD_DIR)/boring-shell.elf
 ISO := $(BUILD_DIR)/boringos.iso
+MKBORINGFS := $(BUILD_DIR)/mkboringfs
+MKBORINGFS_VERIFY := $(BUILD_DIR)/mkboringfs-test/mkboringfs-verify
+BORINGFS_HEADER := libs/boringfs/include/boring/boringfs.h
+BORINGFS_CODEC := libs/boringfs/codec.c
+BORINGFS_VALIDATE := libs/boringfs/validate.c
 
 CC = gcc
 LD = ld
@@ -37,6 +42,11 @@ QEMU = qemu-system-x86_64
 QEMU_CPU ?= qemu64,apic=off
 CURL = curl
 XORRISO = xorriso
+
+HOST_CPPFLAGS := -Ilibs/boringfs/include
+HOST_CFLAGS := -std=c11 -fno-builtin -fno-tree-loop-distribute-patterns \
+	-Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+	-Wstrict-prototypes -Wmissing-prototypes
 
 BOOT_USER_ELF := $(ELF_SMOKE)
 BOOT_USER_NAME := elf-smoke.elf
@@ -170,7 +180,7 @@ KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCE
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
 
-.PHONY: all kernel user-elf user-runtime user-console user-init user-shell elf-audit runtime-audit console-audit init-audit shell-audit boringfs-host-test run run-headless test clean distclean
+.PHONY: all kernel user-elf user-runtime user-console user-init user-shell elf-audit runtime-audit console-audit init-audit shell-audit boringfs-host-test mkboringfs mkboringfs-test run run-headless test clean distclean
 
 all: $(ISO)
 
@@ -203,6 +213,21 @@ shell-audit: $(SHELL_ELF)
 
 boringfs-host-test:
 	sh ./tests/boringfs-host-test.sh
+
+mkboringfs: $(MKBORINGFS)
+
+mkboringfs-test: $(MKBORINGFS) $(MKBORINGFS_VERIFY)
+	sh ./tests/mkboringfs-test.sh
+
+$(MKBORINGFS): tools/mkboringfs.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) $(BORINGFS_HEADER)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) \
+		tools/mkboringfs.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) -o $@
+
+$(MKBORINGFS_VERIFY): tests/mkboringfs-verify.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) $(BORINGFS_HEADER)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) \
+		tests/mkboringfs-verify.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) -o $@
 
 $(MODE_STAMP):
 	@mkdir -p $(BUILD_DIR)
@@ -364,6 +389,7 @@ test:
 	sh ./tests/shell-build-audit.sh
 	sh ./tests/shell-qemu.sh
 	sh ./tests/boringfs-host-test.sh
+	$(MAKE) mkboringfs-test
 
 clean:
 	rm -rf $(BUILD_DIR)
