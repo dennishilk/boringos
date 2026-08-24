@@ -83,3 +83,6 @@ jobs:
 
       - name: BoringFS v0 codec and structural validator
         run: make boringfs-host-test
+
+      - name: Deterministic mkboringfs formatter
+        run: make mkboringfs-test
