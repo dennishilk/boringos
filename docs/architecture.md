@@ -8,11 +8,11 @@ These decisions remain deliberately narrow and provisional. This document descri
 - **Reference machine:** QEMU `q35`, one `qemu64,apic=off` CPU for the current legacy PIC/PIT bootstrap path.
 - **Bootloader:** Limine 12.5.2.
 - **Kernel:** freestanding, statically linked ELF64, primarily C with small isolated architecture assembly.
-- **Privilege:** normal kernel execution remains CPL0; one dedicated acceptance path performs a real CPL0 -> CPL3 transition and returns to CPL0 through a deliberate CPU exception, while a separate syscall acceptance performs real CPL3 -> CPL0 `SYSCALL` entry and `SYSRETQ` return to CPL3. There is still no general userspace runtime or scheduled userspace task model.
+- **Privilege:** normal kernel execution remains CPL0; dedicated acceptance paths perform real CPL0 -> CPL3 transitions, real CPL3 -> CPL0 `SYSCALL` entry with `SYSRETQ` return, and final CPL3 -> CPL0 exception transitions through TSS.RSP0. A minimal freestanding C runtime and isolated serial-console client now execute at CPL3, but there is still no scheduled or long-lived general userspace task model.
 - **Bootstrap address space:** PID 0 adopts the active Limine-created four-level root.
 - **Additional process address spaces:** PMM-backed independent roots with private lower-half mappings and shared higher-half kernel mappings.
 
-The current normal boot path proves PMM, selected bootstrap-VMM mappings, the bounded kernel heap, exception infrastructure, repeated hardware PIT/PIC interrupts, cooperative kernel contexts, timer-driven preemptive kernel scheduling, process identity, real CR3 switching, and independent process address spaces. A separate Ring 3 test mode proves the descriptor/TSS state, user-accessible lower-half mappings, real `iretq` entry to CPL3, a real privileged-instruction #GP, preservation of the hardware user return state, and CPU stack switching through TSS.RSP0. A separate syscall mode proves native x86_64 `SYSCALL`/`SYSRETQ`, trusted syscall-stack entry, validated user-memory copying, and multiple CPL3 round trips. A separate ELF mode proves a validated fixed-address ELF64 x86_64 `ET_EXEC` obtained from a Limine boot module, copied into PMM-owned pages in an independent process address space, entered at its ELF entry point in CPL3, and continued through the existing syscall boundary before a deliberate final CPL3 #GP.
+The current normal boot path proves PMM, selected bootstrap-VMM mappings, the bounded kernel heap, exception infrastructure, repeated hardware PIT/PIC interrupts, cooperative kernel contexts, timer-driven preemptive kernel scheduling, process identity, real CR3 switching, and independent process address spaces. A separate Ring 3 test mode proves the descriptor/TSS state, user-accessible lower-half mappings, real `iretq` entry to CPL3, a real privileged-instruction #GP, preservation of the hardware user return state, and CPU stack switching through TSS.RSP0. A separate syscall mode proves native x86_64 `SYSCALL`/`SYSRETQ`, trusted syscall-stack entry, validated user-memory copying, and multiple CPL3 round trips. A separate ELF mode proves a validated fixed-address ELF64 x86_64 `ET_EXEC` obtained from a Limine boot module, copied into PMM-owned pages in an independent process address space, entered at its ELF entry point in CPL3, and continued through the existing syscall boundary before a deliberate final CPL3 #GP. A native-runtime mode proves a freestanding compiled C program linked only against the BoringOS-owned minimal runtime. A distinct console mode extends that same runtime with bounded bidirectional COM1 I/O while preserving controlled userspace memory boundaries.
 
 ## Physical memory
 
@@ -75,7 +75,7 @@ Sharing the full current higher half preserves the mappings used by kernel code/
 
 The Ring 3 mapping acceptance adds an explicit effective-permission invariant. `address_space_kernel_mappings_valid()` first requires shared PML4 entries 256-511 in the process root to remain bit-for-bit identical to the bootstrap root, proving the user mapper did not mutate the shared root. Because x86_64 user access requires `U/S=1` on every paging level, `ring3_shared_higher_half_supervisor_only()` then walks each present shared translation path whose ancestors remain user-enabled and rejects any 1-GiB, 2-MiB, or 4-KiB leaf that would be reachable with `U/S=1` at every level. An inherited `U/S=1` on an upper non-leaf entry is therefore not misreported as user access when a lower level still enforces supervisor-only access. User mapping creation remains restricted to canonical lower-half addresses below `ADDRESS_SPACE_SHARED_PML4_START`, and the effective higher-half check runs both after user mappings are installed and again after the test process root is activated.
 
-The syscall acceptance reuses this effective-permission rule and additionally validates user ranges page by page before copying through trusted HHDM aliases.
+The syscall and console acceptances reuse this effective-permission rule and validate user ranges page by page before controlled kernel copies through trusted HHDM aliases.
 
 ### Ownership rule
 
@@ -296,24 +296,26 @@ RCX/R11 = architectural clobbers
 
 The entry/return path preserves the user callee-saved registers `RBX`, `RBP`, and `R12`-`R15`. This convention is explicitly provisional and is not a stable public userspace ABI.
 
-Only two syscalls exist:
+Exactly four provisional syscall numbers are currently dispatched:
 
 ```text
 0  BORING_SYS_GETPID
 1  BORING_SYS_DEBUG_WRITE
+2  BORING_SYS_CONSOLE_WRITE
+3  BORING_SYS_CONSOLE_READ
 ```
 
-`GETPID` returns the actual current process PID from `process_current()`. `DEBUG_WRITE` is a temporary bounded debug call, not POSIX `write()` and not a file-descriptor API. It accepts 1..64 bytes.
+`GETPID` returns the actual current process PID from `process_current()`. `DEBUG_WRITE` keeps its original temporary bounded debug semantics and is not POSIX `write()` or a file-descriptor API. `CONSOLE_WRITE` and `CONSOLE_READ` are the only Milestone-13 additions. The console transfer bound is 1..64 bytes per call.
 
-The narrow `copy_from_user` helper does not dereference a raw userspace pointer directly. It validates range overflow and canonical lower-half bounds, walks the active process page tables, requires Present + effective U/S permission at every level, rejects unsupported large-page paths, resolves each physical page through the trusted HHDM alias, and copies page by page into kernel-owned memory before the serial layer sees the bytes. Invalid/unmapped/non-user ranges return a negative BoringOS-specific `EFAULT`; invalid lengths return negative `EINVAL`; unknown syscall numbers return negative `ENOSYS`.
+The narrow `copy_from_user` helper does not dereference a raw userspace pointer directly. It validates range overflow and canonical lower-half bounds, walks the active process page tables, requires Present + effective U/S permission at every level, rejects unsupported large-page paths, resolves each physical page through the trusted HHDM alias, and copies page by page into kernel-owned memory before the serial layer sees the bytes. `CONSOLE_WRITE` emits to COM1 only after the entire bounded kernel copy succeeds. For input, the kernel first validates the complete destination range with writable user permissions before polling COM1, then copies the received bytes back through the controlled `copy_to_user` path. Invalid/unmapped/non-user ranges return a negative BoringOS-specific `EFAULT`; invalid lengths return negative `EINVAL`; unknown syscall numbers return negative `ENOSYS`.
 
 Before `SYSRETQ`, the kernel validates the expected GDT selector relationship, canonical lower-half user RIP, effectively user-mapped return RIP, nonzero canonical lower-half writable user RSP, and a live current non-bootstrap process/address space. Return RFLAGS are sanitized to a small allowed arithmetic-status set plus mandatory bit 1. Invalid return state causes a controlled fatal diagnostic rather than an unchecked `SYSRETQ`.
 
-The dedicated QEMU payload performs seven real `SYSCALL` instructions: valid `GETPID`, valid `DEBUG_WRITE`, unmapped-user-pointer rejection, higher-half-pointer rejection, overflowing-range rejection, oversized-length rejection, and unknown-syscall rejection. It proves repeated `SYSRETQ` continuation in CPL3, restores the original user RSP, preserves callee-saved registers, and finally executes privileged `cli`. That last real #GP still reaches the independent TSS.RSP0 exception stack, proving the syscall stack has not replaced the exception-entry model.
+The dedicated original syscall QEMU payload still performs seven real `SYSCALL` instructions: valid `GETPID`, valid `DEBUG_WRITE`, unmapped-user-pointer rejection, higher-half-pointer rejection, overflowing-range rejection, oversized-length rejection, and unknown-syscall rejection. It proves repeated `SYSRETQ` continuation in CPL3, restores the original user RSP, preserves callee-saved registers, and finally executes privileged `cli`. That last real #GP still reaches the independent TSS.RSP0 exception stack, proving the syscall stack has not replaced the exception-entry model. The separate console acceptance does not weaken or replace this gate.
 
-This bootstrap entry state is single-CPU and is not scheduler-integrated for userspace. There are no per-task syscall stacks, per-CPU syscall scratch structures, asynchronous user-mode timer preemption, general process-kill/recovery policy, `copy_to_user`, libc/CRT, or stable ABI/versioning guarantees.
+This bootstrap entry state is single-CPU and is not scheduler-integrated for userspace. There are no per-task syscall stacks, per-CPU syscall scratch structures, asynchronous user-mode timer preemption, general process-kill/recovery policy, libc/CRT, or stable ABI/versioning guarantees. The current `copy_from_user`/`copy_to_user` routines remain narrow syscall-boundary helpers rather than a general userspace-memory subsystem.
 
-See [`syscalls.md`](syscalls.md) for the exact implemented boundary, measured acceptance values, and current limitations.
+See [`syscalls.md`](syscalls.md) for the original syscall-boundary acceptance and [`userspace-console.md`](userspace-console.md) for the exact Milestone-13 console contract and limitations.
 
 ## Fixed-address ELF64 userspace bootstrap
 
@@ -323,9 +325,23 @@ The accepted subset is little-endian x86_64 `ET_EXEC` with page-aligned fixed-ad
 
 The existing lower-half user mapper now expresses and verifies executable permission. RX executable mappings remain non-writable; non-executable read-only, writable and stack mappings carry the x86_64 XD bit. BoringKernel checks CPU NX support and enables only `IA32_EFER.NXE` with read-modify-write verification before relying on NX. The established effective higher-half audit remains in force, so shared kernel mappings stay supervisor-only.
 
-The acceptance creates a real process, activates its independent CR3, enters the ELF header entry at CPL3 with a separate one-page RW+NX user stack, proves BSS zero/write behavior from the loaded executable, reuses only the already implemented `GETPID` and `DEBUG_WRITE` syscalls, returns to the ELF through `SYSRETQ`, and finally executes privileged `CLI`. That final instruction raises a real #GP from CPL3 through the existing TSS.RSP0 exception path. The final fault is an acceptance endpoint, not a new process-exit mechanism.
+The ELF acceptance creates a real process, activates its independent CR3, enters the ELF header entry at CPL3 with a separate one-page RW+NX user stack, proves BSS zero/write behavior from the loaded executable, reuses only the already implemented `GETPID` and `DEBUG_WRITE` syscalls, returns to the ELF through `SYSRETQ`, and finally executes privileged `CLI`. That final instruction raises a real #GP from CPL3 through the existing TSS.RSP0 exception path. The final fault is an acceptance endpoint, not a new process-exit mechanism.
 
 See [`elf-userspace.md`](elf-userspace.md) for the exact supported subset, validation limits, permissions, ownership rules, measured ELF layout, malformed-image tests and known limitations.
+
+## Minimal native C userspace runtime
+
+The merged native-runtime milestone links a freestanding BoringOS-owned `_start` with a compiled C `boring_main()` and small memory/string/syscall helpers. The runtime is built with `-ffreestanding`, no host libc/CRT, no dynamic loader, no PIE, no runtime relocations, and no host startup objects. Its dedicated QEMU acceptance proves initialized data, loader-zeroed BSS, a real local userspace stack, the BoringOS memory/string helpers, `GETPID`, `DEBUG_WRITE`, repeated `SYSRETQ` continuation, a normal `boring_main()` return value of 42, and the same final CPL3 `CLI` -> #GP -> TSS.RSP0 proof.
+
+Milestone 13 reuses these runtime objects rather than forking a second runtime. The separate `console-smoke.elf` supplies only its own compiled `boring_main()` and links the same `_start`, syscall, memory, and string objects.
+
+## Early userspace serial console
+
+The current console acceptance adds only provisional `CONSOLE_WRITE` and `CONSOLE_READ`. Output crosses CPL3 -> `SYSCALL` -> complete controlled `copy_from_user` -> kernel COM1 TX. Input validates the complete writable CPL3 destination before consuming COM1 RX, collects bytes in a bounded kernel buffer, copies them through `copy_to_user`, and resumes the same C program through `SYSRETQ`.
+
+The QEMU gate uses a serial named pipe and injects `K` only after the compiled C client has emitted `console write from BoringOS userspace`. C receives ASCII 75 into a local stack variable, echoes `K`, and returns 43 before the final deliberate CPL3 #GP. RX is blocking and polled. This is not a TTY, line discipline, file descriptor, stdin/stdout abstraction, scheduler-aware sleep/wakeup mechanism, interrupt-driven UART receive path, or general device model.
+
+See [`userspace-console.md`](userspace-console.md) for the exact syscall numbers, 64-byte bound, memory-safety ordering, artifact constraints, named-pipe acceptance sequence, and known limitations.
 
 ## Complete normalized x86_64 trap frame
 
@@ -424,7 +440,7 @@ Task B executes in B's process address space
 
 The CR3 switch happens while executing shared higher-half kernel code and stack mappings. `irq.c` still sends EOI before assembly changes to the target task stack, preserving the previously verified acknowledgement ordering.
 
-Existing PID-0 preemption regression tasks still use the same bootstrap root and therefore do not cause unnecessary CR3 reloads. The Ring 3 and syscall acceptances do not alter this scheduler or place CPL3 code under timer preemption.
+Existing PID-0 preemption regression tasks still use the same bootstrap root and therefore do not cause unnecessary CR3 reloads. The Ring 3, syscall, ELF, runtime, and console acceptances do not alter this scheduler or place CPL3 code under timer preemption.
 
 ## Fresh tasks and bootstrap restoration
 
@@ -494,37 +510,38 @@ Shared higher-half kernel page tables remain alive because they were never recor
 
 PMM bookkeeping accounts for legitimate retained shared kernel-heap growth while requiring all process-specific page tables and data frames to be reclaimed.
 
-The dedicated Ring 3 test intentionally ends in a controlled halt immediately after validating the fatal #GP privilege-transition path, so it does not exercise normal post-test process destruction. The syscall acceptance likewise remains an isolated acceptance mode rather than a scheduler-managed userspace lifecycle. These are explicit limitations, not hidden userspace lifecycle implementations. The ELF acceptance performs its explicit image/process cleanup only after the final CPL3 fault has transferred control through the trusted exception path and the test has restored the bootstrap process context.
+The dedicated Ring 3 test intentionally ends in a controlled halt immediately after validating the fatal #GP privilege-transition path, so it does not exercise normal post-test process destruction. The syscall acceptance likewise remains an isolated acceptance mode rather than a scheduler-managed userspace lifecycle. The ELF, native-runtime, and console acceptances perform explicit image/process cleanup only after their final CPL3 fault has transferred control through the trusted exception path and the test has restored the bootstrap process context. These are explicit bootstrap acceptance lifecycles, not a general process-exit implementation.
 
 ## C / assembly boundary
 
-High-level policy remains in C: memory ownership, address-space policy, process identity, user-page validation, descriptor/TSS construction, exception diagnostics, CPL3-frame validation, syscall dispatch and user-memory validation, `SYSRETQ` return-state policy, ELF validation/loading/ownership policy, PIC/timer dispatch, cooperative selection, preemptive round robin, task/process association, cleanup, and acceptance invariants.
+High-level policy remains in C: memory ownership, address-space policy, process identity, user-page validation, descriptor/TSS construction, exception diagnostics, CPL3-frame validation, syscall dispatch and user-memory validation/copy policy, console validation-before-I/O ordering, `SYSRETQ` return-state policy, ELF validation/loading/ownership policy, PIC/timer dispatch, cooperative selection, preemptive round robin, task/process association, cleanup, and acceptance invariants.
 
-Architecture assembly remains isolated to exception/IRQ entry and restore mechanics, GDT/segment/TR CPU instructions, `iretq`, native `SYSCALL` entry and `SYSRETQ` return mechanics, minimal cooperative context save/restore, the position-independent Ring 3/syscall test payloads, the freestanding assembly-only ELF smoke executable, deliberate fault triggers, register probes, and CPU instructions that C cannot express directly. CR3 read/write, MSR read/write, CPUID facility probing, NX enablement verification, and `invlpg` remain tiny isolated architecture-specific operations.
+Architecture assembly remains isolated to exception/IRQ entry and restore mechanics, GDT/segment/TR CPU instructions, `iretq`, native `SYSCALL` entry and `SYSRETQ` return mechanics, minimal cooperative context save/restore, the position-independent Ring 3/syscall test payloads, the freestanding assembly-only ELF smoke executable, the minimal runtime `_start`, deliberate fault triggers, register probes, and CPU instructions that C cannot express directly. CR3 read/write, MSR read/write, CPUID facility probing, NX enablement verification, port I/O, and `invlpg` remain tiny isolated architecture-specific operations. COM1 port I/O remains kernel-only.
 
 ## Current limitations
 
 BoringKernel still does **not** provide:
 
-- a general or long-lived userspace task model beyond the controlled Ring 3/syscall/ELF acceptance paths;
+- a general or long-lived userspace task model beyond the controlled Ring 3/syscall/ELF/runtime/console acceptance paths;
 - user-task scheduling or scheduler-managed per-task TSS.RSP0 stacks;
 - per-task syscall stacks or per-CPU syscall entry/scratch state;
 - SMP-safe syscall entry or asynchronous user-mode timer preemption;
 - a stable/public syscall ABI or syscall versioning contract;
-- broad user-memory APIs such as `copy_to_user`;
-- a general ELF program loader beyond the bounded fixed-address `ET_EXEC` boot-module subset, dynamic linking, PIE/`ET_DYN`, runtime relocations, or a userspace runtime;
+- broad general-purpose user-memory APIs beyond the current narrow syscall-boundary copy helpers;
+- a general ELF program loader beyond the bounded fixed-address `ET_EXEC` boot-module subset, dynamic linking, PIE/`ET_DYN`, or runtime relocations;
 - libc/CRT, process termination/recovery policy for arbitrary userspace, or a general userspace lifecycle;
 - fork, exec, wait, signals, copy-on-write, or PID namespaces;
 - file descriptors, credentials, process trees, sessions, or process groups;
+- `stdin`, `stdout`, `stderr`, a TTY subsystem, line discipline, or terminal editing;
+- interrupt-driven UART RX, scheduler-aware I/O sleeping, wait queues, or wakeups;
 - PCID, demand paging, or swap;
 - FPU/SIMD task/process state;
-- sleeping, blocked I/O, wait queues, or wakeups;
 - mutexes, semaphores, or condition variables;
 - priorities or realtime scheduling;
 - SMP or per-CPU scheduler/process/TSS state;
 - LAPIC, IOAPIC, APIC timer, HPET, or ACPI/MADT;
 - a Double Fault IST/emergency stack;
-- VFS, RAMFS, BoringFS implementation, or storage drivers;
-- input, networking, USB, audio, graphics, or native BoringWM.
+- VFS, RAMFS, BoringFS implementation, path lookup, mounts, block devices, or storage drivers;
+- networking, USB, audio, graphics, keyboard/mouse input, or native BoringWM.
 
-BoringKernel 0.0.12-dev proves a **real validated fixed-address ELF64 x86_64 userspace executable loaded from a Limine boot module into PMM-owned pages in an independent process address space, with W^X/NX enforcement, BSS zeroing, CPL3 ELF-entry execution, existing `GETPID`/`DEBUG_WRITE` syscall round trips, checked `SYSRETQ` continuation, and a final privileged `CLI` #GP through TSS.RSP0**, while preserving the complete earlier kernel regression surface. It still does not provide libc/CRT/runtime, dynamic ELF features, VFS, or scheduler-managed userspace execution.
+BoringKernel 0.0.14-dev proves a **real compiled freestanding C userspace path with a BoringOS-owned minimal runtime and bounded bidirectional serial-console I/O: output crosses CPL3 -> `SYSCALL` -> validated kernel copy -> COM1, real COM1 input is accepted only after complete writable-userspace validation and returns through `copy_to_user` -> `SYSRETQ` into the same C program, which observes and echoes the byte before a final CPL3 `CLI` #GP through TSS.RSP0 and exact image/process cleanup**. It preserves the earlier kernel, Ring 3, syscall, ELF-loader, and native-runtime acceptance surfaces while still providing no VFS, file descriptors, shell/init, TTY model, dynamic linking, or scheduler-managed userspace execution.

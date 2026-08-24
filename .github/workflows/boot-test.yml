@@ -24,6 +24,9 @@ jobs:
       - name: Audit generated native C runtime artifact
         run: sh ./tests/runtime-build-audit.sh
 
+      - name: Audit generated console userspace artifact
+        run: sh ./tests/console-build-audit.sh
+
       - name: Normal boot, hardware IRQ, cooperative and preemptive scheduling
         run: ./tests/boot-qemu.sh
 
@@ -44,3 +47,6 @@ jobs:
 
       - name: Real native C userspace runtime execution
         run: sh ./tests/runtime-qemu.sh
+
+      - name: Real userspace serial console I/O
+        run: sh ./tests/console-qemu.sh

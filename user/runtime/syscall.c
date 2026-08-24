@@ -29,3 +29,31 @@ long boring_debug_write(const void *buffer, size_t length) {
 
     return result;
 }
+
+long boring_console_write(const void *buffer, size_t length) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_CONSOLE_WRITE),
+          "D"(buffer),
+          "S"(length)
+        : "rcx", "r11", "cc", "memory");
+
+    return result;
+}
+
+long boring_console_read(void *buffer, size_t length) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_CONSOLE_READ),
+          "D"(buffer),
+          "S"(length)
+        : "rcx", "r11", "cc", "memory");
+
+    return result;
+}
