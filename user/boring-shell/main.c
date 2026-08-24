@@ -39,7 +39,7 @@ static bool shell_write(const char *buffer, size_t length) {
 }
 
 static bool shell_write_text(const char *text) {
-    return (text != NULL) && shell_write(text, strlen(text));
+    return (text != NULL) && shell_write(text, boring_strlen(text));
 }
 
 static bool shell_is_space(char character) {
@@ -273,7 +273,7 @@ static bool shell_command_ls(const char *argument) {
     if ((path == NULL) || (path[0] == '\0')) {
         path = dot;
     }
-    path_length = strlen(path);
+    path_length = boring_strlen(path);
     for (;;) {
         struct boring_dirent entry;
         const long result = boring_fs_readdir(path, path_length, index, &entry);
@@ -303,7 +303,7 @@ static bool shell_command_mkdir(const char *argument) {
     if ((argument == NULL) || (argument[0] == '\0')) {
         return shell_write_text("mkdir: usage: mkdir <name>\n");
     }
-    result = boring_fs_mkdir(argument, strlen(argument));
+    result = boring_fs_mkdir(argument, boring_strlen(argument));
     if (result == 0L) {
         return true;
     }
@@ -316,7 +316,7 @@ static bool shell_command_rmdir(const char *argument) {
     if ((argument == NULL) || (argument[0] == '\0')) {
         return shell_write_text("rmdir: usage: rmdir <name>\n");
     }
-    result = boring_fs_rmdir(argument, strlen(argument));
+    result = boring_fs_rmdir(argument, boring_strlen(argument));
     if (result == 0L) {
         return true;
     }
@@ -329,7 +329,7 @@ static bool shell_command_cd(const char *argument) {
     if ((argument == NULL) || (argument[0] == '\0')) {
         return shell_write_text("cd: usage: cd <path>\n");
     }
-    result = boring_fs_chdir(argument, strlen(argument));
+    result = boring_fs_chdir(argument, boring_strlen(argument));
     if (result == 0L) {
         return true;
     }
