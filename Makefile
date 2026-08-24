@@ -66,8 +66,11 @@ TEST_HARNESS_C := kernel/core/console_test.c kernel/core/console_test_adapter.c
 BOOT_USER_ELF := $(CONSOLE_SMOKE)
 BOOT_USER_NAME := console-smoke.elf
 BOOT_LIMINE_CONF := limine-console.conf
+else ifeq ($(TEST_MODE),vfs)
+TEST_MODE_VALUE := 7
+TEST_HARNESS_C := kernel/core/vfs_test.c
 else
-$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, or console)
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, or vfs)
 endif
 
 LIMINE_VERSION := 12.5.2
@@ -270,6 +273,7 @@ test:
 	sh ./tests/elf-qemu.sh
 	sh ./tests/runtime-qemu.sh
 	sh ./tests/console-qemu.sh
+	sh ./tests/vfs-qemu.sh
 
 clean:
 	rm -rf $(BUILD_DIR)
