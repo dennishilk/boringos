@@ -269,7 +269,7 @@ Implemented, merged and accepted on `main` in QEMU:
 - map that same VA to distinct PMM data frames in PID 1 and PID 2;
 - prove same-VA/different-PA translation;
 - activate each real root and dereference the test VA through the CPU rather than through an HHDM physical alias;
-- write/retain `0xAAAAAAAAAAAAAAAA` in PID 1 and `0xBBBBBBBBBBBBBBBB` at the same VA;
+- write/retain `0xAAAAAAAAAAAAAAAA` in PID 1 and `0xBBBBBBBBBBBBBBBB` in PID 2;
 - extend tasks with an owning-process pointer;
 - make the scheduler activate the selected task's process root before returning the selected interrupt frame;
 - preserve PIC EOI before the assembly task-stack/frame switch;
