@@ -103,6 +103,7 @@ KERNEL_C_SOURCES := \
 	kernel/core/pmm.c \
 	kernel/core/heap.c \
 	kernel/core/process.c \
+	kernel/core/vfs.c \
 	kernel/core/task.c \
 	kernel/core/preemption_test.c \
 	kernel/core/process_test.c \
