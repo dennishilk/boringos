@@ -69,8 +69,11 @@ BOOT_LIMINE_CONF := limine-console.conf
 else ifeq ($(TEST_MODE),vfs)
 TEST_MODE_VALUE := 7
 TEST_HARNESS_C := kernel/core/vfs_test.c
+else ifeq ($(TEST_MODE),ramfs)
+TEST_MODE_VALUE := 8
+TEST_HARNESS_C := kernel/core/ramfs_test.c
 else
-$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, or vfs)
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, or ramfs)
 endif
 
 LIMINE_VERSION := 12.5.2
@@ -107,6 +110,7 @@ KERNEL_C_SOURCES := \
 	kernel/core/heap.c \
 	kernel/core/process.c \
 	kernel/core/vfs.c \
+	kernel/core/ramfs.c \
 	kernel/core/task.c \
 	kernel/core/preemption_test.c \
 	kernel/core/process_test.c \
@@ -274,6 +278,7 @@ test:
 	sh ./tests/runtime-qemu.sh
 	sh ./tests/console-qemu.sh
 	sh ./tests/vfs-qemu.sh
+	sh ./tests/ramfs-qemu.sh
 
 clean:
 	rm -rf $(BUILD_DIR)
