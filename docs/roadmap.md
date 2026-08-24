@@ -71,7 +71,7 @@ hardware storage driver (future Milestone 22)
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.21-dev
+BoringKernel 0.0.22-dev
 ```
 
 The current syscall ABI is exactly:
