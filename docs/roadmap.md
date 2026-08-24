@@ -55,13 +55,23 @@ read-only shared structural validator
     ↓
 deterministic mkboringfs formatter
     ↓
-read-only boringfsck inspector (Milestone 20 in progress)
+read-only boringfsck inspector (Milestone 20 complete)
+
+kernel storage path:
+
+filesystem / storage consumer (future)
+    ↓
+generic bounded block-device layer (Milestone 21 in progress)
+    ↓
+backend operation table
+    ↓
+hardware storage driver (future Milestone 22)
 ```
 
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.20-dev
+BoringKernel 0.0.21-dev
 ```
 
 The current syscall ABI is exactly:
@@ -78,7 +88,7 @@ The current syscall ABI is exactly:
 8 FS_CHDIR
 ```
 
-There is still no numeric file-descriptor table, no stdin/stdout/stderr abstraction, no userspace file-content syscall API, no executable loading from VFS/RAMFS, no kernel BoringFS backend or block-storage implementation, no networking, no display/input stack, no BoringWM integration, no APIC migration and no SMP.
+There is still no numeric file-descriptor table, no stdin/stdout/stderr abstraction, no userspace file-content syscall API, no executable loading from VFS/RAMFS, no kernel BoringFS backend, no hardware storage driver, no networking, no display/input stack, no BoringWM integration, no APIC migration and no SMP.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -363,9 +373,9 @@ success: NOT CLAIMED
 
 Milestone 19 did not add `boringfsck`, repair, kernel BoringFS, block devices, storage or a persistent root.
 
-## Milestone 20: `boringfsck` — CURRENT / IN PROGRESS
+## Milestone 20: `boringfsck` — COMPLETE
 
-Milestone 20 adds the first real read-only host checker around the same shared BoringFS v0 codec and structural validator. Its implementation target is:
+Milestone 20 adds the first real read-only host checker around the same shared BoringFS v0 codec and structural validator. The accepted path is:
 
 ```text
 mkboringfs
@@ -379,15 +389,43 @@ shared structural validator
 VALID or precise CORRUPT result
 ```
 
-The checker must distinguish corruption from host-I/O/resource failures, expose shared validator locations when present, prove non-mutation of valid and corrupt images, and remain strictly inspection-only. No repair mode is part of Milestone 20.
+The checker distinguishes corruption from host-I/O/resource failures, exposes shared validator locations when present, proves non-mutation of valid and corrupt images, and remains strictly inspection-only. No repair mode is part of Milestone 20.
+
+Acceptance record:
+
+```text
+final PR: #30
+final closeout head: 64fba49f8a300b12cde53e52d770d7275476ed4a
+final PR CI: Run #179 / ID 32750652939 / SUCCESS
+merged main: 7e64ba1cc7f1a99210cf0ad89330ece1a946ae73
+merged-main push CI: NOT OBSERVABLE — SUCCESS NOT CLAIMED
+```
+
+Milestone 20 did not add a kernel BoringFS mount, block devices, storage, repair, a new syscall or an FD layer.
 
 ---
 
 # Stage 8 — persistent block I/O
 
-## Milestone 21: generic block-device layer — PLANNED
+## Milestone 21: generic block-device layer — CURRENT / IN PROGRESS
 
-Create a filesystem-independent bounded block-device interface. Milestone 21 has not begun.
+Milestone 21 introduces a filesystem-independent bounded block-device interface with explicit logical geometry, a fixed registry, synchronous full-transfer read/write callbacks, overflow-safe range validation, read-only enforcement above the backend and explicit result codes.
+
+The implementation is accepted only through the isolated `block` QEMU test mode, whose RAM-backed devices are test-only acceptance hardware. No hardware storage device is attached to QEMU and no test RAM device is registered during normal boot.
+
+The architectural boundary is:
+
+```text
+future filesystem / storage consumer
+              ↓
+      block_device_read/write
+              ↓
+       generic block layer
+              ↓
+     backend operation table
+              ↓
+future hardware driver (Milestone 22)
+```
 
 ## Milestone 22: QEMU VirtIO-block driver — PLANNED
 
@@ -433,20 +471,20 @@ Networking remains unrelated and deferred.
 
 # Exact current implementation milestone
 
-## Milestone 20 — read-only `boringfsck`
+## Milestone 21 — generic block-device layer
 
-The current implementation item is **Milestone 20**. It is **CURRENT / IN PROGRESS** in this reconciliation.
+The current implementation item is **Milestone 21**. It is **CURRENT / IN PROGRESS** in this reconciliation.
 
 Its architectural boundary is only:
 
 ```text
-existing BoringFS v0 bytes
-    ↓
-shared codec
-    ↓
-shared structural validator
-    ↓
-read-only boringfsck presentation / exit status
+future filesystem / storage consumer
+              ↓
+      generic block-device API
+              ↓
+    bounded validation / registry
+              ↓
+     backend operation table
 ```
 
-Milestone 20 must not repair images, mount BoringFS in the kernel, add block devices/storage, alter the syscall ABI, introduce an FD layer or begin Milestone 21.
+The M21 acceptance RAM backend exists only under the isolated kernel test mode. Milestone 21 must not add VirtIO or PCI storage, attach a QEMU disk, parse partitions, mount BoringFS in the kernel, alter VFS/RAMFS, change the syscall ABI, introduce an FD layer or begin Milestone 22.

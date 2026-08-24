@@ -108,8 +108,11 @@ BOOT_USER_NAME := boring-init.elf
 BOOT_EXTRA_USER_ELF := $(SHELL_ELF)
 BOOT_EXTRA_USER_NAME := boring-shell.elf
 BOOT_LIMINE_CONF := limine-shell.conf
+else ifeq ($(TEST_MODE),block)
+TEST_MODE_VALUE := 11
+TEST_HARNESS_C := kernel/core/block_device_test.c
 else
-$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, or shell)
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, or block)
 endif
 
 LIMINE_VERSION := 12.5.2
@@ -151,6 +154,7 @@ KERNEL_C_SOURCES := \
 	kernel/core/process.c \
 	kernel/core/vfs.c \
 	kernel/core/ramfs.c \
+	kernel/core/block_device.c \
 	kernel/core/task.c \
 	kernel/core/preemption_test.c \
 	kernel/core/process_test.c \
@@ -399,6 +403,7 @@ test:
 	sh ./tests/init-qemu.sh
 	sh ./tests/shell-build-audit.sh
 	sh ./tests/shell-qemu.sh
+	sh ./tests/block-device-qemu.sh
 	sh ./tests/boringfs-host-test.sh
 	$(MAKE) mkboringfs-test
 	$(MAKE) boringfsck-test
