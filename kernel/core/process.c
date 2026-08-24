@@ -20,6 +20,9 @@ static void process_clear(struct process *process) {
         return;
     }
 
+    if (process->cwd_valid) {
+        (void)vfs_path_release(&process->cwd);
+    }
     process->pid = 0ULL;
     process->address_space.root_physical = 0ULL;
     process->address_space.owned_table_count = 0ULL;
@@ -30,7 +33,10 @@ static void process_clear(struct process *process) {
          ++index) {
         process->address_space.owned_table_frames[index] = 0ULL;
     }
+    process->cwd.mount = NULL;
+    process->cwd.node = NULL;
     process->state = PROCESS_FINISHED;
+    process->cwd_valid = false;
     process->slot_used = false;
 }
 
@@ -47,6 +53,12 @@ static bool process_is_regular(const struct process *process) {
         }
     }
     return false;
+}
+
+static bool process_is_known_alive(const struct process *process) {
+    return (process != NULL) && process->slot_used &&
+           (process->state == PROCESS_ALIVE) &&
+           ((process == &bootstrap_process) || process_is_regular(process));
 }
 
 static void process_restore_interrupts(bool interrupts_were_enabled) {
@@ -192,12 +204,72 @@ bool process_destroy(struct process *process) {
 }
 
 bool process_is_alive(const struct process *process) {
-    if ((!process_initialized) || (process == NULL) || !process->slot_used ||
-        (process->state != PROCESS_ALIVE)) {
+    if ((!process_initialized) || !process_is_known_alive(process)) {
+        return false;
+    }
+    return true;
+}
+
+bool process_set_cwd(struct process *process, const struct vfs_path *cwd) {
+    struct vfs_path replacement = { NULL, NULL };
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+
+    x86_64_interrupts_disable();
+    if ((!process_initialized) || !process_is_known_alive(process) ||
+        !vfs_path_is_directory(cwd) ||
+        (vfs_path_clone(cwd, &replacement) != VFS_RESULT_OK)) {
+        process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
 
-    return (process == &bootstrap_process) || process_is_regular(process);
+    if (process->cwd_valid &&
+        (vfs_path_release(&process->cwd) != VFS_RESULT_OK)) {
+        (void)vfs_path_release(&replacement);
+        process_restore_interrupts(interrupts_were_enabled);
+        return false;
+    }
+
+    process->cwd = replacement;
+    process->cwd_valid = true;
+    process_restore_interrupts(interrupts_were_enabled);
+    return true;
+}
+
+bool process_clear_cwd(struct process *process) {
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+
+    x86_64_interrupts_disable();
+    if ((!process_initialized) || !process_is_known_alive(process)) {
+        process_restore_interrupts(interrupts_were_enabled);
+        return false;
+    }
+    if (!process->cwd_valid) {
+        process_restore_interrupts(interrupts_were_enabled);
+        return true;
+    }
+    if (vfs_path_release(&process->cwd) != VFS_RESULT_OK) {
+        process_restore_interrupts(interrupts_were_enabled);
+        return false;
+    }
+    process->cwd_valid = false;
+    process_restore_interrupts(interrupts_were_enabled);
+    return true;
+}
+
+bool process_get_cwd(const struct process *process, struct vfs_path *cwd_out) {
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+    enum vfs_result result;
+
+    x86_64_interrupts_disable();
+    if ((!process_initialized) || !process_is_known_alive(process) ||
+        !process->cwd_valid || (cwd_out == NULL)) {
+        process_restore_interrupts(interrupts_were_enabled);
+        return false;
+    }
+
+    result = vfs_path_clone(&process->cwd, cwd_out);
+    process_restore_interrupts(interrupts_were_enabled);
+    return result == VFS_RESULT_OK;
 }
 
 bool process_get_stats(struct process_stats *stats) {
