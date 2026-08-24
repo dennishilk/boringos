@@ -50,8 +50,9 @@ static bool validator_result_is_host_failure(enum boringfs_validation_result res
 
 static void print_valid(const char *path,
                         const struct boringfs_superblock *superblock) {
-    (void)printf("BoringFS v%" PRIu16 ".%" PRIu16 "\n",
-                 superblock->format_major, superblock->format_minor);
+    (void)printf("BoringFS v%u.%u\n",
+                 (unsigned int)superblock->format_major,
+                 (unsigned int)superblock->format_minor);
     (void)printf("Image: %s\n", path);
     (void)printf("Blocks: %" PRIu32 "\n", superblock->total_blocks);
     (void)printf("Block size: %u\n", BORINGFS_BLOCK_SIZE);
@@ -67,8 +68,9 @@ static void print_corrupt(const char *path,
                           enum boringfs_validation_result result,
                           const struct boringfs_validation_error *error) {
     if (decoded) {
-        (void)printf("BoringFS v%" PRIu16 ".%" PRIu16 "\n",
-                     superblock->format_major, superblock->format_minor);
+        (void)printf("BoringFS v%u.%u\n",
+                     (unsigned int)superblock->format_major,
+                     (unsigned int)superblock->format_minor);
     } else {
         (void)printf("BoringFS\n");
     }
@@ -95,14 +97,14 @@ static int inspect_image(const char *path) {
     enum boringfs_validation_result result;
     uint64_t file_size_u64;
     uint64_t max_volume_bytes;
-    size_t volume_size;
+    size_t volume_size = 0U;
     size_t block_owner_count = 1U;
     size_t object_reference_count = 1U;
     size_t block_owner_bytes;
+    size_t object_reference_bytes;
     bool decoded = false;
     int fd = -1;
     void *mapping = MAP_FAILED;
-    int status = BORINGFSCK_EXIT_HOST_FAILURE;
 
     if (path == NULL) {
         (void)fprintf(stderr, "boringfsck: missing image path\n");
@@ -160,14 +162,16 @@ static int inspect_image(const char *path) {
         object_reference_count = (size_t)superblock.object_count;
     }
     if (!checked_mul_size(block_owner_count, sizeof(uint32_t),
-                          &block_owner_bytes)) {
+                          &block_owner_bytes) ||
+        !checked_mul_size(object_reference_count, sizeof(uint8_t),
+                          &object_reference_bytes)) {
         (void)fprintf(stderr, "boringfsck: validator workspace overflow\n");
         goto cleanup;
     }
 
     workspace.block_owner = (uint32_t *)malloc(block_owner_bytes);
     workspace.object_reference_count =
-        (uint8_t *)malloc(object_reference_count * sizeof(uint8_t));
+        (uint8_t *)malloc(object_reference_bytes);
     if ((workspace.block_owner == NULL) ||
         (workspace.object_reference_count == NULL)) {
         (void)fprintf(stderr, "boringfsck: cannot allocate validator workspace\n");
@@ -225,7 +229,7 @@ cleanup:
     if (fd >= 0) {
         (void)close(fd);
     }
-    return status;
+    return BORINGFSCK_EXIT_HOST_FAILURE;
 }
 
 int main(int argc, char **argv) {
