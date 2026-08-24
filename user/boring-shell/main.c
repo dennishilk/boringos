@@ -9,6 +9,8 @@
 
 #define BORING_SHELL_LINE_MAX 128U
 
+static volatile uint64_t shell_state;
+
 static void shell_idle_forever(void) __attribute__((noreturn));
 static void shell_idle_forever(void) {
     for (;;) {
@@ -376,7 +378,13 @@ int boring_main(void) {
     if (!shell_write(starting, sizeof(starting) - 1U) ||
         (boring_getpid() != 2ULL) ||
         !shell_write(pid_ok, sizeof(pid_ok) - 1U) ||
-        !shell_syscall_safety() ||
+        !shell_syscall_safety()) {
+        (void)shell_write(failed, sizeof(failed) - 1U);
+        shell_idle_forever();
+    }
+
+    shell_state = 1ULL;
+    if ((shell_state != 1ULL) ||
         !shell_write(ready, sizeof(ready) - 1U)) {
         (void)shell_write(failed, sizeof(failed) - 1U);
         shell_idle_forever();
