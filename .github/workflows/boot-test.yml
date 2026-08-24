@@ -62,3 +62,12 @@ jobs:
 
       - name: Real RAMFS backend
         run: sh ./tests/ramfs-qemu.sh
+
+      - name: Audit generated boring-init artifact
+        run: sh ./tests/init-build-audit.sh
+
+      - name: Build boring-init test mode
+        run: make TEST_MODE=init
+
+      - name: Real first userspace process boring-init
+        run: sh ./tests/init-qemu.sh
