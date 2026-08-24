@@ -57,3 +57,79 @@ long boring_console_read(void *buffer, size_t length) {
 
     return result;
 }
+
+long boring_launch(const char *program_name, size_t length) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_LAUNCH),
+          "D"(program_name),
+          "S"(length)
+        : "rcx", "r11", "cc", "memory");
+
+    return result;
+}
+
+long boring_fs_readdir(const char *path,
+                       size_t path_length,
+                       uint64_t index,
+                       struct boring_dirent *entry) {
+    long result;
+    register struct boring_dirent *entry_argument __asm__("r10") = entry;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_FS_READDIR),
+          "D"(path),
+          "S"(path_length),
+          "d"(index),
+          "r"(entry_argument)
+        : "rcx", "r11", "cc", "memory");
+
+    return result;
+}
+
+long boring_fs_mkdir(const char *name, size_t length) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_FS_MKDIR),
+          "D"(name),
+          "S"(length)
+        : "rcx", "r11", "cc", "memory");
+
+    return result;
+}
+
+long boring_fs_rmdir(const char *name, size_t length) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_FS_RMDIR),
+          "D"(name),
+          "S"(length)
+        : "rcx", "r11", "cc", "memory");
+
+    return result;
+}
+
+long boring_fs_chdir(const char *path, size_t length) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_FS_CHDIR),
+          "D"(path),
+          "S"(length)
+        : "rcx", "r11", "cc", "memory");
+
+    return result;
+}

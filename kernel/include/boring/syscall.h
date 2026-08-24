@@ -49,6 +49,10 @@ struct syscall_stats {
 bool syscall_init(void);
 bool syscall_get_stats(struct syscall_stats *stats);
 bool syscall_stack_contains(uintptr_t stack_pointer);
+bool syscall_register_bootstrap_program(const char *name,
+                                        size_t name_length,
+                                        const uint8_t *module_bytes,
+                                        size_t module_size);
 bool syscall_console_safety_self_test(uintptr_t read_only_user_address,
                                       uintptr_t unmapped_user_address);
 void x86_64_syscall_dispatch(struct x86_64_syscall_frame *frame);
