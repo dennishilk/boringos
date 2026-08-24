@@ -170,7 +170,7 @@ KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCE
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
 
-.PHONY: all kernel user-elf user-runtime user-console user-init user-shell elf-audit runtime-audit console-audit init-audit shell-audit run run-headless test clean distclean
+.PHONY: all kernel user-elf user-runtime user-console user-init user-shell elf-audit runtime-audit console-audit init-audit shell-audit boringfs-host-test run run-headless test clean distclean
 
 all: $(ISO)
 
@@ -200,6 +200,9 @@ init-audit: $(INIT_ELF)
 
 shell-audit: $(SHELL_ELF)
 	sh ./tests/shell-build-audit.sh
+
+boringfs-host-test:
+	sh ./tests/boringfs-host-test.sh
 
 $(MODE_STAMP):
 	@mkdir -p $(BUILD_DIR)
@@ -360,6 +363,7 @@ test:
 	sh ./tests/init-qemu.sh
 	sh ./tests/shell-build-audit.sh
 	sh ./tests/shell-qemu.sh
+	sh ./tests/boringfs-host-test.sh
 
 clean:
 	rm -rf $(BUILD_DIR)
