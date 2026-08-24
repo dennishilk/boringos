@@ -80,3 +80,6 @@ jobs:
 
       - name: Real interactive boring-shell
         run: sh ./tests/shell-qemu.sh
+
+      - name: BoringFS v0 codec and structural validator
+        run: make boringfs-host-test
