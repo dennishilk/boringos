@@ -35,6 +35,7 @@ bool process_init(void);
 struct process *process_bootstrap(void);
 struct process *process_current(void);
 bool process_create(struct process **process_out);
+bool process_discard_unstarted(struct process *process);
 bool process_activate(struct process *process);
 bool process_mark_finished(struct process *process);
 bool process_destroy(struct process *process);

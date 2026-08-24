@@ -154,6 +154,27 @@ bool process_create(struct process **process_out) {
     return true;
 }
 
+bool process_discard_unstarted(struct process *process) {
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+
+    x86_64_interrupts_disable();
+    if ((!process_initialized) || !process_is_regular(process) ||
+        (process->state != PROCESS_ALIVE) || (current_process == process) ||
+        (process->pid == 0ULL) || (process->pid == UINT64_MAX) ||
+        (next_pid != (process->pid + 1ULL)) ||
+        (created_process_count == 0ULL) ||
+        !address_space_destroy(&process->address_space)) {
+        process_restore_interrupts(interrupts_were_enabled);
+        return false;
+    }
+
+    next_pid = process->pid;
+    --created_process_count;
+    process_clear(process);
+    process_restore_interrupts(interrupts_were_enabled);
+    return true;
+}
+
 bool process_activate(struct process *process) {
     const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
