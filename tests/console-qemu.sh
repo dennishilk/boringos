@@ -9,16 +9,29 @@ LD=${LD:-ld}
 CONSOLE_DIR="${ROOT}/build/user/console-smoke"
 CONSOLE_OBJECT="${CONSOLE_DIR}/main.o"
 CONSOLE_ELF="${ROOT}/build/user/console-smoke.elf"
-LOG=$(mktemp)
-INPUT=$(mktemp)
+TMPDIR_PATH=$(mktemp -d)
+SERIAL_BASE="${TMPDIR_PATH}/serial"
+SERIAL_IN="${SERIAL_BASE}.in"
+SERIAL_OUT="${SERIAL_BASE}.out"
+LOG="${TMPDIR_PATH}/serial.log"
+QEMU_LOG="${TMPDIR_PATH}/qemu.log"
 PID=
+CAT_PID=
+SERIAL_FD_OPEN=0
 
 cleanup() {
+    if [ "${SERIAL_FD_OPEN}" -eq 1 ]; then
+        exec 3>&-
+    fi
     if [ -n "${PID}" ] && kill -0 "${PID}" 2>/dev/null; then
         kill "${PID}" 2>/dev/null || true
         wait "${PID}" 2>/dev/null || true
     fi
-    rm -f "${LOG}" "${INPUT}"
+    if [ -n "${CAT_PID}" ] && kill -0 "${CAT_PID}" 2>/dev/null; then
+        kill "${CAT_PID}" 2>/dev/null || true
+        wait "${CAT_PID}" 2>/dev/null || true
+    fi
+    rm -rf "${TMPDIR_PATH}"
 }
 trap cleanup EXIT INT TERM
 
@@ -93,7 +106,11 @@ make -C "${ROOT}" \
     BOOT_USER_ELF=build/user/console-smoke.elf \
     BOOT_USER_NAME=runtime-smoke.elf
 
-printf 'K' > "${INPUT}"
+mkfifo "${SERIAL_IN}" "${SERIAL_OUT}"
+exec 3<> "${SERIAL_IN}"
+SERIAL_FD_OPEN=1
+cat "${SERIAL_OUT}" > "${LOG}" &
+CAT_PID=$!
 
 "${QEMU}" \
     -M q35 \
@@ -102,12 +119,33 @@ printf 'K' > "${INPUT}"
     -cdrom "${ROOT}/build/boringos.iso" \
     -boot d \
     -display none \
-    -serial stdio \
+    -serial "pipe:${SERIAL_BASE}" \
     -monitor none \
     -no-reboot \
     -no-shutdown \
-    < "${INPUT}" > "${LOG}" 2>&1 &
+    > /dev/null 2> "${QEMU_LOG}" &
 PID=$!
+
+attempt=0
+while [ "${attempt}" -lt 150 ]; do
+    if grep -Fqx 'console write from BoringOS userspace' "${LOG}" 2>/dev/null; then
+        break
+    fi
+    if ! kill -0 "${PID}" 2>/dev/null; then
+        break
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.1
+done
+
+if ! grep -Fqx 'console write from BoringOS userspace' "${LOG}" 2>/dev/null; then
+    echo 'serial console client never reached the input-read point' >&2
+    cat "${LOG}" >&2 2>/dev/null || true
+    cat "${QEMU_LOG}" >&2 2>/dev/null || true
+    exit 1
+fi
+
+printf 'K' >&3
 
 attempt=0
 while [ "${attempt}" -lt 150 ]; do
@@ -175,6 +213,9 @@ if grep -Eiq 'Userspace serial console self-test FAILED|BoringKernel syscall fat
 fi
 
 cat "${LOG}"
+if [ -s "${QEMU_LOG}" ]; then
+    cat "${QEMU_LOG}" >&2
+fi
 
 if [ "${status}" -ne 0 ]; then
     echo 'BoringKernel userspace serial console verification FAILED.' >&2
