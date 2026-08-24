@@ -5,6 +5,8 @@
 #include <boring/runtime.h>
 #include <boring/syscall.h>
 
+static volatile uint64_t init_state;
+
 static void init_idle_forever(void) __attribute__((noreturn));
 static void init_idle_forever(void) {
     for (;;) {
@@ -27,7 +29,13 @@ int boring_main(void) {
 
     if (!init_write_exact(starting, sizeof(starting) - 1U) ||
         (pid != 1ULL) ||
-        !init_write_exact(pid_ok, sizeof(pid_ok) - 1U) ||
+        !init_write_exact(pid_ok, sizeof(pid_ok) - 1U)) {
+        (void)init_write_exact(failed, sizeof(failed) - 1U);
+        init_idle_forever();
+    }
+
+    init_state = 1ULL;
+    if ((init_state != 1ULL) ||
         !init_write_exact(online, sizeof(online) - 1U)) {
         (void)init_write_exact(failed, sizeof(failed) - 1U);
         init_idle_forever();
