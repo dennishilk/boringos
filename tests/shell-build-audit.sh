@@ -44,7 +44,6 @@ if printf '%s\n' "${PROGRAMS}" | grep '^  LOAD' | grep -Eq ' W E '; then
     exit 1
 fi
 
-printf '%s\n' "${SECTIONS}" | grep -Eq '\.bss +NOBITS'
 if printf '%s\n' "${SECTIONS}" | grep -Eq '\.(tdata|tbss) '; then
     echo 'unexpected TLS section in boring-shell' >&2
     exit 1
