@@ -73,17 +73,43 @@ int boring_main(void) {
     {
         static const char launch_message[] =
             "boring-init: launching boring-shell\n";
+        static const char respawn_message[] =
+            "boring-init: shell exited; respawning\n";
         static const char shell_name[] = "boring-shell";
 
-        if (!init_launch_safety() ||
-            !init_write_exact(launch_message, sizeof(launch_message) - 1U)) {
+        if (!init_launch_safety()) {
             (void)init_write_exact(failed, sizeof(failed) - 1U);
             init_idle_forever();
         }
 
-        (void)boring_launch(shell_name, sizeof(shell_name) - 1U);
-        (void)init_write_exact(failed, sizeof(failed) - 1U);
-        init_idle_forever();
+        for (;;) {
+            long child_pid;
+            int status = 0;
+            long waited;
+
+            if (!init_write_exact(launch_message, sizeof(launch_message) - 1U)) {
+                (void)init_write_exact(failed, sizeof(failed) - 1U);
+                init_idle_forever();
+            }
+
+            child_pid = boring_launch(shell_name, sizeof(shell_name) - 1U);
+            if (child_pid <= 0L) {
+                (void)init_write_exact(failed, sizeof(failed) - 1U);
+                init_idle_forever();
+            }
+
+            waited = boring_waitpid((uint64_t)child_pid, &status);
+            if (waited != child_pid) {
+                (void)init_write_exact(failed, sizeof(failed) - 1U);
+                init_idle_forever();
+            }
+
+            if (!init_write_exact(respawn_message,
+                                  sizeof(respawn_message) - 1U)) {
+                (void)init_write_exact(failed, sizeof(failed) - 1U);
+                init_idle_forever();
+            }
+        }
     }
 #else
     init_idle_forever();
