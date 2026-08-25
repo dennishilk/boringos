@@ -14,13 +14,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       - name: Package exact checkout
         run: |
           git rev-parse HEAD > SNAPSHOT_HEAD.txt
-          tar --exclude=.git -czf boringos-source.tgz .
+          tar --exclude=.git -czf /tmp/boringos-source.tgz .
       - uses: actions/upload-artifact@v4
         with:
           name: m23-source-snapshot
-          path: boringos-source.tgz
+          path: /tmp/boringos-source.tgz
           if-no-files-found: error
           retention-days: 1
