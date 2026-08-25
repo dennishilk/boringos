@@ -111,8 +111,11 @@ BOOT_LIMINE_CONF := limine-shell.conf
 else ifeq ($(TEST_MODE),block)
 TEST_MODE_VALUE := 11
 TEST_HARNESS_C := kernel/core/block_device_test.c
+else ifeq ($(TEST_MODE),virtio-block)
+TEST_MODE_VALUE := 12
+TEST_HARNESS_C := kernel/core/virtio_blk_test.c
 else
-$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, or block)
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, block, or virtio-block)
 endif
 
 LIMINE_VERSION := 12.5.2
@@ -155,6 +158,7 @@ KERNEL_C_SOURCES := \
 	kernel/core/vfs.c \
 	kernel/core/ramfs.c \
 	kernel/core/block_device.c \
+	kernel/drivers/virtio_blk.c \
 	kernel/core/task.c \
 	kernel/core/preemption_test.c \
 	kernel/core/process_test.c \
@@ -164,6 +168,8 @@ KERNEL_C_SOURCES := \
 	kernel/core/elf_loader.c \
 	$(TEST_HARNESS_C) \
 	kernel/arch/x86_64/vmm.c \
+	kernel/arch/x86_64/mmio.c \
+	kernel/arch/x86_64/pci.c \
 	kernel/arch/x86_64/address_space.c \
 	kernel/arch/x86_64/ring3_memory.c \
 	kernel/arch/x86_64/descriptor.c \
@@ -404,6 +410,7 @@ test:
 	sh ./tests/shell-build-audit.sh
 	sh ./tests/shell-qemu.sh
 	sh ./tests/block-device-qemu.sh
+	sh ./tests/virtio-block-qemu.sh
 	sh ./tests/boringfs-host-test.sh
 	$(MAKE) mkboringfs-test
 	$(MAKE) boringfsck-test
