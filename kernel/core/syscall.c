@@ -207,13 +207,13 @@ static uint64_t syscall_system_info(uint64_t user_info) {
         !syscall_copy_literal(info.arch, sizeof(info.arch), "x86_64")) {
         return syscall_error(BORING_SYSCALL_EIO);
     }
-#if BORING_TEST_MODE == 10
+#if (BORING_TEST_MODE == 10) || (BORING_TEST_MODE == 13) || (BORING_TEST_MODE == 14)
     if (!syscall_copy_literal(info.root_fs, sizeof(info.root_fs), "RAMFS") ||
         !syscall_copy_literal(info.root_device, sizeof(info.root_device),
                               "memory")) {
         return syscall_error(BORING_SYSCALL_EIO);
     }
-#elif (BORING_TEST_MODE == 13) || (BORING_TEST_MODE == 14) || (BORING_TEST_MODE == 15)
+#elif BORING_TEST_MODE == 15
     if (!syscall_copy_literal(info.root_fs, sizeof(info.root_fs), "BoringFS") ||
         !syscall_copy_literal(info.root_device, sizeof(info.root_device),
                               "virtio-blk")) {
@@ -1301,6 +1301,11 @@ static uint64_t syscall_exit(struct x86_64_syscall_frame *frame,
         syscall_fatal("cannot mark child zombie during SYS_EXIT");
     }
     suspended_launch.child_exited = true;
+    serial_write_string("boring-exit: child pid ");
+    serial_write_u64(child_pid);
+    serial_write_string(" status ");
+    serial_write_u64((uint64_t)(uint32_t)suspended_launch.exit_status);
+    serial_write_string(" is zombie\n");
     *frame = suspended_launch.parent_frame;
     return child_pid;
 }
@@ -1329,6 +1334,9 @@ static uint64_t syscall_waitpid(uint64_t pid, uint64_t user_status) {
     if (!process_destroy(child)) {
         return syscall_error(BORING_SYSCALL_EIO);
     }
+    serial_write_string("boring-waitpid: reaped child pid ");
+    serial_write_u64(pid);
+    serial_write_string("\n");
     suspended_launch_clear();
     return pid;
 }

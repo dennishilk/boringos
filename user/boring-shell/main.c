@@ -9,11 +9,39 @@
 
 #define BORING_SHELL_LINE_MAX 512U
 #define BORING_SHELL_ESCAPE_MAX 8U
+#define BORING_SHELL_HISTORY_CAPACITY 16U
+#define BORING_SHELL_COMMAND_NAME_CAPACITY 16U
+#define BORING_SHELL_COMMAND_COUNT 20U
+#define BORING_SHELL_PROMPT_CAPACITY \
+    (BORING_SYSTEM_USERNAME_CAPACITY + BORING_SYSTEM_HOSTNAME_CAPACITY + \
+     BORING_SYSCALL_CWD_MAX + 8U)
+#define BORING_SHELL_MIB 1048576ULL
+
+enum shell_completion_type {
+    SHELL_COMPLETION_NONE = 0,
+    SHELL_COMPLETION_ANY = 1,
+    SHELL_COMPLETION_DIRECTORY = 2,
+    SHELL_COMPLETION_REGULAR = 3
+};
 
 static volatile uint64_t shell_state;
-static bool shell_input_pushback_valid;
-static char shell_input_pushback;
 static bool shell_skip_lf_after_cr;
+static char shell_history[BORING_SHELL_HISTORY_CAPACITY]
+                         [BORING_SHELL_LINE_MAX + 1U];
+static char shell_history_draft[BORING_SHELL_LINE_MAX + 1U];
+static size_t shell_history_start;
+static size_t shell_history_count;
+static uint64_t shell_history_total;
+static char shell_prompt[BORING_SHELL_PROMPT_CAPACITY];
+static char shell_completion_path[BORING_SHELL_LINE_MAX + 1U];
+static char shell_completion_name[BORING_DIRENT_NAME_CAPACITY];
+static char shell_write_buffer[BORING_SHELL_LINE_MAX + 1U];
+static const char shell_command_names[BORING_SHELL_COMMAND_COUNT]
+                                     [BORING_SHELL_COMMAND_NAME_CAPACITY] = {
+    "help", "ls", "mkdir", "rmdir", "cd", "cat", "touch", "write",
+    "rm", "boringfetch", "clear", "pwd", "echo", "hostname", "uname",
+    "whoami", "ps", "history", "exit", "logout"
+};
 
 static void shell_idle_forever(void) __attribute__((noreturn));
 static void shell_idle_forever(void) {
@@ -64,6 +92,134 @@ static bool shell_write_u64(uint64_t value) {
         digits[count - index - 1U] = temporary;
     }
     return shell_write(digits, count);
+}
+
+static size_t shell_bounded_length(const char *text, size_t maximum) {
+    size_t length;
+
+    if (text == NULL) {
+        return maximum + 1U;
+    }
+    for (length = 0U; length <= maximum; ++length) {
+        if (text[length] == '\0') {
+            return length;
+        }
+    }
+    return maximum + 1U;
+}
+
+static bool shell_copy_text(char *destination,
+                            size_t capacity,
+                            const char *source) {
+    size_t index;
+
+    if ((destination == NULL) || (capacity == 0U) || (source == NULL)) {
+        return false;
+    }
+    for (index = 0U; index < capacity; ++index) {
+        destination[index] = source[index];
+        if (source[index] == '\0') {
+            return true;
+        }
+    }
+    destination[capacity - 1U] = '\0';
+    return false;
+}
+
+static bool shell_append_text(char *destination,
+                              size_t capacity,
+                              size_t *length,
+                              const char *source) {
+    size_t source_length;
+    size_t index;
+
+    if ((destination == NULL) || (capacity == 0U) || (length == NULL) ||
+        (*length >= capacity) || (source == NULL)) {
+        return false;
+    }
+    source_length = shell_bounded_length(source, capacity - 1U);
+    if ((source_length >= capacity) ||
+        (source_length > capacity - *length - 1U)) {
+        return false;
+    }
+    for (index = 0U; index < source_length; ++index) {
+        destination[*length + index] = source[index];
+    }
+    *length += source_length;
+    destination[*length] = '\0';
+    return true;
+}
+
+static bool shell_text_starts_with(const char *text,
+                                   size_t text_length,
+                                   const char *prefix,
+                                   size_t prefix_length) {
+    size_t index;
+
+    if ((text == NULL) || (prefix == NULL) ||
+        (prefix_length > text_length)) {
+        return false;
+    }
+    for (index = 0U; index < prefix_length; ++index) {
+        if (text[index] != prefix[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool shell_system_info(struct boring_system_info *info) {
+    return (info != NULL) && (boring_system_info(info) == 0L) &&
+           (info->abi_version == BORING_SYSTEM_INFO_ABI_VERSION) &&
+           (shell_bounded_length(info->hostname,
+                                 BORING_SYSTEM_HOSTNAME_CAPACITY - 1U) <
+            BORING_SYSTEM_HOSTNAME_CAPACITY) &&
+           (shell_bounded_length(info->username,
+                                 BORING_SYSTEM_USERNAME_CAPACITY - 1U) <
+            BORING_SYSTEM_USERNAME_CAPACITY) &&
+           (shell_bounded_length(info->os_name,
+                                 BORING_SYSTEM_OS_CAPACITY - 1U) <
+            BORING_SYSTEM_OS_CAPACITY) &&
+           (shell_bounded_length(info->kernel_name,
+                                 BORING_SYSTEM_KERNEL_CAPACITY - 1U) <
+            BORING_SYSTEM_KERNEL_CAPACITY) &&
+           (shell_bounded_length(info->kernel_version,
+                                 BORING_SYSTEM_VERSION_CAPACITY - 1U) <
+            BORING_SYSTEM_VERSION_CAPACITY) &&
+           (shell_bounded_length(info->arch,
+                                 BORING_SYSTEM_ARCH_CAPACITY - 1U) <
+            BORING_SYSTEM_ARCH_CAPACITY) &&
+           (shell_bounded_length(info->root_fs,
+                                 BORING_SYSTEM_FS_CAPACITY - 1U) <
+            BORING_SYSTEM_FS_CAPACITY) &&
+           (shell_bounded_length(info->root_device,
+                                 BORING_SYSTEM_DEVICE_CAPACITY - 1U) <
+            BORING_SYSTEM_DEVICE_CAPACITY);
+}
+
+static bool shell_build_prompt(void) {
+    struct boring_system_info info;
+    char cwd[BORING_SYSCALL_CWD_MAX + 1U];
+    size_t length = 0U;
+    const long cwd_length = boring_getcwd(cwd, sizeof(cwd));
+
+    shell_prompt[0] = '\0';
+    if ((cwd_length < 1L) || ((size_t)cwd_length >= sizeof(cwd)) ||
+        (cwd[(size_t)cwd_length] != '\0') || !shell_system_info(&info)) {
+        return false;
+    }
+    return shell_append_text(shell_prompt, sizeof(shell_prompt), &length,
+                             info.username) &&
+           shell_append_text(shell_prompt, sizeof(shell_prompt), &length,
+                             "@") &&
+           shell_append_text(shell_prompt, sizeof(shell_prompt), &length,
+                             info.hostname) &&
+           shell_append_text(shell_prompt, sizeof(shell_prompt), &length,
+                             ":") &&
+           shell_append_text(shell_prompt, sizeof(shell_prompt), &length,
+                             cwd) &&
+           shell_append_text(shell_prompt, sizeof(shell_prompt), &length,
+                             "$ ");
 }
 
 static bool shell_is_space(char character) {
@@ -133,26 +289,63 @@ static bool shell_syscall_safety(void) {
             -(long)BORING_SYSCALL_ENOENT);
 }
 
+static size_t shell_history_slot(size_t logical_index) {
+    return (shell_history_start + logical_index) %
+           (size_t)BORING_SHELL_HISTORY_CAPACITY;
+}
+
+static void shell_history_reset(void) {
+    size_t slot;
+
+    shell_history_start = 0U;
+    shell_history_count = 0U;
+    shell_history_total = 0ULL;
+    shell_history_draft[0] = '\0';
+    for (slot = 0U;
+         slot < (size_t)BORING_SHELL_HISTORY_CAPACITY;
+         ++slot) {
+        shell_history[slot][0] = '\0';
+    }
+}
+
+static bool shell_history_add(const char *line) {
+    size_t slot;
+
+    if (line == NULL) {
+        return false;
+    }
+    if (line[0] == '\0') {
+        return true;
+    }
+    if (shell_bounded_length(line, (size_t)BORING_SHELL_LINE_MAX) >
+        (size_t)BORING_SHELL_LINE_MAX) {
+        return false;
+    }
+    if (shell_history_count < (size_t)BORING_SHELL_HISTORY_CAPACITY) {
+        slot = shell_history_slot(shell_history_count);
+        ++shell_history_count;
+    } else {
+        shell_history_start =
+            (shell_history_start + 1U) %
+            (size_t)BORING_SHELL_HISTORY_CAPACITY;
+        slot = shell_history_slot(shell_history_count - 1U);
+    }
+    if (!shell_copy_text(shell_history[slot], sizeof(shell_history[slot]),
+                         line)) {
+        return false;
+    }
+    ++shell_history_total;
+    return true;
+}
+
 static bool shell_input_read(char *character_out) {
     long result;
 
     if (character_out == NULL) {
         return false;
     }
-    if (shell_input_pushback_valid) {
-        *character_out = shell_input_pushback;
-        shell_input_pushback_valid = false;
-        return true;
-    }
     result = boring_console_read(character_out, 1U);
     return result == 1L;
-}
-
-static void shell_input_unread(char character) {
-    if (!shell_input_pushback_valid) {
-        shell_input_pushback = character;
-        shell_input_pushback_valid = true;
-    }
 }
 
 static bool shell_cursor_left(size_t count) {
@@ -194,6 +387,367 @@ static bool shell_redraw_line(const char *prompt,
            shell_cursor_left(length - cursor);
 }
 
+static bool shell_bell(void) {
+    return shell_write("\a", 1U);
+}
+
+static bool shell_replace_line(const char *prompt,
+                               char *line,
+                               size_t capacity,
+                               size_t *length,
+                               size_t *cursor,
+                               const char *replacement) {
+    const size_t replacement_length =
+        shell_bounded_length(replacement, capacity - 1U);
+
+    if ((prompt == NULL) || (line == NULL) || (capacity < 2U) ||
+        (length == NULL) || (cursor == NULL) ||
+        (replacement_length >= capacity)) {
+        return false;
+    }
+    if (!shell_copy_text(line, capacity, replacement)) {
+        return false;
+    }
+    *length = replacement_length;
+    *cursor = replacement_length;
+    return shell_redraw_line(prompt, line, *length, *cursor);
+}
+
+static bool shell_history_navigate(const char *prompt,
+                                   char *line,
+                                   size_t capacity,
+                                   size_t *length,
+                                   size_t *cursor,
+                                   size_t *history_index,
+                                   bool up) {
+    const char *replacement;
+
+    if ((prompt == NULL) || (line == NULL) || (capacity < 2U) ||
+        (length == NULL) || (cursor == NULL) || (history_index == NULL) ||
+        (*history_index > shell_history_count)) {
+        return false;
+    }
+    if (shell_history_count == 0U) {
+        return shell_bell();
+    }
+    if (up) {
+        if (*history_index == shell_history_count) {
+            if (!shell_copy_text(shell_history_draft,
+                                 sizeof(shell_history_draft), line)) {
+                return false;
+            }
+            *history_index = shell_history_count - 1U;
+        } else if (*history_index != 0U) {
+            --(*history_index);
+        } else {
+            return shell_bell();
+        }
+        replacement = shell_history[shell_history_slot(*history_index)];
+    } else {
+        if (*history_index == shell_history_count) {
+            return shell_bell();
+        }
+        if (*history_index + 1U < shell_history_count) {
+            ++(*history_index);
+            replacement = shell_history[shell_history_slot(*history_index)];
+        } else {
+            *history_index = shell_history_count;
+            replacement = shell_history_draft;
+        }
+    }
+    if (shell_bounded_length(replacement, capacity - 1U) >= capacity) {
+        return shell_bell();
+    }
+    return shell_replace_line(prompt, line, capacity, length, cursor,
+                              replacement);
+}
+
+static bool shell_line_insert(char *line,
+                              size_t capacity,
+                              size_t *length,
+                              size_t *cursor,
+                              const char *text,
+                              size_t text_length) {
+    size_t index;
+
+    if ((line == NULL) || (capacity < 2U) || (length == NULL) ||
+        (cursor == NULL) || (text == NULL) || (*cursor > *length) ||
+        (*length >= capacity) || (text_length > capacity - *length - 1U)) {
+        return false;
+    }
+    for (index = *length + 1U; index > *cursor; --index) {
+        line[index + text_length - 1U] = line[index - 1U];
+    }
+    for (index = 0U; index < text_length; ++index) {
+        line[*cursor + index] = text[index];
+    }
+    *cursor += text_length;
+    *length += text_length;
+    return true;
+}
+
+static bool shell_span_equals(const char *text,
+                              size_t text_length,
+                              const char *expected) {
+    const size_t expected_length =
+        shell_bounded_length(expected, BORING_SHELL_COMMAND_NAME_CAPACITY - 1U);
+
+    return (expected_length == text_length) &&
+           shell_text_starts_with(text, text_length, expected,
+                                  expected_length);
+}
+
+static enum shell_completion_type shell_path_completion_type(
+    const char *line,
+    size_t token_start) {
+    size_t command_end = 0U;
+    size_t argument_start;
+
+    if ((line == NULL) || (token_start == 0U)) {
+        return SHELL_COMPLETION_NONE;
+    }
+    while ((command_end < token_start) &&
+           !shell_is_space(line[command_end])) {
+        ++command_end;
+    }
+    argument_start = command_end;
+    while ((argument_start < token_start) &&
+           shell_is_space(line[argument_start])) {
+        ++argument_start;
+    }
+    if ((command_end == 0U) || (argument_start != token_start)) {
+        return SHELL_COMPLETION_NONE;
+    }
+    if (shell_span_equals(line, command_end, "cd") ||
+        shell_span_equals(line, command_end, "rmdir")) {
+        return SHELL_COMPLETION_DIRECTORY;
+    }
+    if (shell_span_equals(line, command_end, "cat") ||
+        shell_span_equals(line, command_end, "write") ||
+        shell_span_equals(line, command_end, "rm")) {
+        return SHELL_COMPLETION_REGULAR;
+    }
+    if (shell_span_equals(line, command_end, "ls")) {
+        return SHELL_COMPLETION_ANY;
+    }
+    return SHELL_COMPLETION_NONE;
+}
+
+static size_t shell_common_prefix(const char *left,
+                                  size_t left_length,
+                                  const char *right,
+                                  size_t right_length) {
+    size_t length = 0U;
+    const size_t maximum =
+        (left_length < right_length) ? left_length : right_length;
+
+    while ((length < maximum) && (left[length] == right[length])) {
+        ++length;
+    }
+    return length;
+}
+
+static bool shell_apply_completion(const char *prompt,
+                                   char *line,
+                                   size_t capacity,
+                                   size_t *length,
+                                   size_t *cursor,
+                                   size_t typed_length,
+                                   size_t completion_length,
+                                   bool append_separator,
+                                   char separator) {
+    size_t target_length = completion_length;
+    size_t insert_length;
+
+    if ((prompt == NULL) || (line == NULL) || (length == NULL) ||
+        (cursor == NULL) || (typed_length > completion_length) ||
+        (completion_length >= sizeof(shell_completion_name))) {
+        return false;
+    }
+    if (append_separator) {
+        shell_completion_name[target_length] = separator;
+        ++target_length;
+    }
+    insert_length = target_length - typed_length;
+    if ((insert_length == 0U) ||
+        !shell_line_insert(line, capacity, length, cursor,
+                           &shell_completion_name[typed_length],
+                           insert_length)) {
+        return shell_bell();
+    }
+    return shell_redraw_line(prompt, line, *length, *cursor);
+}
+
+static bool shell_complete_command(const char *prompt,
+                                   char *line,
+                                   size_t capacity,
+                                   size_t *length,
+                                   size_t *cursor) {
+    const size_t prefix_length = *cursor;
+    size_t common_length = 0U;
+    size_t matches = 0U;
+    size_t command_index;
+
+    for (command_index = 0U;
+         command_index < (size_t)BORING_SHELL_COMMAND_COUNT;
+         ++command_index) {
+        const size_t candidate_length = shell_bounded_length(
+            shell_command_names[command_index],
+            BORING_SHELL_COMMAND_NAME_CAPACITY - 1U);
+
+        if (!shell_text_starts_with(shell_command_names[command_index],
+                                    candidate_length, line, prefix_length)) {
+            continue;
+        }
+        if (matches == 0U) {
+            if (!shell_copy_text(shell_completion_name,
+                                 sizeof(shell_completion_name),
+                                 shell_command_names[command_index])) {
+                return false;
+            }
+            common_length = candidate_length;
+        } else {
+            common_length = shell_common_prefix(
+                shell_completion_name, common_length,
+                shell_command_names[command_index], candidate_length);
+        }
+        ++matches;
+    }
+    if (matches == 0U) {
+        return shell_bell();
+    }
+    return shell_apply_completion(prompt, line, capacity, length, cursor,
+                                  prefix_length, common_length,
+                                  matches == 1U, ' ');
+}
+
+static bool shell_complete_path(const char *prompt,
+                                char *line,
+                                size_t capacity,
+                                size_t *length,
+                                size_t *cursor,
+                                size_t token_start,
+                                enum shell_completion_type completion_type) {
+    size_t last_slash = SIZE_MAX;
+    size_t index;
+    size_t prefix_start;
+    size_t prefix_length;
+    size_t directory_length;
+    size_t common_length = 0U;
+    size_t matches = 0U;
+    uint32_t single_type = 0U;
+    uint64_t directory_index = 0ULL;
+
+    for (index = token_start; index < *cursor; ++index) {
+        if (line[index] == '/') {
+            last_slash = index;
+        }
+    }
+    if (last_slash == SIZE_MAX) {
+        shell_completion_path[0] = '.';
+        shell_completion_path[1] = '\0';
+        directory_length = 1U;
+        prefix_start = token_start;
+    } else {
+        prefix_start = last_slash + 1U;
+        if (last_slash == token_start) {
+            shell_completion_path[0] = '/';
+            shell_completion_path[1] = '\0';
+            directory_length = 1U;
+        } else {
+            directory_length = last_slash - token_start;
+            if (directory_length >= sizeof(shell_completion_path)) {
+                return shell_bell();
+            }
+            for (index = 0U; index < directory_length; ++index) {
+                shell_completion_path[index] = line[token_start + index];
+            }
+            shell_completion_path[directory_length] = '\0';
+        }
+    }
+    prefix_length = *cursor - prefix_start;
+
+    for (;;) {
+        struct boring_dirent entry;
+        const long result = boring_fs_readdir(
+            shell_completion_path, directory_length, directory_index, &entry);
+        size_t candidate_length;
+
+        if (result == 0L) {
+            break;
+        }
+        if (result < 0L) {
+            return shell_bell();
+        }
+        if ((result != 1L) ||
+            (entry.name_length >= (uint32_t)BORING_DIRENT_NAME_CAPACITY) ||
+            (entry.name[entry.name_length] != '\0') ||
+            ((entry.type != BORING_DIRENT_TYPE_DIRECTORY) &&
+             (entry.type != BORING_DIRENT_TYPE_REGULAR))) {
+            return false;
+        }
+        ++directory_index;
+        if (((completion_type == SHELL_COMPLETION_DIRECTORY) &&
+             (entry.type != BORING_DIRENT_TYPE_DIRECTORY)) ||
+            ((completion_type == SHELL_COMPLETION_REGULAR) &&
+             (entry.type != BORING_DIRENT_TYPE_REGULAR))) {
+            continue;
+        }
+        candidate_length = (size_t)entry.name_length;
+        if (!shell_text_starts_with(entry.name, candidate_length,
+                                    &line[prefix_start], prefix_length)) {
+            continue;
+        }
+        if (matches == 0U) {
+            if (!shell_copy_text(shell_completion_name,
+                                 sizeof(shell_completion_name), entry.name)) {
+                return false;
+            }
+            common_length = candidate_length;
+            single_type = entry.type;
+        } else {
+            common_length = shell_common_prefix(
+                shell_completion_name, common_length,
+                entry.name, candidate_length);
+        }
+        ++matches;
+    }
+    if (matches == 0U) {
+        return shell_bell();
+    }
+    return shell_apply_completion(
+        prompt, line, capacity, length, cursor, prefix_length, common_length,
+        matches == 1U,
+        (single_type == BORING_DIRENT_TYPE_DIRECTORY) ? '/' : ' ');
+}
+
+static bool shell_complete(const char *prompt,
+                           char *line,
+                           size_t capacity,
+                           size_t *length,
+                           size_t *cursor) {
+    size_t token_start;
+    enum shell_completion_type completion_type;
+
+    if ((prompt == NULL) || (line == NULL) || (capacity < 2U) ||
+        (length == NULL) || (cursor == NULL) || (*cursor > *length)) {
+        return false;
+    }
+    token_start = *cursor;
+    while ((token_start != 0U) && !shell_is_space(line[token_start - 1U])) {
+        --token_start;
+    }
+    if (token_start == 0U) {
+        return shell_complete_command(prompt, line, capacity, length, cursor);
+    }
+    completion_type = shell_path_completion_type(line, token_start);
+    if (completion_type == SHELL_COMPLETION_NONE) {
+        return shell_bell();
+    }
+    return shell_complete_path(prompt, line, capacity, length, cursor,
+                               token_start, completion_type);
+}
+
 static bool shell_escape_equals(const char *sequence,
                                 size_t length,
                                 const char *expected) {
@@ -213,14 +767,18 @@ static bool shell_escape_equals(const char *sequence,
 
 static bool shell_handle_escape(const char *prompt,
                                 char *line,
-                                size_t length,
-                                size_t *cursor) {
+                                size_t capacity,
+                                size_t *length,
+                                size_t *cursor,
+                                size_t *history_index) {
     char first;
     char sequence[BORING_SHELL_ESCAPE_MAX];
     size_t sequence_length = 0U;
+    bool final_seen = false;
 
-    if ((prompt == NULL) || (line == NULL) || (cursor == NULL) ||
-        (*cursor > length) || !shell_input_read(&first)) {
+    if ((prompt == NULL) || (line == NULL) || (capacity < 2U) ||
+        (length == NULL) || (cursor == NULL) || (history_index == NULL) ||
+        (*cursor > *length) || !shell_input_read(&first)) {
         return false;
     }
 
@@ -231,34 +789,47 @@ static bool shell_handle_escape(const char *prompt,
         }
         if (final == 'H') {
             *cursor = 0U;
-            return shell_redraw_line(prompt, line, length, *cursor);
+            return shell_redraw_line(prompt, line, *length, *cursor);
         }
         if (final == 'F') {
-            *cursor = length;
-            return shell_redraw_line(prompt, line, length, *cursor);
+            *cursor = *length;
+            return shell_redraw_line(prompt, line, *length, *cursor);
+        }
+        if (final == 'A') {
+            return shell_history_navigate(prompt, line, capacity, length,
+                                          cursor, history_index, true);
+        }
+        if (final == 'B') {
+            return shell_history_navigate(prompt, line, capacity, length,
+                                          cursor, history_index, false);
         }
         return true;
     }
 
     if (first != '[') {
-        shell_input_unread(first);
+        /* ESC-prefixed input is control input. Never put its suffix back into
+         * the command buffer, even when this small editor does not implement
+         * that particular terminal sequence.
+         */
         return true;
     }
 
-    while (sequence_length < (size_t)BORING_SHELL_ESCAPE_MAX) {
+    while (!final_seen) {
         char character;
         const unsigned char byte_min = 0x40U;
         const unsigned char byte_max = 0x7eU;
-        const unsigned char byte =
-            shell_input_read(&character) ? (unsigned char)character : 0U;
+        unsigned char byte;
 
-        if (byte == 0U) {
+        if (!shell_input_read(&character)) {
             return false;
         }
-        sequence[sequence_length] = character;
-        ++sequence_length;
+        byte = (unsigned char)character;
+        if (sequence_length < (size_t)BORING_SHELL_ESCAPE_MAX) {
+            sequence[sequence_length] = character;
+            ++sequence_length;
+        }
         if ((byte >= byte_min) && (byte <= byte_max)) {
-            break;
+            final_seen = true;
         }
     }
 
@@ -270,7 +841,7 @@ static bool shell_handle_escape(const char *prompt,
         return true;
     }
     if (shell_escape_equals(sequence, sequence_length, "C")) {
-        if (*cursor < length) {
+        if (*cursor < *length) {
             ++(*cursor);
             return shell_write("\x1b[C", 3U);
         }
@@ -280,25 +851,41 @@ static bool shell_handle_escape(const char *prompt,
         shell_escape_equals(sequence, sequence_length, "1~") ||
         shell_escape_equals(sequence, sequence_length, "7~")) {
         *cursor = 0U;
-        return shell_redraw_line(prompt, line, length, *cursor);
+        return shell_redraw_line(prompt, line, *length, *cursor);
     }
     if (shell_escape_equals(sequence, sequence_length, "F") ||
         shell_escape_equals(sequence, sequence_length, "4~") ||
         shell_escape_equals(sequence, sequence_length, "8~")) {
-        *cursor = length;
-        return shell_redraw_line(prompt, line, length, *cursor);
+        *cursor = *length;
+        return shell_redraw_line(prompt, line, *length, *cursor);
     }
+    if (shell_escape_equals(sequence, sequence_length, "A")) {
+        return shell_history_navigate(prompt, line, capacity, length, cursor,
+                                      history_index, true);
+    }
+    if (shell_escape_equals(sequence, sequence_length, "B")) {
+        return shell_history_navigate(prompt, line, capacity, length, cursor,
+                                      history_index, false);
+    }
+    if (shell_escape_equals(sequence, sequence_length, "3~")) {
+        size_t index;
 
-    /* Up/Down and Delete are deliberately decoded but ignored in this first
-     * reliability step. They must never leak printable suffix bytes into the
-     * command. History/Delete semantics are added after this corruption gate.
-     */
+        if (*cursor >= *length) {
+            return true;
+        }
+        for (index = *cursor; index < *length; ++index) {
+            line[index] = line[index + 1U];
+        }
+        --(*length);
+        return shell_redraw_line(prompt, line, *length, *cursor);
+    }
     return true;
 }
 
 static bool shell_read_line(const char *prompt, char *line, size_t capacity) {
     size_t length = 0U;
     size_t cursor = 0U;
+    size_t history_index = shell_history_count;
     bool overflow = false;
 
     if ((prompt == NULL) || (line == NULL) || (capacity < 2U)) {
@@ -320,7 +907,15 @@ static bool shell_read_line(const char *prompt, char *line, size_t capacity) {
             }
         }
         if ((unsigned char)character == 0x1bU) {
-            if (!shell_handle_escape(prompt, line, length, &cursor)) {
+            if (!shell_handle_escape(prompt, line, capacity, &length, &cursor,
+                                     &history_index)) {
+                return false;
+            }
+            continue;
+        }
+        if (character == '\t') {
+            if (!overflow &&
+                !shell_complete(prompt, line, capacity, &length, &cursor)) {
                 return false;
             }
             continue;
@@ -460,6 +1055,8 @@ static bool shell_print_fs_error(const char *command, long result) {
         message = "already exists";
     } else if (result == -(long)BORING_SYSCALL_ENOTDIR) {
         message = "not a directory";
+    } else if (result == -(long)BORING_SYSCALL_EISDIR) {
+        message = "is a directory";
     } else if (result == -(long)BORING_SYSCALL_ENOTEMPTY) {
         message = "directory not empty";
     } else if (result == -(long)BORING_SYSCALL_ENOSPC) {
@@ -484,15 +1081,12 @@ static bool shell_command_help(const char *argument) {
     if ((argument != NULL) && (argument[0] != '\0')) {
         return shell_write_text("help: usage: help\r\n");
     }
-    return shell_write_text("help\r\n") &&
-           shell_write_text("ls [path]\r\n") &&
-           shell_write_text("mkdir <name>\r\n") &&
-           shell_write_text("rmdir <name>\r\n") &&
-           shell_write_text("cd <path>\r\n") &&
-           shell_write_text("cat <path>\r\n") &&
-           shell_write_text("touch <path>\r\n") &&
-           shell_write_text("write <path> <text>\r\n") &&
-           shell_write_text("rm <path>\r\n");
+    return shell_write_text("Filesystem:\r\n") &&
+           shell_write_text("  ls cd pwd mkdir rmdir touch cat write rm\r\n") &&
+           shell_write_text("\r\nShell:\r\n") &&
+           shell_write_text("  clear echo history help exit logout\r\n") &&
+           shell_write_text("\r\nSystem:\r\n") &&
+           shell_write_text("  boringfetch uname hostname whoami ps\r\n");
 }
 
 static bool shell_command_ls(const char *argument) {
@@ -616,10 +1210,18 @@ static bool shell_command_write(char *argument) {
     char *cursor;
     char *text;
     size_t text_length;
+    size_t index;
+    bool newline = true;
     long result;
 
     if ((argument == NULL) || (argument[0] == '\0')) {
-        return shell_write_text("write: usage: write <path> <text>\r\n");
+        return shell_write_text(
+            "write: usage: write [-n] <path> <text>\r\n");
+    }
+    if ((argument[0] == '-') && (argument[1] == 'n') &&
+        shell_is_space(argument[2])) {
+        newline = false;
+        argument = shell_trim(&argument[3]);
     }
     path = argument;
     cursor = path;
@@ -627,15 +1229,29 @@ static bool shell_command_write(char *argument) {
         ++cursor;
     }
     if (*cursor == '\0') {
-        return shell_write_text("write: usage: write <path> <text>\r\n");
+        return shell_write_text(
+            "write: usage: write [-n] <path> <text>\r\n");
     }
     *cursor = '\0';
     ++cursor;
     text = shell_trim(cursor);
     if ((text == NULL) || (text[0] == '\0')) {
-        return shell_write_text("write: usage: write <path> <text>\r\n");
+        return shell_write_text(
+            "write: usage: write [-n] <path> <text>\r\n");
     }
     text_length = boring_strlen(text);
+    if (newline) {
+        if (text_length >= sizeof(shell_write_buffer)) {
+            return shell_print_fs_error(
+                "write", -(long)BORING_SYSCALL_ENAMETOOLONG);
+        }
+        for (index = 0U; index < text_length; ++index) {
+            shell_write_buffer[index] = text[index];
+        }
+        shell_write_buffer[text_length] = '\n';
+        ++text_length;
+        text = shell_write_buffer;
+    }
     result = boring_fs_write(path, boring_strlen(path), text, text_length);
     if (result == (long)text_length) {
         return true;
@@ -656,27 +1272,213 @@ static bool shell_command_rm(const char *argument) {
     return shell_print_fs_error("rm", result);
 }
 
+static bool shell_command_clear(const char *argument) {
+    if ((argument != NULL) && (argument[0] != '\0')) {
+        return shell_write_text("clear: usage: clear\r\n");
+    }
+    return shell_write("\x1b[2J\x1b[H", 7U);
+}
+
+static bool shell_command_pwd(const char *argument) {
+    char cwd[BORING_SYSCALL_CWD_MAX + 1U];
+    long result;
+
+    if ((argument != NULL) && (argument[0] != '\0')) {
+        return shell_write_text("pwd: usage: pwd\r\n");
+    }
+    result = boring_getcwd(cwd, sizeof(cwd));
+    if ((result < 1L) || ((size_t)result >= sizeof(cwd)) ||
+        (cwd[(size_t)result] != '\0')) {
+        return shell_write_text("pwd: current directory unavailable\r\n");
+    }
+    return shell_write(cwd, (size_t)result) && shell_write("\r\n", 2U);
+}
+
+static bool shell_command_echo(const char *argument) {
+    return ((argument == NULL) || shell_write_text(argument)) &&
+           shell_write("\r\n", 2U);
+}
+
+static bool shell_command_hostname(const char *argument) {
+    struct boring_system_info info;
+
+    if ((argument != NULL) && (argument[0] != '\0')) {
+        return shell_write_text("hostname: usage: hostname\r\n");
+    }
+    if (!shell_system_info(&info)) {
+        return shell_write_text("hostname: system information unavailable\r\n");
+    }
+    return shell_write_text(info.hostname) && shell_write("\r\n", 2U);
+}
+
+static bool shell_command_uname(const char *argument) {
+    struct boring_system_info info;
+
+    if ((argument != NULL) && (argument[0] != '\0')) {
+        return shell_write_text("uname: usage: uname\r\n");
+    }
+    if (!shell_system_info(&info)) {
+        return shell_write_text("uname: system information unavailable\r\n");
+    }
+    return shell_write_text(info.os_name) && shell_write_text(" ") &&
+           shell_write_text(info.kernel_name) && shell_write_text(" ") &&
+           shell_write_text(info.kernel_version) && shell_write_text(" ") &&
+           shell_write_text(info.arch) && shell_write("\r\n", 2U);
+}
+
+static bool shell_command_whoami(const char *argument) {
+    struct boring_system_info info;
+
+    if ((argument != NULL) && (argument[0] != '\0')) {
+        return shell_write_text("whoami: usage: whoami\r\n");
+    }
+    if (!shell_system_info(&info)) {
+        return shell_write_text("whoami: process identity unavailable\r\n");
+    }
+    return shell_write_text(info.username) && shell_write("\r\n", 2U);
+}
+
+static const char *shell_process_state(uint32_t state) {
+    if (state == BORING_PROCESS_STATE_RUNNING) {
+        return "RUNNING";
+    }
+    if (state == BORING_PROCESS_STATE_WAITING) {
+        return "WAITING";
+    }
+    if (state == BORING_PROCESS_STATE_ZOMBIE) {
+        return "ZOMBIE";
+    }
+    return NULL;
+}
+
+static bool shell_command_ps(const char *argument) {
+    uint64_t index = 0ULL;
+
+    if ((argument != NULL) && (argument[0] != '\0')) {
+        return shell_write_text("ps: usage: ps\r\n");
+    }
+    if (!shell_write_text("PID PPID STATE NAME\r\n")) {
+        return false;
+    }
+    for (;;) {
+        struct boring_process_info info;
+        const long result = boring_process_snapshot(index, &info);
+        const char *state;
+
+        if (result == 0L) {
+            return true;
+        }
+        if (result < 0L) {
+            return shell_write_text("ps: process snapshot unavailable\r\n");
+        }
+        state = shell_process_state(info.state);
+        if ((result != 1L) || (state == NULL) ||
+            (shell_bounded_length(info.name,
+                                  BORING_PROCESS_NAME_CAPACITY - 1U) >=
+             BORING_PROCESS_NAME_CAPACITY)) {
+            return false;
+        }
+        if (!shell_write_u64(info.pid) || !shell_write_text(" ") ||
+            !shell_write_u64(info.parent_pid) || !shell_write_text(" ") ||
+            !shell_write_text(state) || !shell_write_text(" ") ||
+            !shell_write_text(info.name) || !shell_write("\r\n", 2U)) {
+            return false;
+        }
+        ++index;
+    }
+}
+
+static bool shell_command_history(const char *argument) {
+    size_t index;
+    uint64_t number = shell_history_total - (uint64_t)shell_history_count + 1ULL;
+
+    if ((argument != NULL) && (argument[0] != '\0')) {
+        return shell_write_text("history: usage: history\r\n");
+    }
+    for (index = 0U; index < shell_history_count; ++index) {
+        if (!shell_write_u64(number + (uint64_t)index) ||
+            !shell_write_text("  ") ||
+            !shell_write_text(shell_history[shell_history_slot(index)]) ||
+            !shell_write("\r\n", 2U)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool shell_command_exit(const char *command, const char *argument) {
+    if ((argument != NULL) && (argument[0] != '\0')) {
+        return shell_write_text(command) &&
+               shell_write_text(": usage: ") &&
+               shell_write_text(command) && shell_write("\r\n", 2U);
+    }
+    boring_exit(0);
+}
+
 static bool shell_command_boringfetch(const char *argument) {
     struct boring_system_info info;
+    uint64_t used_memory;
+    uint64_t free_memory;
+    uint64_t uptime_seconds;
+    bool uptime_available = false;
 
     if ((argument == NULL) || (argument[0] != '\0')) {
         return shell_write_text("boringfetch: no arguments supported\r\n");
     }
-    if ((boring_system_info(&info) != 0L) ||
-        (info.abi_version != BORING_SYSTEM_INFO_ABI_VERSION)) {
+    if (!shell_system_info(&info) ||
+        (info.free_memory_bytes > info.usable_memory_bytes)) {
         return shell_write_text("boringfetch: system information unavailable\r\n");
     }
-    return shell_write_text("    ____             BoringOS\r\n") &&
-           shell_write_text("   / __ )____  _____ -------------------------\r\n") &&
-           shell_write_text("  / __  / __ \\/ ___/ OS: BoringOS\r\n") &&
-           shell_write_text(" / /_/ / /_/ / /    Kernel: BoringKernel 0.0.27-dev\r\n") &&
-           shell_write_text("/_____/\\____/_/      Arch: x86_64\r\n") &&
-           shell_write_text("                     Memory usable: ") &&
-           shell_write_u64(info.usable_memory_bytes) &&
-           shell_write_text(" bytes\r\n                     Memory free: ") &&
-           shell_write_u64(info.free_memory_bytes) &&
-           shell_write_text(" bytes\r\n                     Root FS: BoringFS\r\n") &&
-           shell_write_text("                     Shell: boring-shell\r\n");
+    used_memory = info.usable_memory_bytes - info.free_memory_bytes;
+    free_memory = info.free_memory_bytes;
+    uptime_seconds = 0ULL;
+    if (info.timer_frequency_millihz != 0U) {
+        const uint64_t frequency = (uint64_t)info.timer_frequency_millihz;
+        const uint64_t whole = info.uptime_ticks / frequency;
+
+        if (whole <= UINT64_MAX / 1000ULL) {
+            uptime_seconds = whole * 1000ULL +
+                ((info.uptime_ticks % frequency) * 1000ULL) / frequency;
+            uptime_available = true;
+        }
+    }
+    if (!shell_write_text("    ____             BoringOS\r\n") ||
+        !shell_write_text("   / __ )____  _____ -------------------------\r\n") ||
+        !shell_write_text("  / __  / __ \\/ ___/ OS: ") ||
+        !shell_write_text(info.os_name) || !shell_write_text("\r\n") ||
+        !shell_write_text(" / /_/ / /_/ / /    Kernel: ") ||
+        !shell_write_text(info.kernel_name) || !shell_write_text(" ") ||
+        !shell_write_text(info.kernel_version) || !shell_write_text("\r\n") ||
+        !shell_write_text("/_____/\\____/_/      Arch: ") ||
+        !shell_write_text(info.arch) || !shell_write_text("\r\n") ||
+        !shell_write_text("                     Hostname: ") ||
+        !shell_write_text(info.hostname) || !shell_write_text("\r\n") ||
+        !shell_write_text("                     User: ") ||
+        !shell_write_text(info.username) || !shell_write_text("\r\n") ||
+        !shell_write_text("                     Shell: boring-shell\r\n") ||
+        !shell_write_text("                     Root FS: ") ||
+        !shell_write_text(info.root_fs) || !shell_write_text("\r\n") ||
+        !shell_write_text("                     Root device: ") ||
+        !shell_write_text(info.root_device) || !shell_write_text("\r\n") ||
+        !shell_write_text("                     Memory: ") ||
+        !shell_write_u64(used_memory / BORING_SHELL_MIB) ||
+        !shell_write_text(" MiB / ") ||
+        !shell_write_u64(info.usable_memory_bytes / BORING_SHELL_MIB) ||
+        !shell_write_text(" MiB\r\n") ||
+        !shell_write_text("                     Free memory: ") ||
+        !shell_write_u64(free_memory / BORING_SHELL_MIB) ||
+        !shell_write_text(" MiB\r\n") ||
+        !shell_write_text("                     Processes: ") ||
+        !shell_write_u64((uint64_t)info.process_count) ||
+        !shell_write_text("\r\n                     PID: ") ||
+        !shell_write_u64(info.current_pid) || !shell_write_text("\r\n")) {
+        return false;
+    }
+    if (!uptime_available) {
+        return true;
+    }
+    return shell_write_text("                     Uptime: ") &&
+           shell_write_u64(uptime_seconds) && shell_write_text(" s\r\n");
 }
 
 static bool shell_execute_line(char *line) {
@@ -716,6 +1518,36 @@ static bool shell_execute_line(char *line) {
     if (shell_text_equals(command, "rm")) {
         return shell_command_rm(argument);
     }
+    if (shell_text_equals(command, "clear")) {
+        return shell_command_clear(argument);
+    }
+    if (shell_text_equals(command, "pwd")) {
+        return shell_command_pwd(argument);
+    }
+    if (shell_text_equals(command, "echo")) {
+        return shell_command_echo(argument);
+    }
+    if (shell_text_equals(command, "hostname")) {
+        return shell_command_hostname(argument);
+    }
+    if (shell_text_equals(command, "uname")) {
+        return shell_command_uname(argument);
+    }
+    if (shell_text_equals(command, "whoami")) {
+        return shell_command_whoami(argument);
+    }
+    if (shell_text_equals(command, "ps")) {
+        return shell_command_ps(argument);
+    }
+    if (shell_text_equals(command, "history")) {
+        return shell_command_history(argument);
+    }
+    if (shell_text_equals(command, "exit")) {
+        return shell_command_exit("exit", argument);
+    }
+    if (shell_text_equals(command, "logout")) {
+        return shell_command_exit("logout", argument);
+    }
     if (shell_text_equals(command, "boringfetch")) {
         return shell_command_boringfetch(argument);
     }
@@ -726,17 +1558,18 @@ static bool shell_execute_line(char *line) {
 
 int boring_main(void) {
     static const char starting[] = "boring-shell: starting\r\n";
-    static const char pid_ok[] = "boring-shell: pid 2\r\n";
+    static const char pid_prefix[] = "boring-shell: pid ";
     static const char ready[] = "boring-shell ready.\r\n\r\n";
     static const char failed[] = "boring-shell: FAILED\r\n";
-    static const char prompt[] = "boring> ";
     char line[BORING_SHELL_LINE_MAX + 1U];
+    const uint64_t pid = boring_getpid();
 
-    shell_input_pushback_valid = false;
     shell_skip_lf_after_cr = false;
+    shell_history_reset();
     if (!shell_write(starting, sizeof(starting) - 1U) ||
-        (boring_getpid() != 2ULL) ||
-        !shell_write(pid_ok, sizeof(pid_ok) - 1U) ||
+        (pid < 2ULL) ||
+        !shell_write(pid_prefix, sizeof(pid_prefix) - 1U) ||
+        !shell_write_u64(pid) || !shell_write("\r\n", 2U) ||
         !shell_syscall_safety()) {
         (void)shell_write(failed, sizeof(failed) - 1U);
         shell_idle_forever();
@@ -750,8 +1583,9 @@ int boring_main(void) {
     }
 
     for (;;) {
-        if (!shell_write_text(prompt) ||
-            !shell_read_line(prompt, line, sizeof(line)) ||
+        if (!shell_build_prompt() || !shell_write_text(shell_prompt) ||
+            !shell_read_line(shell_prompt, line, sizeof(line)) ||
+            !shell_history_add(line) ||
             !shell_execute_line(line)) {
             (void)shell_write(failed, sizeof(failed) - 1U);
             shell_idle_forever();

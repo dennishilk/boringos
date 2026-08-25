@@ -1,8 +1,57 @@
 # BoringKernel processes and independent address spaces
 
-This document describes the implemented **BoringKernel 0.0.9-dev** process/address-space milestone. It is deliberately CPL0-only. A BoringKernel process is now an identity plus address-space owner; it is not yet a userspace process.
+This document began with the **BoringKernel 0.0.9-dev** process/address-space
+milestone. The original CPL0-only proof is retained below as historical design
+context; later milestones added real userspace processes and M27 adds the
+bounded shell-child lifecycle described here.
 
-## Task and process are different objects
+## M27 userspace process and shell-session lifecycle
+
+The bounded process table now records a monotonic PID, parent PID, address
+space, retained VFS CWD, canonical CWD text, process name, single-user name,
+state and slot ownership. PID 0 is the bootstrap kernel, PID 1 is
+`boring-init`, and every launched `boring-shell` is a real child of PID 1 in
+its own address space.
+
+The public snapshot state is derived from real table state:
+
+```text
+current alive process     -> RUNNING
+other alive process       -> WAITING
+finished unreaped process -> ZOMBIE
+```
+
+`SYS_EXIT` is limited to the currently suspended launch child. It activates
+the saved parent, unloads the child's ELF mappings, marks the child finished
+and non-runnable, preserves the signed exit status, and restores PID 1's
+saved syscall return frame. The process object, CWD and address space remain
+owned by the zombie until the parent reaps it.
+
+`WAITPID` is likewise deliberately narrow: the caller must be the exact
+saved parent and the requested PID must be that parent's exact exited child.
+It copies the preserved status to checked userspace memory, destroys the
+inactive child address space, releases the retained CWD, clears the process
+slot and closes the suspended-launch record. PID 1 then launches the next
+shell. Repeated acceptance proves that an old zombie disappears from `ps`
+before the replacement shell is used and that the four-slot table does not
+exhaust.
+
+Slots are reusable only after successful reap. PID numbers remain
+monotonically allocated and are not reused in M27; there are no PID
+namespaces, process groups, signals, `fork`, general `exec`, asynchronous
+waiting or multiple concurrent launch children.
+
+The username `boring` is real kernel-owned process identity metadata used by
+`whoami`, the prompt and system information. It does not create credentials,
+authentication, authorization or a Unix permission model. Accordingly,
+`logout` means terminating the shell session through the same real lifecycle
+as `exit`, not logging out of an authenticated session.
+
+---
+
+## Original 0.0.9 task and process proof
+
+### Task and process are different objects
 
 The current model keeps two concepts separate:
 
@@ -16,7 +65,10 @@ process
 
 A task now holds a pointer to its owning `struct process`. The bootstrap and existing cooperative/preemptive regression tasks belong to PID 0. The process-isolation acceptance creates one preemptive task for PID 1 and one for PID 2.
 
-There is no thread abstraction, parent/child hierarchy, signal model, file-descriptor table, credential model, session, process group, zombie state, or `waitpid`.
+At that original milestone there was no thread abstraction, parent/child
+hierarchy, signal model, file-descriptor table, credential model, session,
+process group, zombie state, or `waitpid`. The M27 extension above supersedes
+the parent/child, zombie and `waitpid` parts of that historical boundary.
 
 ## Minimal process object
 

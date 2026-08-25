@@ -37,6 +37,10 @@ real PID 1 boring-init at CPL3
     ↓
 native PID 2 boring-shell at CPL3
     ↓
+bounded ANSI line editor + history + readdir-backed completion
+    ↓
+real CWD/identity/process inspection + exit/wait/reap/respawn
+    ↓
 userspace filesystem syscalls
     ↓
 process CWD
@@ -91,6 +95,10 @@ The current syscall ABI is exactly:
 11 FS_WRITE
 12 FS_UNLINK
 13 INFO (versioned bounded system-information structure)
+14 GETCWD
+15 PROCESS_SNAPSHOT
+16 EXIT
+17 WAITPID
 ```
 
 There is still no numeric file-descriptor table, no stdin/stdout/stderr abstraction, no executable loading from VFS/BoringFS, no partition layer, no networking, no display/input stack, no BoringWM integration, no APIC migration and no SMP.
@@ -475,9 +483,9 @@ Add bounded synchronous mutation through the proven QEMU raw disk → modern Vir
 
 The writer uses deterministic first-fit allocation, persistent bitmap/object/directory updates, reusable deleted slots and blocks, and one-block regular-file replacement. It deliberately has no journal or crash-consistency guarantee; ordinary reported write failures are rolled back where possible and every acceptance image is independently revalidated.
 
-## Milestone 25: persistent native root filesystem — CURRENT
+## Milestone 25: persistent native root filesystem — COMPLETE
 
-Eventually boot through a persistent BoringFS root into native userspace:
+Boot through a persistent BoringFS root into native userspace:
 
 ```text
 BoringKernel
@@ -496,6 +504,13 @@ BoringFS root image through modern VirtIO. It does not invent a partition
 layer or mislabel the raw filesystem as a self-contained boot image. The
 human-runnable bundle and its CI acceptance use the same two-file topology.
 
+Acceptance record:
+
+```text
+final PR: #36
+merged main: 89b86f39758ddd37296e096ee6b300ec6b034169
+```
+
 ---
 
 # Security and corruption gates
@@ -506,56 +521,74 @@ Networking remains unrelated and deferred.
 
 ---
 
-# Exact current implementation milestone
-
-## Milestone 25 — persistent native BoringFS root
-
-The current implementation item is **Milestone 25**. Milestones 23 and 24 are
-verified merged. M25 makes the writable BoringFS volume the VFS root before
-creating PID 1, then starts the established `boring-init` and `boring-shell`
-userspace path with `/` as their persistent CWD.
-
-Its architectural boundary is:
-
-```text
-host-formatted BoringFS root image
-          ↓
-   QEMU raw disk
-          ↓
- modern VirtIO PCI
-          ↓
-        vblk0
-          ↓
- M21 block-device API
-          ↓
- shared BoringFS validator + synchronous writer
-          ↓
- writable BoringFS VFS
-          ↓
-          /
-          ↓
- PID 2 boring-shell
-```
-
-M25 retains Limine ISO boot modules for `boring-init` and `boring-shell`; it
-does not yet load executables from BoringFS. It adds no partition parsing,
-journaling, crash-consistency claim, file descriptors, networking, or desktop
-work. Historical RAMFS and `/disk` acceptance modes remain regression gates.
-
----
-
 # Stage 10 — native system identity
 
-## Milestone 26: native `boringfetch` — CURRENT
+## Milestone 26: native `boringfetch` — COMPLETE
 
 The native-C `boringfetch` command runs inside the real ring-3
 `boring-shell`. Static OS, architecture, root-filesystem and shell identity is
 owned by BoringOS; usable and currently free physical memory come from one
 versioned, bounded `INFO` syscall structure populated by the PMM. No CPU,
-SMBIOS, network, uptime or other value is fabricated.
+SMBIOS or network value is fabricated.
 
-The current process model has no exit/reaping or shell-to-child return path,
-so this first implementation is deliberately linked into the native shell
-ELF. It is not claimed to be a standalone `/bin/boringfetch` executable.
+This first implementation is deliberately linked into the native shell ELF.
+It is not claimed to be a standalone `/bin/boringfetch` executable.
 VFS-backed executable loading remains a future milestone rather than being
 faked through a host shadow or boot-module path.
+
+Acceptance record:
+
+```text
+final PR: #37
+merged main: b4e9e68c7d1a3d48cf0039158564ae1d11457e64
+```
+
+---
+
+# Stage 11 — interactive native shell
+
+## Milestone 27: interactive shell and real session lifecycle — COMPLETE
+
+Milestone 27 turns the existing ring-3 `boring-shell` into a bounded
+interactive environment while preserving the established syscall, VFS,
+RAMFS, BoringFS, VirtIO and persistent-root architecture.
+
+Implemented shell behavior includes:
+
+- a 512-byte bounded editable line with Left, Right, Home, End, Backspace and
+  Delete;
+- complete consumption of CSI/SS3 terminal controls, including unsupported
+  sequences, so suffix bytes cannot become command text;
+- a volatile 16-command history with Up/Down navigation and `history` output;
+- command-name completion plus type-aware path completion from real VFS
+  `readdir` results, with common-prefix and buffer-bound handling;
+- the real `boring@boringos:<cwd>$ ` prompt, where identity is kernel-owned
+  single-user metadata and `<cwd>` comes from the current process;
+- `clear`, `pwd`, `echo`, `hostname`, `uname`, `whoami`, `ps`, `history`,
+  `exit` and `logout`, in addition to the existing filesystem commands and
+  `boringfetch`;
+- line-oriented `write <path> <text>` with one trailing newline by default,
+  and exact no-newline bytes through `write -n`;
+- Boringfetch v2 fields for real hostname, user, root metadata, PMM memory,
+  live process count/current PID and real PIT-derived uptime.
+
+`EXIT` now terminates the launched shell, unloads its ELF mappings and leaves
+a non-runnable zombie with a preserved status. PID 1 resumes, uses `WAITPID`
+to validate and reap that exact child, releases its address space and CWD,
+then launches a fresh shell. Process-table slots are reusable only after reap;
+PID values remain monotonically allocated and are not reused in M27.
+`logout` is intentionally the same shell-session termination operation as
+`exit`: BoringOS has identity strings, but no authentication, authorization,
+login manager or Unix permission model.
+
+The historical corruption root cause was deterministic: the old editor
+consumed only the ESC byte and allowed remaining printable escape-sequence
+bytes into the parsed command. The 1,400-command pacing/burst test did **not**
+prove UART FIFO overflow. The bounded UART RX queue remains defensive
+reliability hardening, not the claimed root-cause fix.
+
+No canonical Nebby reference was available in the repository or workspace,
+so M27 retains the existing BOR artwork rather than inventing a mascot.
+
+M27 does not add persistent history, credentials, permissions, a TTY/FD
+layer, VFS-backed executable loading, networking, graphics or BoringWM.

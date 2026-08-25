@@ -44,7 +44,7 @@ fail() {
 }
 
 prompt_count() {
-    (grep -Fo 'boring> ' "${LOG}" 2>/dev/null || true) | wc -l | tr -d ' '
+    (grep -Ec '^boring@boringos:/[^$]*\$ ' "${LOG}" 2>/dev/null || true)
 }
 
 failure_seen() {
@@ -108,7 +108,7 @@ make -C "${ROOT}" TEST_MODE=shell
 mkfifo "${SERIAL_IN}" "${SERIAL_OUT}"
 exec 3<> "${SERIAL_IN}"
 FD_OPEN=1
-cat "${SERIAL_OUT}" > "${LOG}" &
+tr -d '\r' < "${SERIAL_OUT}" > "${LOG}" &
 CAT_PID=$!
 
 "${QEMU}" -M q35 -cpu "${QEMU_CPU}" -m 128M \
@@ -157,11 +157,37 @@ wait_prompt $((PROMPT + CYCLES_MIXED * COMMANDS_PER_CYCLE))
 # -> shell line buffer. Exact counts catch dropped, duplicated, substituted,
 # merged, or leaked escape bytes even when a mutated command happens to be
 # syntactically valid.
-check_exact_count 'boring> boringfetch' $((TOTAL_CYCLES * 3))
-check_exact_count 'boring> cd TEST' "${TOTAL_CYCLES}"
-check_exact_count 'boring> cd ..' "${TOTAL_CYCLES}"
-check_exact_count 'boring> help' "${TOTAL_CYCLES}"
-check_exact_count 'boring> ls' "${TOTAL_CYCLES}"
+check_exact_count 'boring@boringos:/$ boringfetch' $((TOTAL_CYCLES * 3))
+check_exact_count 'boring@boringos:/$ cd TEST' "${TOTAL_CYCLES}"
+check_exact_count 'boring@boringos:/TEST$ cd ..' "${TOTAL_CYCLES}"
+check_exact_count 'boring@boringos:/$ help' "${TOTAL_CYCLES}"
+check_exact_count 'boring@boringos:/$ ls' "${TOTAL_CYCLES}"
+
+# Extend the same end-to-end path with terminal control input. Every sequence
+# must be consumed as control input; no CSI/SS3 suffix byte may reach command
+# parsing. These cases run after the exact 1,400-command witness above so its
+# historical byte-count contract remains directly comparable.
+printf 'boringfeth\033[Dc\n' >&3
+wait_prompt $((PROMPT + 1))
+printf 'hlp\033[H\033[Ce\n' >&3
+wait_prompt $((PROMPT + 1))
+printf 'helXp\033[D\033[D\033[3~\n' >&3
+wait_prompt $((PROMPT + 1))
+printf 'elpX\033[Hh\033[F\b\n' >&3
+wait_prompt $((PROMPT + 1))
+printf 'echo history-key\n\033[A\n' >&3
+wait_prompt $((PROMPT + 2))
+printf 'echo draft-key\033[A\033[B\n' >&3
+wait_prompt $((PROMPT + 1))
+printf 'boringf\t\n' >&3
+wait_prompt $((PROMPT + 1))
+printf 'cd TE\t\n' >&3
+wait_prompt $((PROMPT + 1))
+send_command 'cd ..'
+
+grep -Fqx 'draft-key' "${LOG}" || fail 'Down history leaked or lost bytes'
+HISTORY_KEY_COUNT=$(grep -Fxc 'history-key' "${LOG}" 2>/dev/null || true)
+[ "${HISTORY_KEY_COUNT}" -eq 2 ] || fail 'Up history did not replay exactly'
 
 if grep -Eq 'command not found:|^cd: |^ls: ' "${LOG}"; then
     fail 'input stress produced a mutated command or filesystem error'

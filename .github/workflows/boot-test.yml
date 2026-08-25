@@ -75,11 +75,20 @@ jobs:
       - name: Audit generated boring-shell artifact
         run: sh ./tests/shell-build-audit.sh
 
+      - name: Bounded shell editor and completion host tests
+        run: make shell-host-test
+
       - name: Build boring-shell test mode
         run: make TEST_MODE=shell
 
       - name: Real interactive boring-shell
         run: sh ./tests/shell-qemu.sh
+
+      - name: ANSI line editing history and completion
+        run: sh ./tests/shell-editing-qemu.sh
+
+      - name: Shell exit wait reap and respawn lifecycle
+        run: sh ./tests/shell-lifecycle-qemu.sh
 
       - name: Shell input pacing and burst stress
         run: sh ./tests/shell-input-stress-qemu.sh

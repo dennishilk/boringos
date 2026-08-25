@@ -22,6 +22,36 @@ static bool init_write_exact(const char *message, size_t length) {
 }
 
 #ifdef BORING_INIT_LAUNCH_SHELL
+static bool init_write_u64(uint64_t value) {
+    char digits[21];
+    size_t count = 0U;
+    size_t index;
+
+    do {
+        digits[count] = (char)('0' + (char)(value % 10ULL));
+        value /= 10ULL;
+        ++count;
+    } while (value != 0ULL);
+    for (index = 0U; index < count / 2U; ++index) {
+        const char temporary = digits[index];
+        digits[index] = digits[count - index - 1U];
+        digits[count - index - 1U] = temporary;
+    }
+    return init_write_exact(digits, count);
+}
+
+static bool init_write_status(int status) {
+    int64_t wide = (int64_t)status;
+
+    if (wide < 0) {
+        if (!init_write_exact("-", 1U)) {
+            return false;
+        }
+        wide = -wide;
+    }
+    return init_write_u64((uint64_t)wide);
+}
+
 static bool init_launch_safety(void) {
     static const char shell_name[] = "boring-shell";
     static const char unknown_name[] = "not-shell";
@@ -73,8 +103,9 @@ int boring_main(void) {
     {
         static const char launch_message[] =
             "boring-init: launching boring-shell\n";
-        static const char respawn_message[] =
-            "boring-init: shell exited; respawning\n";
+        static const char exited_prefix[] =
+            "boring-init: shell exited with status ";
+        static const char respawn_suffix[] = "; respawning\n";
         static const char shell_name[] = "boring-shell";
 
         if (!init_launch_safety()) {
@@ -104,8 +135,11 @@ int boring_main(void) {
                 init_idle_forever();
             }
 
-            if (!init_write_exact(respawn_message,
-                                  sizeof(respawn_message) - 1U)) {
+            if (!init_write_exact(exited_prefix,
+                                  sizeof(exited_prefix) - 1U) ||
+                !init_write_status(status) ||
+                !init_write_exact(respawn_suffix,
+                                  sizeof(respawn_suffix) - 1U)) {
                 (void)init_write_exact(failed, sizeof(failed) - 1U);
                 init_idle_forever();
             }

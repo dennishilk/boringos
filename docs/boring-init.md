@@ -2,6 +2,21 @@
 
 Milestone 16 introduces the first real long-lived native BoringOS userspace process: `boring-init`.
 
+## M27 shell supervision extension
+
+In shell-launch boot modes, PID 1 is now a real synchronous shell supervisor.
+It launches one `boring-shell`, resumes only after that child calls `EXIT`,
+waits for the exact returned child PID, receives its preserved status through
+`WAITPID`, and reaps the child before starting a replacement shell. The reap
+releases the child's address space, retained CWD and process-table slot, so
+repeated `exit`/`logout` cycles do not leak zombies or exhaust the bounded
+table. Replacement PIDs increase monotonically.
+
+This does not make `boring-init` a general service manager: only the one
+registered shell boot module can be launched, only one child may be suspended
+at a time, and there are no signals, jobs, sessions or asynchronous child
+notifications.
+
 ## Boot path
 
 The current bootstrap acceptance path is deliberately small:
@@ -35,7 +50,8 @@ The initial program uses only the already-established syscall ABI:
 
 It verifies that it is PID 1, emits deterministic serial-console evidence, touches real writable userspace state, and then remains alive in CPL3.
 
-There is intentionally no exit syscall in this milestone. Returning from `boring_main()` is not used as the PID 1 lifecycle model.
+There was intentionally no exit syscall in Milestone 16. M27 adds the narrow
+shell-child lifecycle described above; PID 1 itself still does not exit.
 
 ## Acceptance mode
 
@@ -56,7 +72,7 @@ The host acceptance harness terminates QEMU only after `boring-init: online` is 
 
 ## Non-goals
 
-Milestone 16 does not add:
+Milestone 16 itself did not add:
 
 - `boring-shell` or any Milestone 17 behavior;
 - a file-descriptor table;
@@ -64,6 +80,6 @@ Milestone 16 does not add:
 - file-related userspace syscalls;
 - executable loading from VFS or RAMFS;
 - BoringFS, block devices, partitions or persistent storage;
-- an exit syscall or process reaping model;
+- the later M27 exit syscall or process reaping model;
 - general userspace task scheduling;
 - networking, display/input, APIC migration or SMP.

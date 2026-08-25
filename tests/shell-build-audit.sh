@@ -82,7 +82,8 @@ fi
 
 for symbol in \
     _start boring_main boring_getpid boring_console_read boring_console_write \
-    boring_fs_readdir boring_fs_mkdir boring_fs_rmdir boring_fs_chdir
+    boring_fs_readdir boring_fs_mkdir boring_fs_rmdir boring_fs_chdir \
+    boring_getcwd boring_process_snapshot boring_system_info boring_exit
 do
     if ! printf '%s\n' "${SYMBOLS}" | grep -Eq " [Tt] ${symbol}$"; then
         echo "missing required boring-shell symbol: ${symbol}" >&2

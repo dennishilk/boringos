@@ -14,6 +14,7 @@ FINAL_SLICE="${TMPDIR_PATH}/final-slice.log"
 PID=
 CAT_PID=
 SERIAL_FD_OPEN=0
+PROMPT=0
 
 cleanup() {
     if [ "${SERIAL_FD_OPEN}" -eq 1 ]; then
@@ -44,7 +45,8 @@ failure_seen() {
 }
 
 prompt_count() {
-    (grep -Fo 'boring> ' "${LOG}" 2>/dev/null || true) | wc -l | tr -d ' '
+    (grep -Eo 'boring@boringos:/[^$]*\$ ' "${LOG}" 2>/dev/null || true) |
+        wc -l | tr -d ' '
 }
 
 wait_for_prompt() {
@@ -56,6 +58,7 @@ wait_for_prompt() {
         fi
         count=$(prompt_count)
         if [ "${count}" -ge "${target}" ]; then
+            PROMPT=${target}
             return 0
         fi
         if ! kill -0 "${PID}" 2>/dev/null; then
@@ -88,9 +91,8 @@ wait_for_line() {
 
 send_command() {
     command=$1
-    next_prompt=$2
     printf '%s\n' "${command}" >&3
-    wait_for_prompt "${next_prompt}"
+    wait_for_prompt $((PROMPT + 1))
 }
 
 make -C "${ROOT}" TEST_MODE=shell
@@ -98,7 +100,7 @@ make -C "${ROOT}" TEST_MODE=shell
 mkfifo "${SERIAL_IN}" "${SERIAL_OUT}"
 exec 3<> "${SERIAL_IN}"
 SERIAL_FD_OPEN=1
-cat "${SERIAL_OUT}" > "${LOG}" &
+tr -d '\r' < "${SERIAL_OUT}" > "${LOG}" &
 CAT_PID=$!
 
 "${QEMU}" \
@@ -116,6 +118,8 @@ CAT_PID=$!
 PID=$!
 
 wait_for_prompt 1
+grep -Fq 'boring@boringos:/$ ' "${LOG}" ||
+    fail_dump 'missing real root CWD identity prompt'
 
 for line in \
     'BoringKernel 0.0.27-dev' \
@@ -173,41 +177,84 @@ if [ -z "${INIT_ROOT}" ] || [ -z "${CHILD_ROOT}" ] ||
     fail_dump 'boring-init and boring-shell do not have distinct address-space roots'
 fi
 
-send_command 'mkdir Test' 2
+send_command 'pwd'
+wait_for_line '/'
+send_command 'echo Hallo-von-BoringOS'
+wait_for_line 'Hallo-von-BoringOS'
+send_command 'hostname'
+wait_for_line 'boringos'
+send_command 'whoami'
+wait_for_line 'boring'
+send_command 'uname'
+wait_for_line 'BoringOS BoringKernel 0.0.27-dev x86_64'
+send_command 'ps'
+wait_for_line 'PID PPID STATE NAME'
+wait_for_line '1 0 WAITING boring-init'
+wait_for_line '2 1 RUNNING boring-shell'
+send_command 'boringfetch'
+wait_for_line '                     Root FS: RAMFS'
+wait_for_line '                     Root device: memory'
+wait_for_line '                     Processes: 2'
+wait_for_line '                     PID: 2'
+send_command 'help'
+wait_for_line 'Filesystem:'
+wait_for_line '  ls cd pwd mkdir rmdir touch cat write rm'
+wait_for_line 'Shell:'
+wait_for_line '  clear echo history help exit logout'
+wait_for_line 'System:'
+wait_for_line '  boringfetch uname hostname whoami ps'
+send_command 'clear'
+
+send_command 'mkdir Test'
 TEST_BEFORE=$(grep -Fxc 'Test' "${LOG}" 2>/dev/null || true)
-send_command 'ls' 3
+send_command 'ls'
 TEST_AFTER=$(grep -Fxc 'Test' "${LOG}" 2>/dev/null || true)
 if [ "${TEST_AFTER}" -ne $((TEST_BEFORE + 1)) ]; then
     fail_dump 'ls did not independently emit exact RAMFS entry Test after mkdir'
 fi
 
-send_command 'mkdir Test' 4
+send_command 'mkdir Test'
 wait_for_line 'mkdir: already exists'
 
-send_command 'cd Test' 5
-send_command 'mkdir Inner' 6
+send_command 'cd Test'
+grep -Fq 'boring@boringos:/Test$ ' "${LOG}" ||
+    fail_dump 'prompt did not use real /Test CWD'
+send_command 'pwd'
+wait_for_line '/Test'
+send_command 'touch hello.txt'
+send_command 'write hello.txt Hallo-von-BoringOS'
+send_command 'cat hello.txt'
+wait_for_line 'Hallo-von-BoringOS'
+send_command 'mkdir Inner'
+send_command 'rm Inner'
+wait_for_line 'rm: is a directory'
 INNER_BEFORE=$(grep -Fxc 'Inner' "${LOG}" 2>/dev/null || true)
-send_command 'ls' 7
+send_command 'ls'
 INNER_AFTER=$(grep -Fxc 'Inner' "${LOG}" 2>/dev/null || true)
 if [ "${INNER_AFTER}" -ne $((INNER_BEFORE + 1)) ]; then
     fail_dump 'nested ls did not independently emit exact RAMFS entry Inner'
 fi
 
-send_command 'cd ..' 8
-send_command 'rmdir Test' 9
+send_command 'cd ..'
+send_command 'rmdir Test'
 wait_for_line 'rmdir: directory not empty'
 
-send_command 'cd Test' 10
-send_command 'rmdir Inner' 11
-send_command 'cd ..' 12
-send_command 'rmdir Test' 13
+send_command 'cd Test'
+send_command 'rm hello.txt'
+send_command 'rmdir Inner'
+send_command 'cd ..'
+send_command 'rmdir Test'
 
 FINAL_OFFSET=$(wc -c < "${LOG}")
-send_command 'ls' 14
+send_command 'ls'
 tail -c "+$((FINAL_OFFSET + 1))" "${LOG}" > "${FINAL_SLICE}"
 if grep -Fqx 'Test' "${FINAL_SLICE}"; then
     fail_dump 'final ls still observed Test after real rmdir'
 fi
+
+send_command 'history'
+grep -Eq '^[0-9]+  history$' "${LOG}" ||
+    fail_dump 'history did not expose the real bounded command list'
 
 if failure_seen; then
     fail_dump 'unexpected failure after final shell prompt'

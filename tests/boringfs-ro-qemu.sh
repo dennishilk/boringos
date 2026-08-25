@@ -14,6 +14,7 @@ QEMU_LOG="${TMPDIR_PATH}/qemu.log"
 PID=
 CAT_PID=
 SERIAL_FD_OPEN=0
+PROMPT=0
 
 cleanup() {
     if [ "${SERIAL_FD_OPEN}" -eq 1 ]; then
@@ -44,7 +45,7 @@ failure_seen() {
 }
 
 prompt_count() {
-    (grep -Fo 'boring> ' "${LOG}" 2>/dev/null || true) | wc -l | tr -d ' '
+    (grep -Ec '^boring@boringos:/[^$]*\$ ' "${LOG}" 2>/dev/null || true)
 }
 
 wait_for_prompt() {
@@ -56,6 +57,7 @@ wait_for_prompt() {
         fi
         count=$(prompt_count)
         if [ "${count}" -ge "${target}" ]; then
+            PROMPT=${target}
             return 0
         fi
         if ! kill -0 "${PID}" 2>/dev/null; then
@@ -69,9 +71,8 @@ wait_for_prompt() {
 
 send_command() {
     command=$1
-    next_prompt=$2
     printf '%s\n' "${command}" >&3
-    wait_for_prompt "${next_prompt}"
+    wait_for_prompt $((PROMPT + 1))
 }
 
 make -C "${ROOT}" boringfs-fixture boringfsck
@@ -89,7 +90,7 @@ BEFORE_SHA=$(sha256sum "${VALID_IMAGE}" | awk '{print $1}')
 mkfifo "${SERIAL_IN}" "${SERIAL_OUT}"
 exec 3<> "${SERIAL_IN}"
 SERIAL_FD_OPEN=1
-cat "${SERIAL_OUT}" > "${LOG}" &
+tr -d '\r' < "${SERIAL_OUT}" > "${LOG}" &
 CAT_PID=$!
 
 "${QEMU}" \
@@ -138,7 +139,7 @@ do
 done
 
 DISK_BEFORE=$(grep -Fxc 'disk' "${LOG}" 2>/dev/null || true)
-send_command 'ls /' 2
+send_command 'ls /'
 DISK_AFTER=$(grep -Fxc 'disk' "${LOG}" 2>/dev/null || true)
 if [ "${DISK_AFTER}" -ne $((DISK_BEFORE + 1)) ]; then
     fail_dump 'ls / did not expose the /disk mountpoint'
@@ -148,7 +149,7 @@ README_BEFORE=$(grep -Fxc 'README.txt' "${LOG}" 2>/dev/null || true)
 DOCS_BEFORE=$(grep -Fxc 'docs' "${LOG}" 2>/dev/null || true)
 HOME_BEFORE=$(grep -Fxc 'home' "${LOG}" 2>/dev/null || true)
 SYSTEM_BEFORE=$(grep -Fxc 'system' "${LOG}" 2>/dev/null || true)
-send_command 'ls /disk' 3
+send_command 'ls /disk'
 for pair in \
     "README.txt:${README_BEFORE}" \
     "docs:${DOCS_BEFORE}" \
@@ -163,18 +164,18 @@ do
     fi
 done
 
-send_command 'cd /disk' 4
+send_command 'cd /disk'
 README_BEFORE=$(grep -Fxc 'README.txt' "${LOG}" 2>/dev/null || true)
-send_command 'ls' 5
+send_command 'ls'
 README_AFTER=$(grep -Fxc 'README.txt' "${LOG}" 2>/dev/null || true)
 if [ "${README_AFTER}" -ne $((README_BEFORE + 1)) ]; then
     fail_dump 'ls after cd /disk did not traverse mounted BoringFS'
 fi
 
-send_command 'cd docs' 6
+send_command 'cd docs'
 HELLO_BEFORE=$(grep -Fxc 'hello.txt' "${LOG}" 2>/dev/null || true)
 ARCH_BEFORE=$(grep -Fxc 'architecture.txt' "${LOG}" 2>/dev/null || true)
-send_command 'ls' 7
+send_command 'ls'
 HELLO_AFTER=$(grep -Fxc 'hello.txt' "${LOG}" 2>/dev/null || true)
 ARCH_AFTER=$(grep -Fxc 'architecture.txt' "${LOG}" 2>/dev/null || true)
 if [ "${HELLO_AFTER}" -ne $((HELLO_BEFORE + 1)) ] ||
@@ -182,9 +183,9 @@ if [ "${HELLO_AFTER}" -ne $((HELLO_BEFORE + 1)) ] ||
     fail_dump 'docs traversal did not expose real BoringFS entries'
 fi
 
-send_command 'cd ../home/dennis' 8
+send_command 'cd ../home/dennis'
 WELCOME_BEFORE=$(grep -Fxc 'welcome.txt' "${LOG}" 2>/dev/null || true)
-send_command 'ls' 9
+send_command 'ls'
 WELCOME_AFTER=$(grep -Fxc 'welcome.txt' "${LOG}" 2>/dev/null || true)
 if [ "${WELCOME_AFTER}" -ne $((WELCOME_BEFORE + 1)) ]; then
     fail_dump 'nested BoringFS traversal did not expose welcome.txt'
