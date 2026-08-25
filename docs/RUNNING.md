@@ -4,6 +4,17 @@ This bundle boots BoringKernel, mounts the included writable BoringFS image as
 the native root filesystem, starts `boring-init`, and hands control to the
 native PID 2 `boring-shell`.
 
+The interactive prompt is built from kernel-owned single-user identity and
+the process's real current working directory:
+
+```text
+boring@boringos:/$
+boring@boringos:/test$
+```
+
+The identity is real BoringOS process/system metadata, but it is not a claim
+of authentication or Unix permissions; neither exists yet.
+
 Requirements: `qemu-system-x86_64` on an x86_64 Linux host.
 
 Run from the extracted bundle:
@@ -25,7 +36,21 @@ touch hello.txt
 write hello.txt Hallo-von-BoringOS
 cat hello.txt
 boringfetch
+ps
+history
 ```
+
+`write` stores one trailing newline by default, so `cat` leaves the next
+prompt on a clean line. Use `write -n <path> <text>` only when exact
+no-newline content is intended. Left/Right/Home/End, Backspace/Delete,
+Up/Down history, command completion (`boringf<TAB>`) and real directory-entry
+completion (`cd te<TAB>`, `cat hel<TAB>`) are supported within bounded shell
+buffers.
+
+`exit` and `logout` both terminate the current shell session. PID 1 observes
+and reaps that exact child, releases its resources and starts a fresh shell.
+`logout` does not imply an authentication logout because there is no login
+manager.
 
 Stop QEMU, start the same script again, and `cat /test/hello.txt` to verify
 persistence. BoringFS v0 uses synchronous metadata updates but has no journal

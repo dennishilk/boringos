@@ -31,9 +31,27 @@ if printf '%s\n' "${PROGRAMS}" | grep -Eq '^  (INTERP|DYNAMIC|TLS)'; then
     exit 1
 fi
 
-TEXT_LINE=$(printf '%s\n' "${PROGRAMS}" | grep '^  LOAD' | grep '0x0000000040000000')
-RODATA_LINE=$(printf '%s\n' "${PROGRAMS}" | grep '^  LOAD' | grep '0x0000000040001000')
-DATA_LINE=$(printf '%s\n' "${PROGRAMS}" | grep '^  LOAD' | grep '0x0000000040002000')
+TEXT_LINE=$(printf '%s\n' "${PROGRAMS}" | grep '^  LOAD' | sed -n '1p')
+RODATA_LINE=$(printf '%s\n' "${PROGRAMS}" | grep '^  LOAD' | sed -n '2p')
+DATA_LINE=$(printf '%s\n' "${PROGRAMS}" | grep '^  LOAD' | sed -n '3p')
+
+set -- ${TEXT_LINE}
+TEXT_START=$(( $3 ))
+TEXT_END=$(( TEXT_START + $6 ))
+set -- ${RODATA_LINE}
+RODATA_START=$(( $3 ))
+RODATA_END=$(( RODATA_START + $6 ))
+set -- ${DATA_LINE}
+DATA_START=$(( $3 ))
+
+if [ "${TEXT_START}" -ne $(( 0x40000000 )) ] ||
+   [ $(( RODATA_START % 0x1000 )) -ne 0 ] ||
+   [ $(( DATA_START % 0x1000 )) -ne 0 ] ||
+   [ "${RODATA_START}" -lt "${TEXT_END}" ] ||
+   [ "${DATA_START}" -lt "${RODATA_END}" ]; then
+    echo 'boring-shell PT_LOAD layout is unaligned or overlapping' >&2
+    exit 1
+fi
 
 printf '%s\n' "${TEXT_LINE}" | grep -Eq ' R E +0x1000$'
 printf '%s\n' "${RODATA_LINE}" | grep -Eq ' R +0x1000$'
@@ -64,7 +82,8 @@ fi
 
 for symbol in \
     _start boring_main boring_getpid boring_console_read boring_console_write \
-    boring_fs_readdir boring_fs_mkdir boring_fs_rmdir boring_fs_chdir
+    boring_fs_readdir boring_fs_mkdir boring_fs_rmdir boring_fs_chdir \
+    boring_getcwd boring_process_snapshot boring_system_info boring_exit
 do
     if ! printf '%s\n' "${SYMBOLS}" | grep -Eq " [Tt] ${symbol}$"; then
         echo "missing required boring-shell symbol: ${symbol}" >&2

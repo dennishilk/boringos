@@ -30,5 +30,9 @@ long boring_fs_write(const char *path,
                      size_t length);
 long boring_fs_unlink(const char *path, size_t length);
 long boring_system_info(struct boring_system_info *info);
+long boring_getcwd(char *buffer, size_t capacity);
+long boring_process_snapshot(uint64_t index, struct boring_process_info *info);
+void boring_exit(int status) __attribute__((noreturn));
+long boring_waitpid(uint64_t pid, int *status);
 
 #endif

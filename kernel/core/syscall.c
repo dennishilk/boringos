@@ -10,6 +10,7 @@
 #include <boring/ring3_memory.h>
 #include <boring/serial.h>
 #include <boring/syscall.h>
+#include <boring/timer.h>
 #include <boring/vfs.h>
 #include <boring/vmm.h>
 
@@ -52,6 +53,17 @@ struct syscall_bootstrap_program {
     bool registered;
 };
 
+struct syscall_suspended_launch {
+    struct process *parent;
+    struct process *child;
+    struct x86_64_syscall_frame parent_frame;
+    struct boring_elf_image image;
+    int32_t exit_status;
+    bool active;
+    bool child_exited;
+    bool image_loaded;
+};
+
 _Static_assert(sizeof(struct x86_64_syscall_frame) == 144U,
                "syscall frame must match x86_64 entry assembly");
 _Static_assert(offsetof(struct x86_64_syscall_frame, user_rsp) == 0U,
@@ -79,6 +91,10 @@ _Static_assert((uint32_t)VFS_NODE_REGULAR == BORING_DIRENT_TYPE_REGULAR,
                "regular type ABI mismatch");
 _Static_assert((VFS_NAME_MAX + 1U) == BORING_DIRENT_NAME_CAPACITY,
                "dirent name capacity must match VFS name bound");
+_Static_assert((KERNEL_PROCESS_NAME_MAX + 1U) == BORING_PROCESS_NAME_CAPACITY,
+               "process name capacity must match userspace ABI");
+_Static_assert(VFS_PATH_MAX == BORING_SYSCALL_CWD_MAX,
+               "cwd ABI path bound must match VFS");
 
 extern void x86_64_syscall_entry(void);
 
@@ -88,6 +104,7 @@ uint64_t x86_64_syscall_user_rsp_scratch __attribute__((aligned(8)));
 
 static struct syscall_stats syscall_state;
 static struct syscall_bootstrap_program bootstrap_program;
+static struct syscall_suspended_launch suspended_launch;
 static bool syscall_initialized;
 
 static bool syscall_user_range_accessible(uintptr_t user_address,
@@ -109,22 +126,100 @@ static uint64_t syscall_error(int error_number) {
     return (uint64_t)(-(int64_t)error_number);
 }
 
+static void syscall_zero_bytes(void *buffer, size_t length) {
+    uint8_t *bytes = (uint8_t *)buffer;
+    size_t index;
+
+    for (index = 0U; index < length; ++index) {
+        bytes[index] = 0U;
+    }
+}
+
+static bool syscall_copy_literal(char *destination,
+                                 size_t capacity,
+                                 const char *source) {
+    size_t index;
+
+    if ((destination == NULL) || (capacity == 0U) || (source == NULL)) {
+        return false;
+    }
+    for (index = 0U; index < capacity; ++index) {
+        destination[index] = source[index];
+        if (source[index] == '\0') {
+            return true;
+        }
+    }
+    destination[capacity - 1U] = '\0';
+    return false;
+}
+
+static size_t syscall_text_length(const char *text, size_t maximum) {
+    size_t length;
+
+    if (text == NULL) {
+        return maximum + 1U;
+    }
+    for (length = 0U; length <= maximum; ++length) {
+        if (text[length] == '\0') {
+            return length;
+        }
+    }
+    return maximum + 1U;
+}
+
 static uint64_t syscall_system_info(uint64_t user_info) {
-    struct pmm_stats stats;
+    struct pmm_stats memory_stats;
+    struct process_stats process_stats;
+    struct timer_stats timer_stats;
+    struct process *const process = process_current();
     struct boring_system_info info;
 
     if (!syscall_user_range_accessible((uintptr_t)user_info, sizeof(info),
                                        true)) {
         return syscall_error(BORING_SYSCALL_EFAULT);
     }
-    if (!pmm_get_stats(&stats) ||
-        (stats.free_frames > UINT64_MAX / PMM_PAGE_SIZE)) {
+    if ((process == NULL) || !process_is_alive(process) ||
+        !pmm_get_stats(&memory_stats) ||
+        !process_get_stats(&process_stats) ||
+        (memory_stats.free_frames > UINT64_MAX / PMM_PAGE_SIZE) ||
+        (process_stats.active_processes > UINT32_MAX)) {
         return syscall_error(BORING_SYSCALL_EIO);
     }
+
+    syscall_zero_bytes(&info, sizeof(info));
     info.abi_version = BORING_SYSTEM_INFO_ABI_VERSION;
-    info.reserved = 0U;
-    info.usable_memory_bytes = stats.usable_bytes;
-    info.free_memory_bytes = stats.free_frames * PMM_PAGE_SIZE;
+    info.usable_memory_bytes = memory_stats.usable_bytes;
+    info.free_memory_bytes = memory_stats.free_frames * PMM_PAGE_SIZE;
+    info.process_count = (uint32_t)process_stats.active_processes;
+    info.current_pid = process->pid;
+    if (timer_get_stats(&timer_stats)) {
+        info.uptime_ticks = timer_ticks();
+        info.timer_frequency_millihz = timer_stats.effective_frequency_millihz;
+    }
+    if (!syscall_copy_literal(info.hostname, sizeof(info.hostname), "boringos") ||
+        !syscall_copy_literal(info.username, sizeof(info.username),
+                              process->username) ||
+        !syscall_copy_literal(info.os_name, sizeof(info.os_name), "BoringOS") ||
+        !syscall_copy_literal(info.kernel_name, sizeof(info.kernel_name),
+                              "BoringKernel") ||
+        !syscall_copy_literal(info.kernel_version, sizeof(info.kernel_version),
+                              "0.0.28-dev") ||
+        !syscall_copy_literal(info.arch, sizeof(info.arch), "x86_64")) {
+        return syscall_error(BORING_SYSCALL_EIO);
+    }
+#if (BORING_TEST_MODE == 10) || (BORING_TEST_MODE == 13) || (BORING_TEST_MODE == 14)
+    if (!syscall_copy_literal(info.root_fs, sizeof(info.root_fs), "RAMFS") ||
+        !syscall_copy_literal(info.root_device, sizeof(info.root_device),
+                              "memory")) {
+        return syscall_error(BORING_SYSCALL_EIO);
+    }
+#elif BORING_TEST_MODE == 15
+    if (!syscall_copy_literal(info.root_fs, sizeof(info.root_fs), "BoringFS") ||
+        !syscall_copy_literal(info.root_device, sizeof(info.root_device),
+                              "virtio-blk")) {
+        return syscall_error(BORING_SYSCALL_EIO);
+    }
+#endif
     if (!syscall_copy_to_user((uintptr_t)user_info, &info, sizeof(info))) {
         return syscall_error(BORING_SYSCALL_EFAULT);
     }
@@ -134,14 +229,25 @@ static uint64_t syscall_system_info(uint64_t user_info) {
 static void bootstrap_program_clear(void) {
     size_t index;
 
-    for (index = 0U;
-         index <= (size_t)BORING_SYSCALL_LAUNCH_NAME_MAX; ++index) {
+    for (index = 0U; index <= (size_t)BORING_SYSCALL_LAUNCH_NAME_MAX; ++index) {
         bootstrap_program.name[index] = '\0';
     }
     bootstrap_program.name_length = 0U;
     bootstrap_program.module_bytes = NULL;
     bootstrap_program.module_size = 0U;
     bootstrap_program.registered = false;
+}
+
+static void suspended_launch_clear(void) {
+    suspended_launch.parent = NULL;
+    suspended_launch.child = NULL;
+    syscall_zero_bytes(&suspended_launch.parent_frame,
+                       sizeof(suspended_launch.parent_frame));
+    syscall_zero_bytes(&suspended_launch.image, sizeof(suspended_launch.image));
+    suspended_launch.exit_status = 0;
+    suspended_launch.active = false;
+    suspended_launch.child_exited = false;
+    suspended_launch.image_loaded = false;
 }
 
 bool syscall_stack_contains(uintptr_t stack_pointer) {
@@ -165,13 +271,11 @@ static bool syscall_user_range_accessible(uintptr_t user_address,
     if (!ring3_user_range_valid(user_address, length)) {
         return false;
     }
-
     process = process_current();
     if ((process == NULL) || !process_is_alive(process) ||
         process->address_space.bootstrap) {
         return false;
     }
-
     current = user_address;
     remaining = length;
     while (remaining != 0U) {
@@ -187,11 +291,9 @@ static bool syscall_user_range_accessible(uintptr_t user_address,
                                   require_writable, &physical)) {
             return false;
         }
-
         current += (uintptr_t)chunk;
         remaining -= chunk;
     }
-
     return true;
 }
 
@@ -208,13 +310,11 @@ static bool syscall_copy_from_user(void *destination,
         !vmm_get_stats(&vmm_stats)) {
         return false;
     }
-
     process = process_current();
     if ((process == NULL) || !process_is_alive(process) ||
         process->address_space.bootstrap) {
         return false;
     }
-
     current = user_address;
     remaining = length;
     while (remaining != 0U) {
@@ -229,28 +329,23 @@ static bool syscall_copy_from_user(void *destination,
         if (chunk > remaining) {
             chunk = remaining;
         }
-
         if (!ring3_user_translate(&process->address_space, current, false,
                                   &physical) ||
             (physical > UINT64_MAX - vmm_stats.hhdm_offset)) {
             return false;
         }
-
         kernel_virtual = vmm_stats.hhdm_offset + physical;
         if ((kernel_virtual >> 48U) != 0xffffULL) {
             return false;
         }
         source = (const uint8_t *)(uintptr_t)kernel_virtual;
-
         for (index = 0U; index < chunk; ++index) {
             output[index] = source[index];
         }
-
         output += chunk;
         current += (uintptr_t)chunk;
         remaining -= chunk;
     }
-
     return true;
 }
 
@@ -268,13 +363,11 @@ static bool syscall_copy_to_user(uintptr_t user_address,
         !vmm_get_stats(&vmm_stats)) {
         return false;
     }
-
     process = process_current();
     if ((process == NULL) || !process_is_alive(process) ||
         process->address_space.bootstrap) {
         return false;
     }
-
     current = user_address;
     remaining = length;
     while (remaining != 0U) {
@@ -289,28 +382,23 @@ static bool syscall_copy_to_user(uintptr_t user_address,
         if (chunk > remaining) {
             chunk = remaining;
         }
-
         if (!ring3_user_translate(&process->address_space, current, true,
                                   &physical) ||
             (physical > UINT64_MAX - vmm_stats.hhdm_offset)) {
             return false;
         }
-
         kernel_virtual = vmm_stats.hhdm_offset + physical;
         if ((kernel_virtual >> 48U) != 0xffffULL) {
             return false;
         }
         destination = (uint8_t *)(uintptr_t)kernel_virtual;
-
         for (index = 0U; index < chunk; ++index) {
             destination[index] = input[index];
         }
-
         input += chunk;
         current += (uintptr_t)chunk;
         remaining -= chunk;
     }
-
     return true;
 }
 
@@ -330,10 +418,8 @@ static int syscall_copy_explicit_string(uint64_t user_address,
     if ((buffer == NULL) || (length > (uint64_t)SIZE_MAX)) {
         return BORING_SYSCALL_EINVAL;
     }
-
     safe_length = (size_t)length;
-    if (!syscall_copy_from_user(buffer, (uintptr_t)user_address,
-                                safe_length)) {
+    if (!syscall_copy_from_user(buffer, (uintptr_t)user_address, safe_length)) {
         return BORING_SYSCALL_EFAULT;
     }
     for (index = 0U; index < safe_length; ++index) {
@@ -354,8 +440,9 @@ static int syscall_vfs_error(enum vfs_result result) {
         case VFS_RESULT_ALREADY_EXISTS:
             return BORING_SYSCALL_EEXIST;
         case VFS_RESULT_NOT_DIRECTORY:
-        case VFS_RESULT_NOT_REGULAR:
             return BORING_SYSCALL_ENOTDIR;
+        case VFS_RESULT_NOT_REGULAR:
+            return BORING_SYSCALL_EISDIR;
         case VFS_RESULT_NOT_EMPTY:
             return BORING_SYSCALL_ENOTEMPTY;
         case VFS_RESULT_NO_SPACE:
@@ -422,7 +509,6 @@ bool syscall_register_bootstrap_program(const char *name,
             return false;
         }
     }
-
     bootstrap_program_clear();
     for (index = 0U; index < name_length; ++index) {
         bootstrap_program.name[index] = name[index];
@@ -452,13 +538,11 @@ static uint64_t syscall_debug_write(uint64_t user_buffer, uint64_t length) {
         (length > (uint64_t)BORING_SYSCALL_DEBUG_WRITE_MAX)) {
         return syscall_error(BORING_SYSCALL_EINVAL);
     }
-
     safe_length = (size_t)length;
     if (!syscall_copy_from_user(&buffer[0], (uintptr_t)user_buffer,
                                 safe_length)) {
         return syscall_error(BORING_SYSCALL_EFAULT);
     }
-
     buffer[safe_length] = '\0';
     serial_write_string("Syscall DEBUG_WRITE: ");
     serial_write_string(&buffer[0]);
@@ -474,13 +558,11 @@ static uint64_t syscall_console_write(uint64_t user_buffer, uint64_t length) {
         (length > (uint64_t)BORING_SYSCALL_CONSOLE_IO_MAX)) {
         return syscall_error(BORING_SYSCALL_EINVAL);
     }
-
     safe_length = (size_t)length;
     if (!syscall_copy_from_user(&buffer[0], (uintptr_t)user_buffer,
                                 safe_length)) {
         return syscall_error(BORING_SYSCALL_EFAULT);
     }
-
     serial_write_bytes(&buffer[0], safe_length);
     return length;
 }
@@ -494,22 +576,17 @@ static uint64_t syscall_console_read(uint64_t user_buffer, uint64_t length) {
         (length > (uint64_t)BORING_SYSCALL_CONSOLE_IO_MAX)) {
         return syscall_error(BORING_SYSCALL_EINVAL);
     }
-
     safe_length = (size_t)length;
     if (!syscall_user_range_accessible((uintptr_t)user_buffer,
                                        safe_length, true)) {
         return syscall_error(BORING_SYSCALL_EFAULT);
     }
-
     for (index = 0U; index < safe_length; ++index) {
         buffer[index] = serial_read_char_blocking();
     }
-
-    if (!syscall_copy_to_user((uintptr_t)user_buffer, &buffer[0],
-                              safe_length)) {
+    if (!syscall_copy_to_user((uintptr_t)user_buffer, &buffer[0], safe_length)) {
         return syscall_error(BORING_SYSCALL_EFAULT);
     }
-
     return length;
 }
 
@@ -540,10 +617,9 @@ static uint64_t syscall_launch(struct x86_64_syscall_frame *frame,
     bool image_loaded = false;
 
     if ((frame == NULL) || (parent == NULL) || !process_is_alive(parent) ||
-        (parent->pid != 1ULL)) {
+        (parent->pid != 1ULL) || suspended_launch.active) {
         return syscall_error(BORING_SYSCALL_EACCES);
     }
-
     copy_error = syscall_copy_explicit_string(
         user_name, length, (size_t)BORING_SYSCALL_LAUNCH_NAME_MAX, name);
     if (copy_error != 0) {
@@ -562,7 +638,7 @@ static uint64_t syscall_launch(struct x86_64_syscall_frame *frame,
         (void)vfs_path_release(&parent_cwd);
         return syscall_error(BORING_SYSCALL_ENOSPC);
     }
-    if (!process_set_cwd(child, &parent_cwd)) {
+    if (!process_set_name(child, name) || !process_set_cwd(child, &parent_cwd)) {
         (void)vfs_path_release(&parent_cwd);
         return syscall_launch_rollback(child, &image, false,
                                        BORING_SYSCALL_EIO);
@@ -571,7 +647,6 @@ static uint64_t syscall_launch(struct x86_64_syscall_frame *frame,
         return syscall_launch_rollback(child, &image, false,
                                        BORING_SYSCALL_EIO);
     }
-
     if (!boring_elf_load(child, bootstrap_program.module_bytes,
                          bootstrap_program.module_size,
                          (uintptr_t)BOOTSTRAP_PROGRAM_STACK_BASE,
@@ -580,7 +655,6 @@ static uint64_t syscall_launch(struct x86_64_syscall_frame *frame,
                                        BORING_SYSCALL_EIO);
     }
     image_loaded = true;
-
     if ((child->address_space.root_physical ==
          parent->address_space.root_physical) ||
         !ring3_user_query_mapping(&child->address_space, image.entry,
@@ -608,6 +682,15 @@ static uint64_t syscall_launch(struct x86_64_syscall_frame *frame,
     serial_write_string("boring-launch: cwd inherited\n");
     serial_write_string("boring-launch: pid 1 remains alive\n");
 
+    suspended_launch.parent = parent;
+    suspended_launch.child = child;
+    suspended_launch.parent_frame = *frame;
+    suspended_launch.image = image;
+    suspended_launch.exit_status = 0;
+    suspended_launch.active = true;
+    suspended_launch.child_exited = false;
+    suspended_launch.image_loaded = true;
+
     frame->user_rsp = (uint64_t)image.stack_top;
     frame->user_rip = (uint64_t)image.entry;
     frame->rbx = 0ULL;
@@ -625,10 +708,11 @@ static uint64_t syscall_launch(struct x86_64_syscall_frame *frame,
     frame->reserved = 0ULL;
 
     if (!process_activate(child)) {
+        *frame = suspended_launch.parent_frame;
+        suspended_launch_clear();
         return syscall_launch_rollback(child, &image, image_loaded,
                                        BORING_SYSCALL_EIO);
     }
-
     serial_write_string("boring-launch: handoff via SYSRETQ\n");
     return 0ULL;
 }
@@ -649,7 +733,6 @@ static uint64_t syscall_fs_mkdir(uint64_t user_name, uint64_t length) {
     if ((process == NULL) || !process_get_cwd(process, &cwd)) {
         return syscall_error(BORING_SYSCALL_EINVAL);
     }
-
     result = vfs_mkdir_at(&cwd, name, &created);
     if (result == VFS_RESULT_OK) {
         if (vfs_path_release(&created) != VFS_RESULT_OK) {
@@ -660,10 +743,8 @@ static uint64_t syscall_fs_mkdir(uint64_t user_name, uint64_t length) {
     if (vfs_path_release(&cwd) != VFS_RESULT_OK) {
         return syscall_error(BORING_SYSCALL_EIO);
     }
-    if (result != VFS_RESULT_OK) {
-        return syscall_error(syscall_vfs_error(result));
-    }
-    return 0ULL;
+    return (result == VFS_RESULT_OK) ?
+        0ULL : syscall_error(syscall_vfs_error(result));
 }
 
 static uint64_t syscall_fs_rmdir(uint64_t user_name, uint64_t length) {
@@ -681,19 +762,124 @@ static uint64_t syscall_fs_rmdir(uint64_t user_name, uint64_t length) {
     if ((process == NULL) || !process_get_cwd(process, &cwd)) {
         return syscall_error(BORING_SYSCALL_EINVAL);
     }
-
     result = vfs_rmdir_at(&cwd, name);
     if (vfs_path_release(&cwd) != VFS_RESULT_OK) {
         return syscall_error(BORING_SYSCALL_EIO);
     }
-    if (result != VFS_RESULT_OK) {
-        return syscall_error(syscall_vfs_error(result));
+    return (result == VFS_RESULT_OK) ?
+        0ULL : syscall_error(syscall_vfs_error(result));
+}
+
+static bool syscall_cwd_pop(char *output, size_t *length) {
+    if ((output == NULL) || (length == NULL) || (*length == 0U) ||
+        (output[0] != '/')) {
+        return false;
     }
-    return 0ULL;
+    if (*length <= 1U) {
+        *length = 1U;
+        output[1] = '\0';
+        return true;
+    }
+    while ((*length > 1U) && (output[*length - 1U] != '/')) {
+        --(*length);
+    }
+    if (*length > 1U) {
+        --(*length);
+    }
+    output[*length] = '\0';
+    return true;
+}
+
+static bool syscall_cwd_append(char *output,
+                               size_t *length,
+                               const char *component,
+                               size_t component_length) {
+    size_t index;
+
+    if ((output == NULL) || (length == NULL) || (component == NULL) ||
+        (component_length == 0U) ||
+        (component_length > (size_t)VFS_NAME_MAX)) {
+        return false;
+    }
+    if ((*length > 1U) && (*length >= (size_t)VFS_PATH_MAX)) {
+        return false;
+    }
+    if (*length > 1U) {
+        output[*length] = '/';
+        ++(*length);
+    }
+    if (component_length > (size_t)VFS_PATH_MAX - *length) {
+        return false;
+    }
+    for (index = 0U; index < component_length; ++index) {
+        output[*length + index] = component[index];
+    }
+    *length += component_length;
+    output[*length] = '\0';
+    return true;
+}
+
+static bool syscall_build_canonical_cwd(struct process *process,
+                                        const char *path,
+                                        char output[VFS_PATH_MAX + 1U]) {
+    size_t output_length;
+    size_t index;
+
+    if ((process == NULL) || (path == NULL) || (output == NULL)) {
+        return false;
+    }
+    if (path[0] == '/') {
+        output[0] = '/';
+        output[1] = '\0';
+        output_length = 1U;
+        index = 1U;
+    } else {
+        if (!process_get_cwd_text(process, output, (size_t)VFS_PATH_MAX + 1U)) {
+            return false;
+        }
+        output_length = syscall_text_length(output, (size_t)VFS_PATH_MAX);
+        if ((output_length == 0U) || (output_length > (size_t)VFS_PATH_MAX)) {
+            return false;
+        }
+        index = 0U;
+    }
+
+    while (path[index] != '\0') {
+        size_t start;
+        size_t component_length;
+
+        while (path[index] == '/') {
+            ++index;
+        }
+        if (path[index] == '\0') {
+            break;
+        }
+        start = index;
+        while ((path[index] != '\0') && (path[index] != '/')) {
+            ++index;
+        }
+        component_length = index - start;
+        if ((component_length == 1U) && (path[start] == '.')) {
+            continue;
+        }
+        if ((component_length == 2U) && (path[start] == '.') &&
+            (path[start + 1U] == '.')) {
+            if (!syscall_cwd_pop(output, &output_length)) {
+                return false;
+            }
+            continue;
+        }
+        if (!syscall_cwd_append(output, &output_length, &path[start],
+                                component_length)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static uint64_t syscall_fs_chdir(uint64_t user_path, uint64_t length) {
     char path[VFS_PATH_MAX + 1U];
+    char canonical[VFS_PATH_MAX + 1U];
     struct process *const process = process_current();
     struct vfs_path resolved = { NULL, NULL };
     enum vfs_result result;
@@ -704,10 +890,10 @@ static uint64_t syscall_fs_chdir(uint64_t user_path, uint64_t length) {
     if (copy_error != 0) {
         return syscall_error(copy_error);
     }
-    if ((process == NULL) || !process_is_alive(process)) {
+    if ((process == NULL) || !process_is_alive(process) ||
+        !syscall_build_canonical_cwd(process, path, canonical)) {
         return syscall_error(BORING_SYSCALL_EINVAL);
     }
-
     result = vfs_resolve_process(process, path, &resolved);
     if (result != VFS_RESULT_OK) {
         return syscall_error(syscall_vfs_error(result));
@@ -716,7 +902,7 @@ static uint64_t syscall_fs_chdir(uint64_t user_path, uint64_t length) {
         (void)vfs_path_release(&resolved);
         return syscall_error(BORING_SYSCALL_ENOTDIR);
     }
-    if (!process_set_cwd(process, &resolved)) {
+    if (!process_set_cwd_text(process, &resolved, canonical)) {
         (void)vfs_path_release(&resolved);
         return syscall_error(BORING_SYSCALL_EIO);
     }
@@ -751,7 +937,6 @@ static uint64_t syscall_fs_readdir(uint64_t user_path,
     if ((process == NULL) || !process_is_alive(process)) {
         return syscall_error(BORING_SYSCALL_EINVAL);
     }
-
     result = vfs_resolve_process(process, path, &directory);
     if (result != VFS_RESULT_OK) {
         return syscall_error(syscall_vfs_error(result));
@@ -760,7 +945,6 @@ static uint64_t syscall_fs_readdir(uint64_t user_path,
         (void)vfs_path_release(&directory);
         return syscall_error(BORING_SYSCALL_ENOTDIR);
     }
-
     result = vfs_readdir_path(&directory, index, &kernel_entry);
     if (result == VFS_RESULT_NOT_FOUND) {
         if (vfs_path_release(&directory) != VFS_RESULT_OK) {
@@ -779,12 +963,10 @@ static uint64_t syscall_fs_readdir(uint64_t user_path,
         (void)vfs_path_release(&directory);
         return syscall_error(BORING_SYSCALL_EIO);
     }
-
     entry.node_id = kernel_entry.node_id;
     entry.type = (uint32_t)kernel_entry.type;
     entry.name_length = (uint32_t)kernel_entry.name_length;
-    for (name_index = 0U; name_index < kernel_entry.name_length;
-         ++name_index) {
+    for (name_index = 0U; name_index < kernel_entry.name_length; ++name_index) {
         entry.name[name_index] = kernel_entry.name[name_index];
     }
     if (vfs_path_release(&directory) != VFS_RESULT_OK) {
@@ -829,7 +1011,6 @@ static enum vfs_result syscall_fs_resolve_parent(
         name_out[index] = path[name_start + index];
     }
     name_out[name_length] = '\0';
-
     if (slash == SIZE_MAX) {
         return process_get_cwd(process, parent_out) ?
             VFS_RESULT_OK : VFS_RESULT_NO_CWD;
@@ -956,8 +1137,7 @@ static uint64_t syscall_fs_write(uint64_t user_path,
     }
     safe_length = (size_t)length;
     if ((safe_length != 0U) &&
-        !syscall_copy_from_user(buffer, (uintptr_t)user_buffer,
-                                safe_length)) {
+        !syscall_copy_from_user(buffer, (uintptr_t)user_buffer, safe_length)) {
         return syscall_error(BORING_SYSCALL_EFAULT);
     }
     copy_error = syscall_copy_explicit_string(
@@ -1032,6 +1212,135 @@ static uint64_t syscall_fs_unlink(uint64_t user_path,
         0ULL : syscall_error(syscall_vfs_error(result));
 }
 
+static uint64_t syscall_getcwd(uint64_t user_buffer, uint64_t capacity) {
+    char cwd[VFS_PATH_MAX + 1U];
+    struct process *const process = process_current();
+    size_t length;
+
+    if ((capacity == 0ULL) || (capacity > (uint64_t)VFS_PATH_MAX + 1ULL) ||
+        (process == NULL) || !process_is_alive(process) ||
+        !process_get_cwd_text(process, cwd, sizeof(cwd))) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    length = syscall_text_length(cwd, (size_t)VFS_PATH_MAX);
+    if ((length > (size_t)VFS_PATH_MAX) ||
+        ((uint64_t)(length + 1U) > capacity)) {
+        return syscall_error(BORING_SYSCALL_ENAMETOOLONG);
+    }
+    if (!syscall_user_range_accessible((uintptr_t)user_buffer, length + 1U,
+                                       true) ||
+        !syscall_copy_to_user((uintptr_t)user_buffer, cwd, length + 1U)) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+    return (uint64_t)length;
+}
+
+static uint64_t syscall_process_snapshot(uint64_t index, uint64_t user_info) {
+    struct process_snapshot snapshot;
+    struct boring_process_info info;
+    size_t name_index;
+
+    if (!syscall_user_range_accessible((uintptr_t)user_info, sizeof(info),
+                                       true)) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+    if (!process_get_snapshot(index, &snapshot)) {
+        return 0ULL;
+    }
+    syscall_zero_bytes(&info, sizeof(info));
+    info.pid = snapshot.pid;
+    info.parent_pid = snapshot.parent_pid;
+    if (snapshot.state == PROCESS_SNAPSHOT_RUNNING) {
+        info.state = BORING_PROCESS_STATE_RUNNING;
+    } else if (snapshot.state == PROCESS_SNAPSHOT_WAITING) {
+        info.state = BORING_PROCESS_STATE_WAITING;
+    } else if (snapshot.state == PROCESS_SNAPSHOT_ZOMBIE) {
+        info.state = BORING_PROCESS_STATE_ZOMBIE;
+    } else {
+        return syscall_error(BORING_SYSCALL_EIO);
+    }
+    for (name_index = 0U; name_index < sizeof(info.name) - 1U; ++name_index) {
+        info.name[name_index] = snapshot.name[name_index];
+        if (snapshot.name[name_index] == '\0') {
+            break;
+        }
+    }
+    info.name[sizeof(info.name) - 1U] = '\0';
+    if (!syscall_copy_to_user((uintptr_t)user_info, &info, sizeof(info))) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+    return 1ULL;
+}
+
+static uint64_t syscall_exit(struct x86_64_syscall_frame *frame,
+                             uint64_t raw_status) {
+    struct process *const child = process_current();
+    struct process *parent;
+    uint64_t child_pid;
+
+    if ((frame == NULL) || !suspended_launch.active ||
+        suspended_launch.child_exited ||
+        (child == NULL) || (child != suspended_launch.child) ||
+        !process_is_alive(child) || (suspended_launch.parent == NULL)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    parent = suspended_launch.parent;
+    child_pid = child->pid;
+    suspended_launch.exit_status = (int32_t)raw_status;
+
+    if (!process_activate(parent)) {
+        syscall_fatal("cannot resume parent during SYS_EXIT");
+    }
+    if (suspended_launch.image_loaded) {
+        if (!boring_elf_unload(&suspended_launch.image)) {
+            syscall_fatal("cannot release child ELF pages during SYS_EXIT");
+        }
+        suspended_launch.image_loaded = false;
+    }
+    if (!process_mark_finished(child)) {
+        syscall_fatal("cannot mark child zombie during SYS_EXIT");
+    }
+    suspended_launch.child_exited = true;
+    serial_write_string("boring-exit: child pid ");
+    serial_write_u64(child_pid);
+    serial_write_string(" status ");
+    serial_write_u64((uint64_t)(uint32_t)suspended_launch.exit_status);
+    serial_write_string(" is zombie\n");
+    *frame = suspended_launch.parent_frame;
+    return child_pid;
+}
+
+static uint64_t syscall_waitpid(uint64_t pid, uint64_t user_status) {
+    struct process *const parent = process_current();
+    const int32_t status = suspended_launch.exit_status;
+    struct process *child;
+
+    if ((parent == NULL) || !process_is_alive(parent) ||
+        !suspended_launch.active || !suspended_launch.child_exited ||
+        (suspended_launch.parent != parent) ||
+        (suspended_launch.child == NULL) ||
+        (suspended_launch.child->pid != pid) ||
+        (suspended_launch.child->parent_pid != parent->pid)) {
+        return syscall_error(BORING_SYSCALL_ENOENT);
+    }
+    if ((user_status != 0ULL) &&
+        (!syscall_user_range_accessible((uintptr_t)user_status,
+                                        sizeof(status), true) ||
+         !syscall_copy_to_user((uintptr_t)user_status, &status,
+                               sizeof(status)))) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+    child = suspended_launch.child;
+    if (!process_destroy(child)) {
+        return syscall_error(BORING_SYSCALL_EIO);
+    }
+    serial_write_string("boring-waitpid: reaped child pid ");
+    serial_write_u64(pid);
+    serial_write_string("\n");
+    suspended_launch_clear();
+    return pid;
+}
+
 bool syscall_console_safety_self_test(uintptr_t read_only_user_address,
                                       uintptr_t unmapped_user_address) {
     const uint64_t kernel_pointer = 0xffff800000000000ULL;
@@ -1057,7 +1366,6 @@ bool syscall_console_safety_self_test(uintptr_t read_only_user_address,
         (syscall_console_read((uint64_t)unmapped_user_address, oversized) != einval)) {
         return false;
     }
-
     return true;
 }
 
@@ -1080,19 +1388,16 @@ static bool syscall_return_state_valid(struct x86_64_syscall_frame *frame) {
         !ring3_user_range_valid((uintptr_t)(frame->user_rsp - 1ULL), 1U)) {
         return false;
     }
-
     process = process_current();
     if ((process == NULL) || !process_is_alive(process) ||
         process->address_space.bootstrap ||
         !ring3_user_translate(&process->address_space,
-                              (uintptr_t)frame->user_rip, false,
-                              &translated) ||
+                              (uintptr_t)frame->user_rip, false, &translated) ||
         !ring3_user_translate(&process->address_space,
                               (uintptr_t)(frame->user_rsp - 1ULL), true,
                               &translated)) {
         return false;
     }
-
     frame->user_rflags = sanitize_user_rflags(frame->user_rflags);
     return ((frame->user_rflags & (RFLAGS_IOPL | RFLAGS_NT | RFLAGS_VM |
                                    RFLAGS_TF | RFLAGS_IF | RFLAGS_DF |
@@ -1103,8 +1408,7 @@ static bool syscall_return_state_valid(struct x86_64_syscall_frame *frame) {
 bool syscall_init(void) {
     struct descriptor_stats descriptors;
     const uintptr_t stack_base = (uintptr_t)&x86_64_syscall_stack[0];
-    const uintptr_t stack_top =
-        stack_base + (uintptr_t)X86_64_SYSCALL_STACK_SIZE;
+    const uintptr_t stack_top = stack_base + (uintptr_t)X86_64_SYSCALL_STACK_SIZE;
     const uint64_t lstar = (uint64_t)(uintptr_t)&x86_64_syscall_entry;
     uint64_t efer;
     uint64_t active_efer;
@@ -1115,13 +1419,13 @@ bool syscall_init(void) {
     if (syscall_initialized) {
         return true;
     }
-
     syscall_state.supported = false;
     syscall_state.initialized = false;
     syscall_state.dispatch_count = 0ULL;
     syscall_state.last_kernel_rsp = 0U;
     syscall_state.last_user_rsp = 0U;
     bootstrap_program_clear();
+    suspended_launch_clear();
 
     if (!x86_64_syscall_supported() || !descriptor_get_stats(&descriptors) ||
         (descriptors.kernel_code_selector !=
@@ -1136,27 +1440,22 @@ bool syscall_init(void) {
         ((lstar >> 48U) != 0xffffULL)) {
         return false;
     }
-
     syscall_state.supported = true;
     efer = x86_64_read_msr(IA32_EFER);
-
     x86_64_write_msr(IA32_STAR, STAR_VALUE);
     x86_64_write_msr(IA32_LSTAR, lstar);
     x86_64_write_msr(IA32_FMASK, SYSCALL_FMASK_VALUE);
     x86_64_write_msr(IA32_EFER, efer | EFER_SCE);
-
     active_efer = x86_64_read_msr(IA32_EFER);
     active_star = x86_64_read_msr(IA32_STAR);
     active_lstar = x86_64_read_msr(IA32_LSTAR);
     active_fmask = x86_64_read_msr(IA32_FMASK);
-
     if (((active_efer & EFER_SCE) == 0ULL) ||
         (active_star != STAR_VALUE) || (active_lstar != lstar) ||
         (active_fmask != SYSCALL_FMASK_VALUE) ||
         ((active_efer & ~EFER_SCE) != (efer & ~EFER_SCE))) {
         return false;
     }
-
     syscall_state.efer = active_efer;
     syscall_state.star = active_star;
     syscall_state.lstar = active_lstar;
@@ -1172,7 +1471,6 @@ bool syscall_get_stats(struct syscall_stats *stats) {
     if ((stats == NULL) || !syscall_initialized) {
         return false;
     }
-
     *stats = syscall_state;
     return true;
 }
@@ -1185,11 +1483,9 @@ void x86_64_syscall_dispatch(struct x86_64_syscall_frame *frame) {
     if (!syscall_initialized || (frame == NULL) ||
         !syscall_stack_contains(live_rsp) ||
         !syscall_stack_contains(frame_address) ||
-        (frame_address > syscall_state.stack_top -
-                         (uintptr_t)sizeof(*frame))) {
+        (frame_address > syscall_state.stack_top - (uintptr_t)sizeof(*frame))) {
         syscall_fatal("invalid trusted entry stack");
     }
-
     syscall_state.last_kernel_rsp = live_rsp;
     syscall_state.last_user_rsp = (uintptr_t)frame->user_rsp;
     ++syscall_state.dispatch_count;
@@ -1240,11 +1536,22 @@ void x86_64_syscall_dispatch(struct x86_64_syscall_frame *frame) {
         case BORING_SYS_INFO:
             result = syscall_system_info(frame->rdi);
             break;
+        case BORING_SYS_GETCWD:
+            result = syscall_getcwd(frame->rdi, frame->rsi);
+            break;
+        case BORING_SYS_PROCESS_SNAPSHOT:
+            result = syscall_process_snapshot(frame->rdi, frame->rsi);
+            break;
+        case BORING_SYS_EXIT:
+            result = syscall_exit(frame, frame->rdi);
+            break;
+        case BORING_SYS_WAITPID:
+            result = syscall_waitpid(frame->rdi, frame->rsi);
+            break;
         default:
             result = syscall_error(BORING_SYSCALL_ENOSYS);
             break;
     }
-
     frame->result = result;
     if (!syscall_return_state_valid(frame)) {
         syscall_fatal("invalid SYSRETQ user return state");

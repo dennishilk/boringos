@@ -55,7 +55,8 @@ failure_seen() {
 }
 
 prompt_count() {
-    (grep -Fo 'boring> ' "${LOG}" 2>/dev/null || true) | wc -l | tr -d ' '
+    count=$(grep -Ec '^boring@boringos:/[^$]*\$ ' "${LOG}" 2>/dev/null || true)
+    printf '%s\n' "${count:-0}"
 }
 
 wait_for_prompt() {
@@ -99,7 +100,7 @@ start_vm() {
     mkfifo "${serial_in}" "${serial_out}"
     exec 3<> "${serial_in}"
     SERIAL_FD_OPEN=1
-    cat "${serial_out}" > "${LOG}" &
+    stdbuf -o0 tr -d '\r' < "${serial_out}" > "${LOG}" &
     CAT_PID=$!
 
     "${QEMU}" \
@@ -150,7 +151,7 @@ make -C "${ROOT}" TEST_MODE=boringfs-rw
 
 start_vm "${MAIN_IMAGE}" first
 for line in \
-    'BoringKernel 0.0.27-dev' \
+    'BoringKernel 0.0.28-dev' \
     '  real-virtio-volume: PASS' \
     'BoringFS writable:' \
     '  synchronous-mutations-enabled: PASS' \
@@ -172,7 +173,7 @@ if ! grep -Fqx 'touch: already exists' "${LOG}"; then
 fi
 send_command 'write hello.txt BoringOS-persistence-test'
 send_command 'cat hello.txt'
-if ! grep -Fq 'BoringOS-persistence-testboring> ' "${LOG}"; then
+if ! grep -Fqx 'BoringOS-persistence-test' "${LOG}"; then
     fail_dump 'first boot did not read back exact written bytes'
 fi
 stop_vm
@@ -182,11 +183,16 @@ PERSISTED=$("${ROOT}/build/boringfsck" --cat /hello.txt "${MAIN_IMAGE}")
 if [ "${PERSISTED}" != 'BoringOS-persistence-test' ]; then
     fail_dump 'host reader did not find exact persisted bytes after first boot'
 fi
+PERSISTED_SHA=$("${ROOT}/build/boringfsck" --cat /hello.txt "${MAIN_IMAGE}" |
+    sha256sum | awk '{print $1}')
+EXPECTED_SHA=$(printf 'BoringOS-persistence-test\n' | sha256sum | awk '{print $1}')
+[ "${PERSISTED_SHA}" = "${EXPECTED_SHA}" ] ||
+    fail_dump 'default write did not persist exactly one trailing newline'
 
 start_vm "${MAIN_IMAGE}" second
 send_command 'cd /disk'
 send_command 'cat hello.txt'
-if ! grep -Fq 'BoringOS-persistence-testboring> ' "${LOG}"; then
+if ! grep -Fqx 'BoringOS-persistence-test' "${LOG}"; then
     fail_dump 'second boot did not preserve file contents'
 fi
 send_command 'rm hello.txt'
@@ -211,7 +217,7 @@ fi
 send_command 'touch reused.txt'
 send_command 'write reused.txt reused-allocation'
 send_command 'cat reused.txt'
-if ! grep -Fq 'reused-allocationboring> ' "${LOG}"; then
+if ! grep -Fqx 'reused-allocation' "${LOG}"; then
     fail_dump 'reused file did not read back'
 fi
 stop_vm
@@ -221,6 +227,11 @@ REUSED=$("${ROOT}/build/boringfsck" --cat /reused.txt "${MAIN_IMAGE}")
 if [ "${REUSED}" != 'reused-allocation' ]; then
     fail_dump 'host reader did not find reused allocation contents'
 fi
+REUSED_SHA=$("${ROOT}/build/boringfsck" --cat /reused.txt "${MAIN_IMAGE}" |
+    sha256sum | awk '{print $1}')
+EXPECTED_REUSED_SHA=$(printf 'reused-allocation\n' | sha256sum | awk '{print $1}')
+[ "${REUSED_SHA}" = "${EXPECTED_REUSED_SHA}" ] ||
+    fail_dump 'reused file did not preserve exact newline-terminated bytes'
 OBJECT11_STATE=$(od -An -tu1 -j $((2 * 4096 + 10 * 128)) -N 1 \
     "${MAIN_IMAGE}" | tr -d ' ')
 BITMAP_BYTE=$(od -An -tu1 -j $((4096 + 1)) -N 1 \

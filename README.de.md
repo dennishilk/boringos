@@ -13,18 +13,18 @@ Es ist **keine Linux-Distribution**, **keine BSD-Distribution** und **basiert we
 
 **Extrem früher Bootstrap-Kernel.**
 
-BoringKernel bootet unter **QEMU x86_64**. Limine bleibt der externe Bootloader. BoringKernel besitzt aktuell COM1-Seriellenausgabe, einen Physical-Page-Frame-Allocator, ausgewählte 4-KiB-Virtual-Mappings, einen begrenzten dynamischen Kernel-Heap, eine eigene x86_64-IDT, echte CPU-Exception-Diagnostik, wiederholte PIT/PIC-IRQ0-Auslieferung, kooperative und echte hardware-timerpräemptive Kernel-Tasks, ein bewusst kleines Prozessidentitäts- und unabhängiges Adressraummodell, einen streng begrenzten ersten **CPL0 -> CPL3-Privilegübergang** und jetzt zusätzlich eine schmale echte **SYSCALL -> CPL0 -> SYSRETQ**-Grenze.
+BoringKernel bootet unter **QEMU x86_64**. Limine bleibt der externe Bootloader. BoringKernel besitzt aktuell COM1-Seriellenausgabe, Speicher- und Adressraumverwaltung, Exceptions und PIT/PIC-Interrupts, Kernel-Scheduling, echten CPL3-ELF-Userspace, eine geprüfte native Syscall-Grenze, VFS/RAMFS, schreibbares VirtIO-gestütztes BoringFS, PID 1 `boring-init` und eine interaktive native `boring-shell` mit Persistent-Root-Acceptance.
 
 Die aktuelle serielle Ausgabe beginnt mit:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.11-dev
+BoringKernel 0.0.28-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```
 
-Der ursprüngliche VMM übernimmt für PID 0 weiterhin die aktive, von Limine erzeugte vierstufige x86_64-Root. BoringKernel 0.0.9-dev führte PMM-gestützte Prozess-Roots mit leerer privater Lower Half und gemeinsam genutzten Higher-Half-Kernel-Mappings ein. BoringKernel 0.0.10-dev ergänzte ausschließlich die engen Descriptor-, User-Mapping- und Privilegwechsel-Bausteine für den ersten echten Ring-3-Acceptance-Pfad. BoringKernel 0.0.11-dev ergänzt separat die native x86_64-Syscall-Grenze mit dediziertem vertrauenswürdigem Kernelstack, provisorischem Register-ABI, zwei Bootstrap-Syscalls, validiertem User-Memory-Copy und geprüftem `SYSRETQ`-Return-State.
+Der ursprüngliche VMM übernimmt für PID 0 weiterhin die aktive, von Limine erzeugte vierstufige x86_64-Root. BoringKernel 0.0.9-dev führte PMM-gestützte Prozess-Roots mit leerer privater Lower Half und gemeinsam genutzten Higher-Half-Kernel-Mappings ein. BoringKernel 0.0.10-dev ergänzte den ersten echten Ring-3-Übergang, 0.0.11-dev die native x86_64-Syscall-Grenze. Spätere Milestones erweiterten genau dieses geprüfte Fundament um native ELF-Programme, Dateisysteme, Storage, Systemidentität und den M27-Shell-Lebenszyklus; den exakten aktuellen Stand dokumentiert [`docs/roadmap.md`](docs/roadmap.md).
 
 Die aktuelle Aufteilung ist bewusst einfach:
 
@@ -39,7 +39,7 @@ Die gemeinsam genutzte Higher Half erhält die benötigten Mappings für Kernel-
 
 Ein **Task** ist eine Ausführungs-/Scheduling-Einheit. Ein **Prozess** ist Identität plus Adressraumbesitz. Beide Konzepte bleiben bewusst getrennt.
 
-Der Bootstrap-/Kernelprozess ist PID 0. Der Prozess-/Adressraum-Acceptance-Test erzeugt PID 1 und PID 2, jeweils mit einer eigenen PMM-gestützten Root-PML4. Die Prozesszustände bleiben bewusst klein: `ALIVE` und `FINISHED`.
+Der Bootstrap-/Kernelprozess ist PID 0. Der normale Userspace-Boot erzeugt PID 1 `boring-init`, der synchron eine `boring-shell` als Kind mit eigener PMM-gestützter Root startet. M27 stellt echte RUNNING/WAITING/ZOMBIE-Snapshots und den engen Exit/Wait/Reap/Respawn-Lebenszyklus bereit; Prozess-Slots werden erst nach Reap wiederverwendet, PID-Werte bleiben monoton.
 
 Jeder normale Kernel-Task erhält weiterhin einen unabhängigen **16-KiB-Stack aus dem Kernel-Heap**. Kooperatives Umschalten behält den kleinen SysV-AMD64-Call-Boundary-Kontext. Timerpräemption verwendet weiterhin den separaten vollständigen **192-Byte**-Interrupt-Frame zum Fortsetzen beliebiger Integer-Ausführungszustände.
 
@@ -93,7 +93,7 @@ Siehe [`docs/processes.md`](docs/processes.md) für das exakte Modell und die Be
 
 ## Aktuelle Grenze des Ausführungsmodells
 
-BoringKernel besitzt jetzt bewusst eng begrenzte Ring-3- und Syscall-Acceptance-Pfade; eine allgemeine Userspace-Ausführungsumgebung existiert **noch nicht**.
+BoringKernel besitzt einen bewusst eng begrenzten, aber echten nativen Ring-3-Userspace; er ist keine allgemeine POSIX-Umgebung.
 
 Der Kernel lädt eine eigene GDT mit Kernel-Code/Data-Deskriptoren, DPL3-User-Data/Code-Deskriptoren und genau einem verfügbaren 64-Bit-TSS. Die aktuellen Selektoren sind:
 
@@ -109,11 +109,11 @@ Der TSS besitzt einen dedizierten 16-KiB-RSP0-Stack. Der Ring-3-Test mappt genau
 
 Die CPU wechselt über einen echten `iretq`-Frame nach CPL3 mit CS `0x23`, SS `0x1B` und User-RSP `0x0000000040011000`. Die ursprüngliche Ring-3-Acceptance führt das privilegierte `cli` aus und beweist, dass der resultierende echte **#GP / Vector 13** über den separaten TSS-RSP0-Exception-Pfad zurück nach CPL0 gelangt.
 
-Die Syscall-Acceptance nutzt dasselbe kontrollierte CPL3-Mapping-Modell, führt aber echtes x86_64-`SYSCALL` aus. BoringKernel aktiviert `IA32_EFER.SCE`, programmiert und liest `IA32_STAR`, `IA32_LSTAR` und `IA32_FMASK` zurück, sichert den noch user-kontrollierten RSP vor jeder normalen Stacknutzung und wechselt sofort auf einen dedizierten supervisor-only **16-KiB-Syscall-Kernelstack**. Das provisorische ABI verwendet `RAX` für die Syscall-Nummer, `RDI/RSI/RDX/R10/R8/R9` für Argumente und `RAX` für das Ergebnis; `RCX/R11` sind architektonische Clobbers. Die einzigen aktuellen Calls sind `GETPID` und das begrenzte Debug-only-`DEBUG_WRITE`.
+Die Syscall-Grenze führt echtes x86_64-`SYSCALL` aus. BoringKernel aktiviert `IA32_EFER.SCE`, programmiert und liest `IA32_STAR`, `IA32_LSTAR` und `IA32_FMASK` zurück, sichert den noch user-kontrollierten RSP vor jeder normalen Stacknutzung und wechselt sofort auf einen dedizierten supervisor-only **16-KiB-Syscall-Kernelstack**. Das provisorische ABI verwendet `RAX` für die Syscall-Nummer, `RDI/RSI/RDX/R10/R8/R9` für Argumente und `RAX` für das Ergebnis; `RCX/R11` sind architektonische Clobbers. Die aktuelle begrenzte Oberfläche reicht mit den Nummern 0–17 von `GETPID` bis `WAITPID` und umfasst Console, Launch, VFS, Systeminformationen, CWD und Prozess-Snapshots.
 
 `DEBUG_WRITE` reicht niemals einen rohen Userspace-Pointer an die Serial-Schicht weiter. Der `copy_from_user`-Pfad validiert den vollständigen Lower-Half-Bereich, läuft die aktuellen Prozess-Page-Tables mit effektiven Present- und U/S-Prüfungen ab, löst Physical Memory über den vertrauenswürdigen HHDM-Alias auf und kopiert zuerst in einen kernel-eigenen Buffer. `SYSRETQ` wird nur ausgeführt, nachdem gespeicherter User-RIP/RSP, aktiver Prozess/Adressraum, erwartete Selektoren und sanitizte Return-RFLAGS geprüft wurden. Der Test führt sieben echte Syscall-Dispatches aus, beweist mehrere `SYSRETQ`-Rückkehrpfade nach CPL3 und führt danach `cli` aus; dieser letzte echte #GP verwendet weiterhin TSS.RSP0 und nicht den Syscall-Stack.
 
-Das Syscall-ABI ist **provisorisch** und kein stabiler öffentlicher Userspace-Vertrag. Es gibt weiterhin **keine Userspace-Runtime, keinen ELF-Loader, kein allgemeines oder geschedultes CPL3-Taskmodell, keinen per-Task/per-CPU-Syscall-Stack-State, keine User-Mode-Timerpräemption, kein libc/CRT, kein fork/exec/wait/signals, keinen VFS/Storage-Stack, kein Networking, keine grafische Umgebung, keinen Input-Stack, kein SMP, kein PCID, kein Copy-on-Write, kein Demand Paging, keinen Swap und keinen FPU/SIMD-Kontextwechsel**.
+Das Syscall-ABI ist **provisorisch** und kein stabiler öffentlicher Userspace-Vertrag. Es gibt weiterhin **kein libc, keinen FD-/TTY-Layer, kein allgemeines `fork` oder VFS-gestütztes `exec`, keine Signale, kein Authentifizierungs- oder Berechtigungsmodell, kein nebenläufiges Child-Scheduling, kein Networking, keine grafische Umgebung, keinen nativen Input-Stack, kein SMP, kein PCID, kein Copy-on-Write, kein Demand Paging, keinen Swap und keinen FPU/SIMD-Kontextwechsel**.
 
 Siehe [`docs/syscalls.md`](docs/syscalls.md) für die exakt implementierte Syscall-Grenze und ihre aktuellen Begrenzungen.
 

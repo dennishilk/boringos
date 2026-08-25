@@ -1,8 +1,49 @@
-# BoringKernel syscall boundary — 0.0.11-dev bootstrap
+# BoringKernel syscall boundary
 
-This document describes only the currently implemented and QEMU-verified BoringKernel syscall boundary. It is a deliberately narrow bootstrap interface, **not a stable public ABI and not a general userspace runtime**.
+This remains a deliberately narrow, QEMU-verified bootstrap interface, **not
+a stable public ABI and not a general userspace runtime**. The original
+0.0.11-dev boundary is retained below; this section records the current M27
+extensions that supersede its two-call inventory and process-lifecycle
+non-goals.
 
-## Scope
+## Current M27 syscall surface
+
+```text
+ 0 GETPID             9 FS_READ
+ 1 DEBUG_WRITE       10 FS_TOUCH
+ 2 CONSOLE_WRITE     11 FS_WRITE
+ 3 CONSOLE_READ      12 FS_UNLINK
+ 4 LAUNCH            13 INFO
+ 5 FS_READDIR        14 GETCWD
+ 6 FS_MKDIR          15 PROCESS_SNAPSHOT
+ 7 FS_RMDIR          16 EXIT
+ 8 FS_CHDIR          17 WAITPID
+```
+
+All pointer-bearing calls retain the established complete-range validation
+and checked copy boundary. `GETCWD` copies the current process's canonical
+absolute VFS path into a bounded user buffer. `PROCESS_SNAPSHOT` enumerates
+real PID, PPID, RUNNING/WAITING/ZOMBIE state and process name; end of the
+bounded table is reported without inventing rows.
+
+`INFO` ABI v2 is a fixed 256-byte structure containing real PMM usable/free
+memory, PIT ticks and effective frequency when available, active process
+count, current PID, hostname, current-process username, OS/kernel/version and
+architecture strings, plus root-filesystem and root-device identity selected
+by the actual boot mode. It contains no fabricated CPU or network data.
+
+`EXIT` applies only to the active `LAUNCH` child. It preserves the 32-bit exit
+status, resumes the saved parent frame, unloads the child ELF mappings and
+marks the child as a non-runnable zombie. `WAITPID` succeeds only for that
+exact parent/child relationship, returns the preserved status through checked
+userspace memory, destroys the inactive child address space and retained CWD,
+and releases its process-table slot. The launch model remains synchronous and
+permits only one suspended child; this is not general POSIX process control.
+
+The current additional symbolic error `EISDIR` maps directory-vs-regular-file
+misuse without changing underlying VFS semantics.
+
+## Original 0.0.11-dev scope
 
 BoringKernel 0.0.11-dev uses the native x86_64 `SYSCALL` / `SYSRETQ` mechanism for the first controlled CPL3 -> CPL0 -> CPL3 call boundary.
 
@@ -190,7 +231,7 @@ RBX RBP R12 R13 R14 R15
 
 It also restores the untouched argument registers used by this bootstrap interface. No stability guarantee is made for a future public ABI.
 
-## Current syscall numbers
+## Original 0.0.11-dev syscall numbers
 
 Only two real calls exist:
 
