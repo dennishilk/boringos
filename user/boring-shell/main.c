@@ -472,7 +472,7 @@ static bool shell_command_boringfetch(const char *argument) {
     return shell_write_text("    ____             BoringOS\n") &&
            shell_write_text("   / __ )____  _____ -------------------------\n") &&
            shell_write_text("  / __  / __ \\/ ___/ OS: BoringOS\n") &&
-           shell_write_text(" / /_/ / /_/ / /    Kernel: BoringKernel 0.0.26-dev\n") &&
+           shell_write_text(" / /_/ / /_/ / /    Kernel: BoringKernel 0.0.27-dev\n") &&
            shell_write_text("/_____/\\____/_/      Arch: x86_64\n") &&
            shell_write_text("                     Memory usable: ") &&
            shell_write_u64(info.usable_memory_bytes) &&
