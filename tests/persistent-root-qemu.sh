@@ -62,7 +62,7 @@ make -C "${ROOT}" boringfs-fixture boringfsck user-boringfetch
 make -C "${ROOT}" TEST_MODE=persistent-root
 
 start_vm first
-for line in 'BoringKernel 0.0.28-dev' '  mount-at-root: PASS' 'BoringFS root mounted.' 'boring-init: pid 1' 'boring-shell: pid 2' 'boring-shell ready.'; do
+for line in 'BoringKernel 0.0.29-dev' '  mount-at-root: PASS' 'BoringFS root mounted.' 'boring-init: pid 1' 'boring-shell: pid 2' 'boring-shell ready.'; do
     grep -Fqx "${line}" "${LOG}" || fail "missing root boot marker: ${line}"
 done
 grep -Fq 'boring@boringos:/$ ' "${LOG}" || fail 'missing root identity prompt'
@@ -96,7 +96,7 @@ grep -Fqx 'boring' "${LOG}" || fail 'whoami identity mismatch'
 send 'hostname'
 grep -Fqx 'boringos' "${LOG}" || fail 'hostname identity mismatch'
 send 'uname'
-grep -Fqx 'BoringOS BoringKernel 0.0.28-dev x86_64' "${LOG}" || fail 'uname identity mismatch'
+grep -Fqx 'BoringOS BoringKernel 0.0.29-dev x86_64' "${LOG}" || fail 'uname identity mismatch'
 send '/bin/boringfetch'
 grep -Fqx 'boring-launch: child pid 4' "${LOG}" || fail 'explicit VFS path did not allocate PID 4'
 grep -Fqx '                     PID: 4' "${LOG}" || fail 'explicit VFS path did not run as PID 4'
@@ -144,7 +144,7 @@ grep -Fqx 'boring-waitpid: reaped child pid 3' "${LOG}" || fail 'rebooted execut
 send 'cat /persist/a.txt'
 grep -Fqx 'still-here' "${LOG}" || fail 'reboot persistence failed'
 send 'boringfetch'
-for line in '    ____             BoringOS' '  / __  / __ \/ ___/ OS: BoringOS' ' / /_/ / /_/ / /    Kernel: BoringKernel 0.0.28-dev' '/_____/\____/_/      Arch: x86_64' '                     Hostname: boringos' '                     User: boring' '                     Shell: boring-shell' '                     Root FS: BoringFS' '                     Root device: virtio-blk' '                     Processes: 3' '                     PID: 4'; do
+for line in '    ____             BoringOS' '  / __  / __ \/ ___/ OS: BoringOS' ' / /_/ / /_/ / /    Kernel: BoringKernel 0.0.29-dev' '/_____/\____/_/      Arch: x86_64' '                     Hostname: boringos' '                     User: boring' '                     Shell: boring-shell' '                     Root FS: BoringFS' '                     Root device: virtio-blk' '                     Processes: 3' '                     PID: 4'; do
     grep -Fqx "${line}" "${LOG}" || fail "missing boringfetch line: ${line}"
 done
 grep -Eq '^                     Memory: [0-9]+ MiB / [1-9][0-9]* MiB$' "${LOG}" || fail 'memory is not real'
