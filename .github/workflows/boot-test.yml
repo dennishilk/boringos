@@ -81,6 +81,9 @@ jobs:
       - name: Real interactive boring-shell
         run: sh ./tests/shell-qemu.sh
 
+      - name: Shell input pacing and burst stress
+        run: sh ./tests/shell-input-stress-qemu.sh
+
       - name: Generic bounded block-device layer
         run: sh ./tests/block-device-qemu.sh
 
