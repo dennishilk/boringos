@@ -1,0 +1,87 @@
+name: M22 chunking acceptance patch
+
+on:
+  push:
+    branches:
+      - agent/virtio-block
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/virtio-block
+      - name: Add chunking proof
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one match, got {count}: {old!r}')
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              'kernel/core/virtio_blk_test.c',
+              '#define TEST_MULTI_COUNT 4U\n#define TEST_LEFT_NEIGHBOR',
+              '#define TEST_MULTI_COUNT 4U\n#define TEST_CHUNK_FIRST_LBA 64ULL\n#define TEST_CHUNK_COUNT 12U\n#define TEST_LEFT_NEIGHBOR',
+          )
+          replace_once(
+              'kernel/core/virtio_blk_test.c',
+              '#define TEST_MULTI_BYTES ((size_t)TEST_MULTI_COUNT * (size_t)TEST_SECTOR_SIZE)\n',
+              '#define TEST_MULTI_BYTES ((size_t)TEST_MULTI_COUNT * (size_t)TEST_SECTOR_SIZE)\n#define TEST_CHUNK_BYTES ((size_t)TEST_CHUNK_COUNT * (size_t)TEST_SECTOR_SIZE)\n',
+          )
+          replace_once(
+              'kernel/core/virtio_blk_test.c',
+              'static uint8_t test_multi_read[TEST_MULTI_BYTES];\nstatic uint8_t test_scratch',
+              'static uint8_t test_multi_read[TEST_MULTI_BYTES];\nstatic uint8_t test_chunk_write[TEST_CHUNK_BYTES];\nstatic uint8_t test_chunk_read[TEST_CHUNK_BYTES];\nstatic uint8_t test_scratch',
+          )
+          replace_once(
+              'kernel/core/virtio_blk_test.c',
+              'static void test_fill_multi_write(void) {\n    uint32_t sector;\n\n    for (sector = 0U; sector < TEST_MULTI_COUNT; ++sector) {\n        size_t offset;\n        const size_t base = (size_t)sector * (size_t)TEST_SECTOR_SIZE;\n        for (offset = 0U; offset < (size_t)TEST_SECTOR_SIZE; ++offset) {\n            test_multi_write[base + offset] = test_multi_byte(sector, offset);\n        }\n    }\n}\n',
+              'static void test_fill_multi_write(void) {\n    uint32_t sector;\n\n    for (sector = 0U; sector < TEST_MULTI_COUNT; ++sector) {\n        size_t offset;\n        const size_t base = (size_t)sector * (size_t)TEST_SECTOR_SIZE;\n        for (offset = 0U; offset < (size_t)TEST_SECTOR_SIZE; ++offset) {\n            test_multi_write[base + offset] = test_multi_byte(sector, offset);\n        }\n    }\n}\n\nstatic void test_fill_chunk_write(void) {\n    uint32_t sector;\n\n    for (sector = 0U; sector < TEST_CHUNK_COUNT; ++sector) {\n        size_t offset;\n        const size_t base = (size_t)sector * (size_t)TEST_SECTOR_SIZE;\n        for (offset = 0U; offset < (size_t)TEST_SECTOR_SIZE; ++offset) {\n            test_chunk_write[base + offset] =\n                (uint8_t)((0x6dU + (sector * 19U) +\n                           ((uint32_t)offset * 11U)) & 0xffU);\n        }\n    }\n}\n',
+          )
+          replace_once(
+              'kernel/core/virtio_blk_test.c',
+              '    serial_write_string("  multi-sector-write-read-back: PASS\\n");\n\n    if ((block_device_read(device, TEST_LEFT_NEIGHBOR',
+              '    serial_write_string("  multi-sector-write-read-back: PASS\\n");\n\n    test_fill_chunk_write();\n    if (!virtio_blk_get_stats(&stats_before_bounds)) {\n        test_fail("chunking-stats-before");\n    }\n    if ((block_device_write(device, TEST_CHUNK_FIRST_LBA, TEST_CHUNK_COUNT,\n                            test_chunk_write) != BLOCK_DEVICE_RESULT_OK) ||\n        (block_device_read(device, TEST_CHUNK_FIRST_LBA, TEST_CHUNK_COUNT,\n                           test_chunk_read) != BLOCK_DEVICE_RESULT_OK) ||\n        !test_bytes_equal(test_chunk_read, test_chunk_write,\n                          sizeof(test_chunk_read)) ||\n        !virtio_blk_get_stats(&stats_after) ||\n        ((stats_after.submissions - stats_before_bounds.submissions) != 4ULL)) {\n        test_fail("multi-request-chunking");\n    }\n    serial_write_string("  multi-request-chunking: PASS\\n");\n\n    if ((block_device_read(device, TEST_LEFT_NEIGHBOR',
+          )
+
+          replace_once(
+              'tests/virtio-block-image.c',
+              '#define MULTI_COUNT 4U\n#define LEFT_LBA',
+              '#define MULTI_COUNT 4U\n#define CHUNK_FIRST_LBA 64ULL\n#define CHUNK_COUNT 12U\n#define LEFT_LBA',
+          )
+          replace_once(
+              'tests/virtio-block-image.c',
+              'static int verify_initial_sector(FILE *file, uint64_t lba) {',
+              'static int verify_chunk(FILE *file) {\n    uint8_t sector[SECTOR_SIZE];\n    uint32_t relative;\n\n    for (relative = 0U; relative < CHUNK_COUNT; ++relative) {\n        size_t index;\n        const uint64_t lba = CHUNK_FIRST_LBA + (uint64_t)relative;\n\n        if (read_sector(file, lba, sector) != 0) {\n            return -1;\n        }\n        for (index = 0U; index < (size_t)SECTOR_SIZE; ++index) {\n            const uint8_t expected = (uint8_t)((0x6dU + (relative * 19U) +\n                ((uint32_t)index * 11U)) & 0xffU);\n            if (sector[index] != expected) {\n                return -1;\n            }\n        }\n    }\n    return 0;\n}\n\nstatic int verify_initial_sector(FILE *file, uint64_t lba) {',
+          )
+          replace_once(
+              'tests/virtio-block-image.c',
+              '    persisted_ok = (verify_single(file) == 0) && (verify_multi(file) == 0);',
+              '    persisted_ok = (verify_single(file) == 0) &&\n                   (verify_multi(file) == 0) &&\n                   (verify_chunk(file) == 0);',
+          )
+
+          replace_once(
+              'tests/virtio-block-qemu.sh',
+              "    '  multi-sector-write-read-back: PASS' \\\n    '  neighbor-preservation: PASS'",
+              "    '  multi-sector-write-read-back: PASS' \\\n    '  multi-request-chunking: PASS' \\\n    '  neighbor-preservation: PASS'",
+          )
+
+          Path('.github/workflows/m22-chunking-patch.yml').unlink()
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add kernel/core/virtio_blk_test.c tests/virtio-block-image.c tests/virtio-block-qemu.sh .github/workflows/m22-chunking-patch.yml
+          git commit -m "Prove VirtIO multi-request chunking"
+          git push origin HEAD:agent/virtio-block
