@@ -93,6 +93,9 @@ jobs:
       - name: Writable BoringFS reboot persistence
         run: sh ./tests/boringfs-rw-qemu.sh
 
+      - name: Persistent BoringFS root human boot
+        run: sh ./tests/persistent-root-qemu.sh
+
       - name: Writable BoringFS allocation and rollback matrix
         run: make boringfs-vfs-host-test
 
@@ -104,3 +107,13 @@ jobs:
 
       - name: Read-only boringfsck inspector
         run: make boringfsck-test
+
+      - name: Build human-runnable QEMU bundle
+        run: make qemu-bundle
+
+      - name: Upload human-runnable QEMU bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: boringos-qemu-x86_64
+          path: build/boringos-qemu-x86_64/
+          if-no-files-found: error
