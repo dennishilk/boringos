@@ -18,6 +18,22 @@ struct process;
 #define BORING_ELF_PF_W 0x2U
 #define BORING_ELF_PF_R 0x4U
 
+typedef bool (*boring_elf_source_read_fn)(void *context,
+                                          uint64_t offset,
+                                          void *buffer,
+                                          size_t length);
+
+struct boring_elf_source {
+    uint64_t size;
+    boring_elf_source_read_fn read;
+    void *context;
+};
+
+struct boring_elf_memory_source {
+    struct boring_elf_source source;
+    const uint8_t *bytes;
+};
+
 struct boring_elf_segment {
     uint64_t file_offset;
     uint64_t virtual_address;
@@ -57,6 +73,18 @@ struct boring_elf_image {
                                        BORING_ELF_STACK_PAGES];
 };
 
+bool boring_elf_memory_source_init(struct boring_elf_memory_source *memory,
+                                   const uint8_t *bytes,
+                                   size_t size);
+bool boring_elf_validate_source(const struct boring_elf_source *source,
+                                uintptr_t stack_base,
+                                size_t stack_size,
+                                struct boring_elf_validation *validation);
+bool boring_elf_load_source(struct process *process,
+                            const struct boring_elf_source *source,
+                            uintptr_t stack_base,
+                            size_t stack_size,
+                            struct boring_elf_image *image);
 bool boring_elf_validate(const uint8_t *module_bytes,
                          size_t module_size,
                          uintptr_t stack_base,
