@@ -593,3 +593,22 @@ so M27 retains the existing BOR artwork rather than inventing a mascot.
 
 M27 does not add persistent history, credentials, permissions, a TTY/FD
 layer, VFS-backed executable loading, networking, graphics or BoringWM.
+
+---
+
+# Stage 12 — filesystem-backed native programs
+
+## Milestone 28: VFS-backed executable loading and standalone `boringfetch` — CURRENT
+
+Milestone 28 generalizes the existing validated static ELF64 loader so the
+same parser, validation rules and Ring-3 mapping policy can consume bounded
+VFS-backed regular files as well as the established Limine boot-module source.
+The first required filesystem-resident native program is `/bin/boringfetch`;
+the shell will resolve it externally, launch it as a child process, wait/reap
+that child, and return to the same interactive prompt.
+
+The intended program format remains deliberately narrow: static freestanding
+little-endian x86_64 `ET_EXEC` ELF64 with validated `PT_LOAD` segments. There
+is no dynamic linker, shared libraries, `fork`, signals, job control, pipes,
+redirection, configurable `PATH`, permissions model, package manager,
+framebuffer or POSIX compatibility claim in M28.
