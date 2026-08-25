@@ -196,6 +196,7 @@ KERNEL_C_SOURCES := \
 	kernel/core/syscall.c \
 	kernel/core/elf_boot.c \
 	kernel/core/elf_loader.c \
+	kernel/core/elf_vfs.c \
 	$(TEST_HARNESS_C) \
 	kernel/arch/x86_64/vmm.c \
 	kernel/arch/x86_64/mmio.c \
