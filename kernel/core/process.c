@@ -13,6 +13,35 @@ static uint64_t created_process_count;
 static uint64_t finished_process_count;
 static bool process_initialized;
 
+static bool process_copy_text(char *destination,
+                              size_t capacity,
+                              const char *source) {
+    size_t index;
+
+    if ((destination == NULL) || (capacity == 0U) || (source == NULL)) {
+        return false;
+    }
+    for (index = 0U; index < capacity; ++index) {
+        destination[index] = source[index];
+        if (source[index] == '\0') {
+            return true;
+        }
+    }
+    destination[capacity - 1U] = '\0';
+    return false;
+}
+
+static void process_zero_text(char *text, size_t capacity) {
+    size_t index;
+
+    if (text == NULL) {
+        return;
+    }
+    for (index = 0U; index < capacity; ++index) {
+        text[index] = '\0';
+    }
+}
+
 static void process_clear(struct process *process) {
     size_t index;
 
@@ -24,6 +53,7 @@ static void process_clear(struct process *process) {
         (void)vfs_path_release(&process->cwd);
     }
     process->pid = 0ULL;
+    process->parent_pid = 0ULL;
     process->address_space.root_physical = 0ULL;
     process->address_space.owned_table_count = 0ULL;
     process->address_space.bootstrap = false;
@@ -36,7 +66,11 @@ static void process_clear(struct process *process) {
     process->cwd.mount = NULL;
     process->cwd.node = NULL;
     process->state = PROCESS_FINISHED;
+    process_zero_text(process->name, sizeof(process->name));
+    process_zero_text(process->username, sizeof(process->username));
+    process_zero_text(process->cwd_text, sizeof(process->cwd_text));
     process->cwd_valid = false;
+    process->cwd_text_valid = false;
     process->slot_used = false;
 }
 
@@ -46,7 +80,6 @@ static bool process_is_regular(const struct process *process) {
     if (process == NULL) {
         return false;
     }
-
     for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
         if (process == &processes[index]) {
             return processes[index].slot_used;
@@ -81,7 +114,6 @@ bool process_init(void) {
     for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
         process_clear(&processes[index]);
     }
-
     if (!address_space_system_init(&bootstrap_process.address_space)) {
         process_clear(&bootstrap_process);
         process_restore_interrupts(interrupts_were_enabled);
@@ -89,8 +121,13 @@ bool process_init(void) {
     }
 
     bootstrap_process.pid = KERNEL_BOOTSTRAP_PID;
+    bootstrap_process.parent_pid = KERNEL_BOOTSTRAP_PID;
     bootstrap_process.state = PROCESS_ALIVE;
     bootstrap_process.slot_used = true;
+    (void)process_copy_text(bootstrap_process.name,
+                            sizeof(bootstrap_process.name), "kernel");
+    (void)process_copy_text(bootstrap_process.username,
+                            sizeof(bootstrap_process.username), "kernel");
     current_process = &bootstrap_process;
     next_pid = 1ULL;
     created_process_count = 0ULL;
@@ -101,10 +138,7 @@ bool process_init(void) {
 }
 
 struct process *process_bootstrap(void) {
-    if (!process_initialized) {
-        return NULL;
-    }
-    return &bootstrap_process;
+    return process_initialized ? &bootstrap_process : NULL;
 }
 
 struct process *process_current(void) {
@@ -125,7 +159,6 @@ bool process_create(struct process **process_out) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
-
     for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
         if (!processes[index].slot_used) {
             process = &processes[index];
@@ -145,8 +178,28 @@ bool process_create(struct process **process_out) {
     }
 
     process->pid = next_pid;
+    process->parent_pid =
+        (current_process != NULL) ? current_process->pid : KERNEL_BOOTSTRAP_PID;
     process->state = PROCESS_ALIVE;
     process->slot_used = true;
+    if (process->pid == 1ULL) {
+        (void)process_copy_text(process->name, sizeof(process->name),
+                                "boring-init");
+        (void)process_copy_text(process->username, sizeof(process->username),
+                                "boring");
+    } else {
+        (void)process_copy_text(process->name, sizeof(process->name),
+                                "process");
+        if ((current_process != NULL) &&
+            (current_process != &bootstrap_process)) {
+            (void)process_copy_text(process->username,
+                                    sizeof(process->username),
+                                    current_process->username);
+        } else {
+            (void)process_copy_text(process->username,
+                                    sizeof(process->username), "boring");
+        }
+    }
     ++next_pid;
     ++created_process_count;
     *process_out = process;
@@ -167,7 +220,6 @@ bool process_discard_unstarted(struct process *process) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
-
     next_pid = process->pid;
     --created_process_count;
     process_clear(process);
@@ -179,14 +231,13 @@ bool process_activate(struct process *process) {
     const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
     x86_64_interrupts_disable();
-    if ((!process_initialized) || (process == NULL) ||
-        !process->slot_used || (process->state != PROCESS_ALIVE) ||
+    if ((!process_initialized) || (process == NULL) || !process->slot_used ||
+        (process->state != PROCESS_ALIVE) ||
         ((process != &bootstrap_process) && !process_is_regular(process)) ||
         !address_space_activate(&process->address_space)) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
-
     current_process = process;
     process_restore_interrupts(interrupts_were_enabled);
     return true;
@@ -201,7 +252,6 @@ bool process_mark_finished(struct process *process) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
-
     process->state = PROCESS_FINISHED;
     ++finished_process_count;
     process_restore_interrupts(interrupts_were_enabled);
@@ -218,40 +268,107 @@ bool process_destroy(struct process *process) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
-
     process_clear(process);
     process_restore_interrupts(interrupts_were_enabled);
     return true;
 }
 
 bool process_is_alive(const struct process *process) {
-    if ((!process_initialized) || !process_is_known_alive(process)) {
+    return process_initialized && process_is_known_alive(process);
+}
+
+bool process_set_name(struct process *process, const char *name) {
+    char replacement[KERNEL_PROCESS_NAME_MAX + 1U];
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+
+    if (!process_copy_text(replacement, sizeof(replacement), name) ||
+        (replacement[0] == '\0')) {
         return false;
+    }
+    x86_64_interrupts_disable();
+    if ((!process_initialized) || !process_is_known_alive(process)) {
+        process_restore_interrupts(interrupts_were_enabled);
+        return false;
+    }
+    (void)process_copy_text(process->name, sizeof(process->name), replacement);
+    process_restore_interrupts(interrupts_were_enabled);
+    return true;
+}
+
+static bool process_replace_cwd(struct process *process,
+                                const struct vfs_path *cwd,
+                                const char *text) {
+    struct vfs_path replacement = { NULL, NULL };
+
+    if (!vfs_path_is_directory(cwd) ||
+        (vfs_path_clone(cwd, &replacement) != VFS_RESULT_OK)) {
+        return false;
+    }
+    if (process->cwd_valid &&
+        (vfs_path_release(&process->cwd) != VFS_RESULT_OK)) {
+        (void)vfs_path_release(&replacement);
+        return false;
+    }
+    process->cwd = replacement;
+    process->cwd_valid = true;
+    process->cwd_text_valid = false;
+    process_zero_text(process->cwd_text, sizeof(process->cwd_text));
+    if (text != NULL) {
+        if (!process_copy_text(process->cwd_text, sizeof(process->cwd_text),
+                               text)) {
+            (void)vfs_path_release(&process->cwd);
+            process->cwd.mount = NULL;
+            process->cwd.node = NULL;
+            process->cwd_valid = false;
+            return false;
+        }
+        process->cwd_text_valid = true;
     }
     return true;
 }
 
 bool process_set_cwd(struct process *process, const struct vfs_path *cwd) {
-    struct vfs_path replacement = { NULL, NULL };
+    const char *text = NULL;
     const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
     x86_64_interrupts_disable();
     if ((!process_initialized) || !process_is_known_alive(process) ||
-        !vfs_path_is_directory(cwd) ||
-        (vfs_path_clone(cwd, &replacement) != VFS_RESULT_OK)) {
+        (cwd == NULL)) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
-
-    if (process->cwd_valid &&
-        (vfs_path_release(&process->cwd) != VFS_RESULT_OK)) {
-        (void)vfs_path_release(&replacement);
+    if ((cwd->node != NULL) && (cwd->node->parent == cwd->node)) {
+        text = "/";
+    } else if ((current_process != NULL) && (current_process != process) &&
+               current_process->cwd_valid &&
+               current_process->cwd_text_valid &&
+               vfs_path_equal(cwd, &current_process->cwd)) {
+        text = current_process->cwd_text;
+    }
+    if (!process_replace_cwd(process, cwd, text)) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
+    process_restore_interrupts(interrupts_were_enabled);
+    return true;
+}
 
-    process->cwd = replacement;
-    process->cwd_valid = true;
+bool process_set_cwd_text(struct process *process,
+                          const struct vfs_path *cwd,
+                          const char *text) {
+    char checked[VFS_PATH_MAX + 1U];
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+
+    if (!process_copy_text(checked, sizeof(checked), text) ||
+        (checked[0] != '/')) {
+        return false;
+    }
+    x86_64_interrupts_disable();
+    if ((!process_initialized) || !process_is_known_alive(process) ||
+        !process_replace_cwd(process, cwd, checked)) {
+        process_restore_interrupts(interrupts_were_enabled);
+        return false;
+    }
     process_restore_interrupts(interrupts_were_enabled);
     return true;
 }
@@ -264,15 +381,16 @@ bool process_clear_cwd(struct process *process) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
-    if (!process->cwd_valid) {
-        process_restore_interrupts(interrupts_were_enabled);
-        return true;
-    }
-    if (vfs_path_release(&process->cwd) != VFS_RESULT_OK) {
+    if (process->cwd_valid &&
+        (vfs_path_release(&process->cwd) != VFS_RESULT_OK)) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
+    process->cwd.mount = NULL;
+    process->cwd.node = NULL;
     process->cwd_valid = false;
+    process->cwd_text_valid = false;
+    process_zero_text(process->cwd_text, sizeof(process->cwd_text));
     process_restore_interrupts(interrupts_were_enabled);
     return true;
 }
@@ -287,10 +405,62 @@ bool process_get_cwd(const struct process *process, struct vfs_path *cwd_out) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
-
     result = vfs_path_clone(&process->cwd, cwd_out);
     process_restore_interrupts(interrupts_were_enabled);
     return result == VFS_RESULT_OK;
+}
+
+bool process_get_cwd_text(const struct process *process,
+                          char *buffer,
+                          size_t capacity) {
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+    bool copied;
+
+    x86_64_interrupts_disable();
+    if ((!process_initialized) || !process_is_known_alive(process) ||
+        !process->cwd_text_valid || (buffer == NULL) || (capacity == 0U)) {
+        process_restore_interrupts(interrupts_were_enabled);
+        return false;
+    }
+    copied = process_copy_text(buffer, capacity, process->cwd_text);
+    process_restore_interrupts(interrupts_were_enabled);
+    return copied;
+}
+
+bool process_get_snapshot(uint64_t index, struct process_snapshot *snapshot) {
+    uint64_t logical = 0ULL;
+    size_t slot;
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+
+    x86_64_interrupts_disable();
+    if ((!process_initialized) || (snapshot == NULL)) {
+        process_restore_interrupts(interrupts_were_enabled);
+        return false;
+    }
+    for (slot = 0U; slot < (size_t)KERNEL_PROCESS_MAX; ++slot) {
+        struct process *const process = &processes[slot];
+        if (!process->slot_used) {
+            continue;
+        }
+        if (logical == index) {
+            snapshot->pid = process->pid;
+            snapshot->parent_pid = process->parent_pid;
+            snapshot->state = (process->state == PROCESS_FINISHED) ?
+                PROCESS_SNAPSHOT_ZOMBIE :
+                ((process == current_process) ? PROCESS_SNAPSHOT_RUNNING :
+                                                PROCESS_SNAPSHOT_WAITING);
+            (void)process_copy_text(snapshot->name, sizeof(snapshot->name),
+                                    process->name);
+            (void)process_copy_text(snapshot->username,
+                                    sizeof(snapshot->username),
+                                    process->username);
+            process_restore_interrupts(interrupts_were_enabled);
+            return true;
+        }
+        ++logical;
+    }
+    process_restore_interrupts(interrupts_were_enabled);
+    return false;
 }
 
 bool process_get_stats(struct process_stats *stats) {
@@ -304,13 +474,11 @@ bool process_get_stats(struct process_stats *stats) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
-
     for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
         if (processes[index].slot_used) {
             ++active;
         }
     }
-
     stats->created_processes = created_process_count;
     stats->finished_processes = finished_process_count;
     stats->active_processes = active;
