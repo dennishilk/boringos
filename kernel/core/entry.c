@@ -43,6 +43,7 @@
 #define BORING_TEST_MODE_VIRTIO_BLOCK 12
 #define BORING_TEST_MODE_BORINGFS_RO 13
 #define BORING_TEST_MODE_BORINGFS_RW 14
+#define BORING_TEST_MODE_PERSISTENT_ROOT 15
 #define IRQ_TEST_TICKS 10ULL
 #define IRQ_TEST_SPIN_LIMIT 500000000ULL
 #define BOOTSTRAP_TIMER_FREQUENCY_HZ 100U
@@ -68,7 +69,8 @@
     (BORING_TEST_MODE != BORING_TEST_MODE_BLOCK) && \
     (BORING_TEST_MODE != BORING_TEST_MODE_VIRTIO_BLOCK) && \
     (BORING_TEST_MODE != BORING_TEST_MODE_BORINGFS_RO) && \
-    (BORING_TEST_MODE != BORING_TEST_MODE_BORINGFS_RW)
+    (BORING_TEST_MODE != BORING_TEST_MODE_BORINGFS_RW) && \
+    (BORING_TEST_MODE != BORING_TEST_MODE_PERSISTENT_ROOT)
 #error "unsupported BoringKernel test mode"
 #endif
 
@@ -951,6 +953,8 @@ static void run_exception_test_mode(void) {
     boringfs_ro_test_run();
 #elif BORING_TEST_MODE == BORING_TEST_MODE_BORINGFS_RW
     boringfs_ro_test_run();
+#elif BORING_TEST_MODE == BORING_TEST_MODE_PERSISTENT_ROOT
+    boringfs_ro_test_run();
 #endif
 }
 #endif
@@ -973,7 +977,7 @@ void boring_kernel_entry(void) {
 
     serial_init();
     serial_write_string("BoringOS booting...\n");
-    serial_write_string("BoringKernel 0.0.25-dev\n");
+    serial_write_string("BoringKernel 0.0.26-dev\n");
     serial_write_string("Arch: x86_64\n");
     serial_write_string("Hello from BoringKernel.\n\n");
 

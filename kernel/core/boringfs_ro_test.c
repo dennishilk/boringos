@@ -31,10 +31,17 @@
 #define SHELL_STACK_TOP 0x0000000040011000ULL
 #define SHELL_ROOT_FILESYSTEM_ID 200ULL
 #define BORINGFS_FILESYSTEM_ID 230ULL
+#if BORING_TEST_MODE == 15
+#define BORINGFS_HELLO_PATH "/docs/hello.txt"
+#define BORINGFS_ARCH_PATH "/docs/architecture.txt"
+#define BORINGFS_TEST_ROOT 1
+#else
 #define BORINGFS_HELLO_PATH "/disk/docs/hello.txt"
 #define BORINGFS_ARCH_PATH "/disk/docs/architecture.txt"
+#define BORINGFS_TEST_ROOT 0
+#endif
 
-#if BORING_TEST_MODE == 14
+#if (BORING_TEST_MODE == 14) || (BORING_TEST_MODE == 15)
 #define BORINGFS_TEST_WRITABLE 1
 #else
 #define BORINGFS_TEST_WRITABLE 0
@@ -256,24 +263,26 @@ void boringfs_ro_test_run(void) {
     }
     boringfs_ro_test_pass("real-virtio-volume");
 
-    if ((ramfs_create_filesystem(SHELL_ROOT_FILESYSTEM_ID, &root_ramfs) !=
-         VFS_RESULT_OK) || (root_ramfs == NULL)) {
-        boringfs_ro_test_fail("root-ramfs-create");
-    }
-    root_filesystem = ramfs_get_vfs(root_ramfs);
-    if ((root_filesystem == NULL) ||
-        (vfs_init(root_filesystem) != VFS_RESULT_OK) ||
-        (vfs_get_root(&root) != VFS_RESULT_OK) ||
-        (ramfs_get_stats(root_ramfs, &ramfs_stats) != VFS_RESULT_OK) ||
-        (ramfs_stats.live_nodes != 1ULL) ||
-        (ramfs_stats.live_directories != 1ULL) ||
-        (ramfs_stats.live_files != 0ULL)) {
-        boringfs_ro_test_fail("root-ramfs-vfs");
-    }
-    boringfs_ro_test_pass("root-ramfs-vfs");
+    if (BORINGFS_TEST_ROOT == 0) {
+        if ((ramfs_create_filesystem(SHELL_ROOT_FILESYSTEM_ID, &root_ramfs) !=
+             VFS_RESULT_OK) || (root_ramfs == NULL)) {
+            boringfs_ro_test_fail("root-ramfs-create");
+        }
+        root_filesystem = ramfs_get_vfs(root_ramfs);
+        if ((root_filesystem == NULL) ||
+            (vfs_init(root_filesystem) != VFS_RESULT_OK) ||
+            (vfs_get_root(&root) != VFS_RESULT_OK) ||
+            (ramfs_get_stats(root_ramfs, &ramfs_stats) != VFS_RESULT_OK) ||
+            (ramfs_stats.live_nodes != 1ULL) ||
+            (ramfs_stats.live_directories != 1ULL) ||
+            (ramfs_stats.live_files != 0ULL)) {
+            boringfs_ro_test_fail("root-ramfs-vfs");
+        }
+        boringfs_ro_test_pass("root-ramfs-vfs");
 
-    if (vfs_mkdir_at(&root, "disk", &disk_mountpoint) != VFS_RESULT_OK) {
-        boringfs_ro_test_fail("disk-mountpoint");
+        if (vfs_mkdir_at(&root, "disk", &disk_mountpoint) != VFS_RESULT_OK) {
+            boringfs_ro_test_fail("disk-mountpoint");
+        }
     }
     if (((BORINGFS_TEST_WRITABLE != 0) ?
          boringfs_vfs_create_writable(
@@ -290,16 +299,25 @@ void boringfs_ro_test_run(void) {
     }
     disk_filesystem = boringfs_vfs_get_vfs(disk_boringfs);
     if ((disk_filesystem == NULL) ||
-        (vfs_mount_filesystem(disk_filesystem, &disk_mountpoint) !=
-         VFS_RESULT_OK)) {
+        ((BORINGFS_TEST_ROOT != 0) ?
+         ((vfs_init(disk_filesystem) != VFS_RESULT_OK) ||
+          (vfs_get_root(&root) != VFS_RESULT_OK)) :
+         (vfs_mount_filesystem(disk_filesystem, &disk_mountpoint) !=
+          VFS_RESULT_OK))) {
         boringfs_ro_test_fail("boringfs-mount");
     }
     serial_write_string("BoringFS over VirtIO:\n");
     boringfs_ro_test_pass("4096-to-512-mapping");
     boringfs_ro_test_pass("structural-validation");
-    boringfs_ro_test_pass("mount-at-/disk");
+    boringfs_ro_test_pass((BORINGFS_TEST_ROOT != 0) ?
+                          "mount-at-root" : "mount-at-/disk");
+    if (BORINGFS_TEST_ROOT != 0) {
+        serial_write_string("BoringFS root mounted.\n");
+    }
 
-    if ((vfs_resolve(&root, "/disk", &disk_root) != VFS_RESULT_OK) ||
+    if ((((BORINGFS_TEST_ROOT != 0) ?
+          vfs_get_root(&disk_root) :
+          vfs_resolve(&root, "/disk", &disk_root)) != VFS_RESULT_OK) ||
         (vfs_resolve(&root, BORINGFS_HELLO_PATH, &hello_path) !=
          VFS_RESULT_OK)) {
         boringfs_ro_test_fail("file-lookup");
@@ -405,7 +423,8 @@ void boringfs_ro_test_run(void) {
     if ((vfs_path_release(&architecture_path) != VFS_RESULT_OK) ||
         (vfs_path_release(&hello_path) != VFS_RESULT_OK) ||
         (vfs_path_release(&disk_root) != VFS_RESULT_OK) ||
-        (vfs_path_release(&disk_mountpoint) != VFS_RESULT_OK)) {
+        ((BORINGFS_TEST_ROOT == 0) &&
+         (vfs_path_release(&disk_mountpoint) != VFS_RESULT_OK))) {
         boringfs_ro_test_fail("disk-path-release");
     }
     serial_write_string(BORINGFS_TEST_WRITABLE ?

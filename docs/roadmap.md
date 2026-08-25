@@ -71,7 +71,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.25-dev
+BoringKernel 0.0.26-dev
 ```
 
 The current syscall ABI is exactly:
@@ -468,13 +468,13 @@ merged main: 254c371bcf67e74a3fb5f681bd5af9f06fcb8aa7
 merged-main CI: Run #209 / ID 32853491775 / push / main / SUCCESS
 ```
 
-## Milestone 24: BoringFS mutation support — CURRENT
+## Milestone 24: BoringFS mutation support — COMPLETE
 
 Add bounded synchronous mutation through the proven QEMU raw disk → modern VirtIO → block device → BoringFS → VFS → checked syscall → PID 2 shell path. The intended user surface is `cat`, `touch`, replacement-style `write` and `rm`, while existing directory commands and the read-only mount contract remain intact.
 
 The writer uses deterministic first-fit allocation, persistent bitmap/object/directory updates, reusable deleted slots and blocks, and one-block regular-file replacement. It deliberately has no journal or crash-consistency guarantee; ordinary reported write failures are rolled back where possible and every acceptance image is independently revalidated.
 
-## Milestone 25: persistent native root filesystem — PLANNED
+## Milestone 25: persistent native root filesystem — CURRENT
 
 Eventually boot through a persistent BoringFS root into native userspace:
 
@@ -490,6 +490,11 @@ boring-init
 boring-shell
 ```
 
+Milestone 25 keeps the proven ISO boot path and attaches one explicit raw
+BoringFS root image through modern VirtIO. It does not invent a partition
+layer or mislabel the raw filesystem as a self-contained boot image. The
+human-runnable bundle and its CI acceptance use the same two-file topology.
+
 ---
 
 # Security and corruption gates
@@ -502,14 +507,17 @@ Networking remains unrelated and deferred.
 
 # Exact current implementation milestone
 
-## Milestone 24 — synchronous writable BoringFS over VirtIO
+## Milestone 25 — persistent native BoringFS root
 
-The current implementation item is **Milestone 24**. Milestone 23 is verified merged; Milestone 25 remains **PLANNED** until M24 has completed its full exact-head closeout, guarded merge, and merged-main CI verification.
+The current implementation item is **Milestone 25**. Milestones 23 and 24 are
+verified merged. M25 makes the writable BoringFS volume the VFS root before
+creating PID 1, then starts the established `boring-init` and `boring-shell`
+userspace path with `/` as their persistent CWD.
 
 Its architectural boundary is:
 
 ```text
-host-formatted BoringFS
+host-formatted BoringFS root image
           ↓
    QEMU raw disk
           ↓
@@ -523,9 +531,12 @@ host-formatted BoringFS
           ↓
  writable BoringFS VFS
           ↓
-        /disk
+          /
           ↓
  PID 2 boring-shell
 ```
 
-Milestone 24 does not add file descriptors, a persistent root, partition parsing, executable loading from BoringFS, journaling, crash consistency, general append/growth, rename, or any desktop/display work.
+M25 retains Limine ISO boot modules for `boring-init` and `boring-shell`; it
+does not yet load executables from BoringFS. It adds no partition parsing,
+journaling, crash-consistency claim, file descriptors, networking, or desktop
+work. Historical RAMFS and `/disk` acceptance modes remain regression gates.
