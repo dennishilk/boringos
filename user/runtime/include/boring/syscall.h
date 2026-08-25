@@ -18,5 +18,16 @@ long boring_fs_readdir(const char *path,
 long boring_fs_mkdir(const char *name, size_t length);
 long boring_fs_rmdir(const char *name, size_t length);
 long boring_fs_chdir(const char *path, size_t length);
+long boring_fs_read(const char *path,
+                    size_t path_length,
+                    uint64_t offset,
+                    void *buffer,
+                    size_t capacity);
+long boring_fs_touch(const char *path, size_t length);
+long boring_fs_write(const char *path,
+                     size_t path_length,
+                     const void *buffer,
+                     size_t length);
+long boring_fs_unlink(const char *path, size_t length);
 
 #endif

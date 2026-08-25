@@ -34,6 +34,12 @@
 #define BORINGFS_HELLO_PATH "/disk/docs/hello.txt"
 #define BORINGFS_ARCH_PATH "/disk/docs/architecture.txt"
 
+#if BORING_TEST_MODE == 14
+#define BORINGFS_TEST_WRITABLE 1
+#else
+#define BORINGFS_TEST_WRITABLE 0
+#endif
+
 static uint8_t boringfs_read_buffer[VFS_IO_MAX];
 
 struct shell_boot_modules {
@@ -55,7 +61,9 @@ static void boringfs_ro_test_fail(const char *check) {
     serial_write_string("  ");
     serial_write_string(check);
     serial_write_string(": FAIL\n");
-    serial_write_string("BoringFS read-only acceptance FAILED: ");
+    serial_write_string(BORINGFS_TEST_WRITABLE ?
+                        "BoringFS writable acceptance FAILED: " :
+                        "BoringFS read-only acceptance FAILED: ");
     serial_write_string(check);
     serial_write_string("\n");
     x86_64_halt_forever();
@@ -267,9 +275,13 @@ void boringfs_ro_test_run(void) {
     if (vfs_mkdir_at(&root, "disk", &disk_mountpoint) != VFS_RESULT_OK) {
         boringfs_ro_test_fail("disk-mountpoint");
     }
-    if (boringfs_vfs_create_readonly(
-            disk_device, BORINGFS_FILESYSTEM_ID, &disk_boringfs,
-            &validation_error) != VFS_RESULT_OK) {
+    if (((BORINGFS_TEST_WRITABLE != 0) ?
+         boringfs_vfs_create_writable(
+             disk_device, BORINGFS_FILESYSTEM_ID, &disk_boringfs,
+             &validation_error) :
+         boringfs_vfs_create_readonly(
+             disk_device, BORINGFS_FILESYSTEM_ID, &disk_boringfs,
+             &validation_error)) != VFS_RESULT_OK) {
         serial_write_string("BoringFS mount rejected: ");
         serial_write_string(
             boringfs_validation_result_name(validation_error.code));
@@ -356,33 +368,39 @@ void boringfs_ro_test_run(void) {
     }
     boringfs_ro_test_pass("extent-backed-read");
 
-    serial_write_string("BoringFS read-only:\n");
-    if (vfs_mkdir_at(&disk_root, "Denied", &denied_path) !=
-        VFS_RESULT_ACCESS_DENIED) {
-        boringfs_ro_test_fail("mkdir-denied");
+    if (BORINGFS_TEST_WRITABLE != 0) {
+        serial_write_string("BoringFS writable:\n");
+        boringfs_ro_test_pass("synchronous-mutations-enabled");
+    } else {
+        serial_write_string("BoringFS read-only:\n");
+        if (vfs_mkdir_at(&disk_root, "Denied", &denied_path) !=
+            VFS_RESULT_ACCESS_DENIED) {
+            boringfs_ro_test_fail("mkdir-denied");
+        }
+        boringfs_ro_test_pass("mkdir-denied");
+        if (vfs_create_at(&disk_root, "denied.txt", &denied_path) !=
+            VFS_RESULT_ACCESS_DENIED) {
+            boringfs_ro_test_fail("create-denied");
+        }
+        boringfs_ro_test_pass("create-denied");
+        if ((vfs_handle_open(&hello_path, VFS_ACCESS_WRITE, &handle) !=
+             VFS_RESULT_OK) ||
+            (vfs_handle_write(&handle, "x", 1U, &transferred) !=
+             VFS_RESULT_ACCESS_DENIED) ||
+            (vfs_handle_close(&handle) != VFS_RESULT_OK)) {
+            boringfs_ro_test_fail("write-denied");
+        }
+        boringfs_ro_test_pass("write-denied");
+        if (vfs_truncate_path(&hello_path, 0ULL) !=
+            VFS_RESULT_ACCESS_DENIED) {
+            boringfs_ro_test_fail("truncate-denied");
+        }
+        boringfs_ro_test_pass("truncate-denied");
+        if (vfs_rmdir_at(&disk_root, "docs") != VFS_RESULT_ACCESS_DENIED) {
+            boringfs_ro_test_fail("rmdir-denied");
+        }
+        boringfs_ro_test_pass("rmdir-denied");
     }
-    boringfs_ro_test_pass("mkdir-denied");
-    if (vfs_create_at(&disk_root, "denied.txt", &denied_path) !=
-        VFS_RESULT_ACCESS_DENIED) {
-        boringfs_ro_test_fail("create-denied");
-    }
-    boringfs_ro_test_pass("create-denied");
-    if ((vfs_handle_open(&hello_path, VFS_ACCESS_WRITE, &handle) !=
-         VFS_RESULT_OK) ||
-        (vfs_handle_write(&handle, "x", 1U, &transferred) !=
-         VFS_RESULT_ACCESS_DENIED) ||
-        (vfs_handle_close(&handle) != VFS_RESULT_OK)) {
-        boringfs_ro_test_fail("write-denied");
-    }
-    boringfs_ro_test_pass("write-denied");
-    if (vfs_truncate_path(&hello_path, 0ULL) != VFS_RESULT_ACCESS_DENIED) {
-        boringfs_ro_test_fail("truncate-denied");
-    }
-    boringfs_ro_test_pass("truncate-denied");
-    if (vfs_rmdir_at(&disk_root, "docs") != VFS_RESULT_ACCESS_DENIED) {
-        boringfs_ro_test_fail("rmdir-denied");
-    }
-    boringfs_ro_test_pass("rmdir-denied");
 
     if ((vfs_path_release(&architecture_path) != VFS_RESULT_OK) ||
         (vfs_path_release(&hello_path) != VFS_RESULT_OK) ||
@@ -390,7 +408,9 @@ void boringfs_ro_test_run(void) {
         (vfs_path_release(&disk_mountpoint) != VFS_RESULT_OK)) {
         boringfs_ro_test_fail("disk-path-release");
     }
-    serial_write_string("BoringFS read-only mount ready.\n\n");
+    serial_write_string(BORINGFS_TEST_WRITABLE ?
+                        "BoringFS writable mount ready.\n\n" :
+                        "BoringFS read-only mount ready.\n\n");
 
     if (!process_create(&init_process) || (init_process == NULL) ||
         (init_process->pid != 1ULL)) {

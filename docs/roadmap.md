@@ -59,7 +59,7 @@ read-only boringfsck inspector (Milestone 20 complete)
 
 kernel storage path:
 
-filesystem / storage consumer (future)
+validated read-only or synchronous writable BoringFS mount at `/disk`
     ↓
 generic bounded block-device layer (Milestone 21 complete)
     ↓
@@ -71,7 +71,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.24-dev
+BoringKernel 0.0.25-dev
 ```
 
 The current syscall ABI is exactly:
@@ -86,9 +86,13 @@ The current syscall ABI is exactly:
 6 FS_MKDIR
 7 FS_RMDIR
 8 FS_CHDIR
+9 FS_READ
+10 FS_TOUCH
+11 FS_WRITE
+12 FS_UNLINK
 ```
 
-There is still no numeric file-descriptor table, no stdin/stdout/stderr abstraction, no userspace file-content syscall API, no executable loading from VFS/RAMFS, no kernel BoringFS backend, no partition layer, no persistent root filesystem, no networking, no display/input stack, no BoringWM integration, no APIC migration and no SMP.
+There is still no numeric file-descriptor table, no stdin/stdout/stderr abstraction, no executable loading from VFS/BoringFS, no partition layer, no persistent root filesystem, no networking, no display/input stack, no BoringWM integration, no APIC migration and no SMP.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -448,13 +452,27 @@ Milestone 22 did not add a kernel BoringFS mount, partition layer, storage sysca
 
 # Stage 9 — BoringFS kernel integration
 
-## Milestone 23: read-only BoringFS mount — CURRENT
+## Milestone 23: read-only BoringFS mount — COMPLETE
 
 Mount a host-formatted BoringFS volume through the generic block-device boundary and VFS, rejecting invalid metadata before exposure. Milestone 23 keeps RAMFS as the root, exposes the validated persistent volume at `/disk`, and proves real PID 2 directory traversal plus kernel-side regular-file reads through BoringFS extents. Mutation remains explicitly denied in this milestone.
 
-## Milestone 24: BoringFS mutation support — PLANNED
+Acceptance record:
 
-Add mutation only after read-only mounting is solid.
+```text
+final PR: #34
+frozen implementation: 0ede929d0d144fdfb561b98a324b66979586168f
+implementation CI: Run #207 / ID 32852821936 / SUCCESS
+final closeout head: 693730b18ceb846b9377f473a61fc903a848ea4e
+final exact-head CI: Run #208 / ID 32853262677 / SUCCESS
+merged main: 254c371bcf67e74a3fb5f681bd5af9f06fcb8aa7
+merged-main CI: Run #209 / ID 32853491775 / push / main / SUCCESS
+```
+
+## Milestone 24: BoringFS mutation support — CURRENT
+
+Add bounded synchronous mutation through the proven QEMU raw disk → modern VirtIO → block device → BoringFS → VFS → checked syscall → PID 2 shell path. The intended user surface is `cat`, `touch`, replacement-style `write` and `rm`, while existing directory commands and the read-only mount contract remain intact.
+
+The writer uses deterministic first-fit allocation, persistent bitmap/object/directory updates, reusable deleted slots and blocks, and one-block regular-file replacement. It deliberately has no journal or crash-consistency guarantee; ordinary reported write failures are rolled back where possible and every acceptance image is independently revalidated.
 
 ## Milestone 25: persistent native root filesystem — PLANNED
 
@@ -484,9 +502,9 @@ Networking remains unrelated and deferred.
 
 # Exact current implementation milestone
 
-## Milestone 23 — read-only BoringFS over VirtIO
+## Milestone 24 — synchronous writable BoringFS over VirtIO
 
-The current implementation item is **Milestone 23**. Milestones 24 and 25 remain **PLANNED** until M23 has completed its full exact-head closeout, guarded merge, and merged-main CI verification.
+The current implementation item is **Milestone 24**. Milestone 23 is verified merged; Milestone 25 remains **PLANNED** until M24 has completed its full exact-head closeout, guarded merge, and merged-main CI verification.
 
 Its architectural boundary is:
 
@@ -501,13 +519,13 @@ host-formatted BoringFS
           ↓
  M21 block-device API
           ↓
- shared BoringFS validator
+ shared BoringFS validator + synchronous writer
           ↓
- read-only BoringFS VFS
+ writable BoringFS VFS
           ↓
         /disk
           ↓
  PID 2 boring-shell
 ```
 
-Milestone 23 does not add filesystem mutation, storage syscalls, file descriptors, a persistent root, partition parsing, executable loading from BoringFS, journaling, or any desktop/display work.
+Milestone 24 does not add file descriptors, a persistent root, partition parsing, executable loading from BoringFS, journaling, crash consistency, general append/growth, rename, or any desktop/display work.
