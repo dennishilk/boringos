@@ -334,9 +334,7 @@ static enum vfs_result prepare_node(struct boringfs_vfs *boringfs,
         !object_type_to_vfs(object.type, &type)) {
         return VFS_RESULT_CORRUPT;
     }
-    if (object_id == BORINGFS_ROOT_OBJECT_ID) {
-        parent = &cached->vfs;
-    } else if (parent == NULL) {
+    if ((object_id != BORINGFS_ROOT_OBJECT_ID) && (parent == NULL)) {
         return VFS_RESULT_CORRUPT;
     }
     if (!vfs_node_prepare(&cached->vfs, &boringfs->filesystem,
