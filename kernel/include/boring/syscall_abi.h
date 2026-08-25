@@ -20,6 +20,7 @@
 #define BORING_SYS_FS_TOUCH 10
 #define BORING_SYS_FS_WRITE 11
 #define BORING_SYS_FS_UNLINK 12
+#define BORING_SYS_INFO 13
 
 #define BORING_SYSCALL_DEBUG_WRITE_MAX 64
 #define BORING_SYSCALL_CONSOLE_IO_MAX 64
@@ -54,6 +55,18 @@ struct boring_dirent {
     uint32_t name_length;
     char name[BORING_DIRENT_NAME_CAPACITY];
 };
+
+#define BORING_SYSTEM_INFO_ABI_VERSION 1U
+
+struct boring_system_info {
+    uint32_t abi_version;
+    uint32_t reserved;
+    uint64_t usable_memory_bytes;
+    uint64_t free_memory_bytes;
+};
+
+_Static_assert(sizeof(struct boring_system_info) == 24U,
+               "BoringOS system-info ABI size must remain fixed");
 
 _Static_assert(sizeof(struct boring_dirent) == 272U,
                "BoringOS dirent ABI size must remain fixed");

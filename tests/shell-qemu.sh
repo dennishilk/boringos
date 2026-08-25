@@ -118,7 +118,7 @@ PID=$!
 wait_for_prompt 1
 
 for line in \
-    'BoringKernel 0.0.26-dev' \
+    'BoringKernel 0.0.27-dev' \
     'boring-shell launch:' \
     '  boot-modules-found: PASS' \
     '  init-module-found: PASS' \

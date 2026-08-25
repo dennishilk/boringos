@@ -58,7 +58,7 @@ make -C "${ROOT}" boringfs-fixture boringfsck
 make -C "${ROOT}" TEST_MODE=persistent-root
 
 start_vm first
-for line in 'BoringKernel 0.0.26-dev' '  mount-at-root: PASS' 'BoringFS root mounted.' 'boring-init: pid 1' 'boring-shell: pid 2' 'boring-shell ready.'; do
+for line in 'BoringKernel 0.0.27-dev' '  mount-at-root: PASS' 'BoringFS root mounted.' 'boring-init: pid 1' 'boring-shell: pid 2' 'boring-shell ready.'; do
     grep -Fqx "${line}" "${LOG}" || fail "missing root boot marker: ${line}"
 done
 send 'touch persistence.txt'
@@ -71,5 +71,11 @@ stop_vm
 start_vm second
 send 'cat persistence.txt'
 grep -Fq 'boring-root-persistenceboring> ' "${LOG}" || fail 'reboot persistence failed'
+send 'boringfetch'
+for line in '    ____             BoringOS' '  / __  / __ \/ ___/ OS: BoringOS' ' / /_/ / /_/ / /    Kernel: BoringKernel 0.0.27-dev' '/_____/\____/_/      Arch: x86_64' '                     Root FS: BoringFS' '                     Shell: boring-shell'; do
+    grep -Fqx "${line}" "${LOG}" || fail "missing boringfetch line: ${line}"
+done
+grep -Eq '^                     Memory usable: [1-9][0-9]* bytes$' "${LOG}" || fail 'usable memory is not real'
+grep -Eq '^                     Memory free: [1-9][0-9]* bytes$' "${LOG}" || fail 'free memory is not real'
 stop_vm
 echo 'Persistent BoringFS root reboot verification passed.'

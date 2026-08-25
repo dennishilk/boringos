@@ -24,6 +24,7 @@ cd test
 touch hello.txt
 write hello.txt Hallo-von-BoringOS
 cat hello.txt
+boringfetch
 ```
 
 Stop QEMU, start the same script again, and `cat /test/hello.txt` to verify
