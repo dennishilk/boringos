@@ -90,6 +90,12 @@ jobs:
       - name: Read-only BoringFS over VirtIO
         run: sh ./tests/boringfs-ro-qemu.sh
 
+      - name: Writable BoringFS reboot persistence
+        run: sh ./tests/boringfs-rw-qemu.sh
+
+      - name: Writable BoringFS allocation and rollback matrix
+        run: make boringfs-vfs-host-test
+
       - name: BoringFS v0 codec and structural validator
         run: make boringfs-host-test
 

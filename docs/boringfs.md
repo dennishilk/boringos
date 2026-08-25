@@ -1,6 +1,6 @@
 # BoringFS v0 design
 
-BoringFS is the planned native filesystem for BoringOS. This document defines the first deliberately small on-disk format and the architectural boundaries around it. It is a **design specification**, not a claim that BoringFS is implemented today.
+BoringFS is the native filesystem under active development for BoringOS. This document defines the first deliberately small on-disk format and the architectural boundaries around it.
 
 > boring is not a bug.
 
@@ -8,9 +8,11 @@ The v0 goal is an understandable, auditable filesystem that can support ordinary
 
 ## Status
 
-Current BoringKernel is still a boot-only kernel. It has no allocator, VFS, block-device layer, storage driver, userspace, shell, or filesystem. Persistent BoringFS therefore comes later; the immediate implementation work remains kernel foundations.
+Milestone 23 completed validated read-only mounting over the modern VirtIO block path at `/disk`. Milestone 24 adds a deliberately small synchronous writable profile: empty file/directory creation, one-block regular-file replacement, removal, first-fit bitmap/object allocation, reusable directory holes and persistent read-back through the same block-device/VFS path. BoringFS is not yet the normal root filesystem.
 
 BoringFS v0 intentionally excludes journaling, copy-on-write, snapshots, compression, encryption, ACLs, extended attributes, deduplication, quotas, sophisticated sparse files, online resizing, and automatic repair.
+
+The Milestone 24 writer is **not crash-consistent**. It performs synchronous metadata updates and best-effort rollback for ordinary reported I/O failures, but power loss between dependent writes can leave a volume requiring offline inspection. There is no journal, transaction log or repair mode, and the implementation does not claim otherwise. Regular-file replacement is intentionally bounded to one 4096-byte VFS I/O operation; general append/growth and rename remain unsupported.
 
 ## Design summary
 

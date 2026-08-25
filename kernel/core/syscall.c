@@ -766,6 +766,242 @@ static uint64_t syscall_fs_readdir(uint64_t user_path,
     return 1ULL;
 }
 
+static enum vfs_result syscall_fs_resolve_parent(
+    struct process *process,
+    char *path,
+    size_t path_length,
+    struct vfs_path *parent_out,
+    char name_out[VFS_NAME_MAX + 1U]) {
+    size_t slash = SIZE_MAX;
+    size_t name_start;
+    size_t name_length;
+    size_t index;
+
+    if ((process == NULL) || !process_is_alive(process) || (path == NULL) ||
+        (path_length == 0U) || (parent_out == NULL) || (name_out == NULL) ||
+        (parent_out->mount != NULL) || (parent_out->node != NULL)) {
+        return VFS_RESULT_INVALID_ARGUMENT;
+    }
+    for (index = 0U; index < path_length; ++index) {
+        if (path[index] == '/') {
+            slash = index;
+        }
+    }
+    name_start = (slash == SIZE_MAX) ? 0U : slash + 1U;
+    name_length = path_length - name_start;
+    if (name_length == 0U) {
+        return VFS_RESULT_INVALID_ARGUMENT;
+    }
+    if (name_length > (size_t)VFS_NAME_MAX) {
+        return VFS_RESULT_NAME_TOO_LONG;
+    }
+    for (index = 0U; index < name_length; ++index) {
+        name_out[index] = path[name_start + index];
+    }
+    name_out[name_length] = '\0';
+
+    if (slash == SIZE_MAX) {
+        return process_get_cwd(process, parent_out) ?
+            VFS_RESULT_OK : VFS_RESULT_NO_CWD;
+    }
+    if (slash == 0U) {
+        path[1] = '\0';
+    } else {
+        path[slash] = '\0';
+    }
+    return vfs_resolve_process(process, path, parent_out);
+}
+
+static uint64_t syscall_fs_read(uint64_t user_path,
+                                uint64_t path_length,
+                                uint64_t offset,
+                                uint64_t user_buffer,
+                                uint64_t capacity) {
+    char path[VFS_PATH_MAX + 1U];
+    uint8_t buffer[BORING_SYSCALL_FS_IO_MAX];
+    struct process *const process = process_current();
+    struct vfs_path resolved = { NULL, NULL };
+    struct vfs_handle handle = { { NULL, NULL }, 0ULL, 0U, false };
+    size_t safe_capacity;
+    size_t transferred = 0U;
+    enum vfs_result result;
+    int copy_error;
+
+    if ((capacity == 0ULL) ||
+        (capacity > (uint64_t)BORING_SYSCALL_FS_IO_MAX) ||
+        (capacity > (uint64_t)SIZE_MAX)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    safe_capacity = (size_t)capacity;
+    if (!syscall_user_range_accessible((uintptr_t)user_buffer,
+                                       safe_capacity, true)) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+    copy_error = syscall_copy_explicit_string(
+        user_path, path_length, (size_t)VFS_PATH_MAX, path);
+    if (copy_error != 0) {
+        return syscall_error(copy_error);
+    }
+    if ((process == NULL) || !process_is_alive(process)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    result = vfs_resolve_process(process, path, &resolved);
+    if (result != VFS_RESULT_OK) {
+        return syscall_error(syscall_vfs_error(result));
+    }
+    result = vfs_handle_open(&resolved, VFS_ACCESS_READ, &handle);
+    if (result != VFS_RESULT_OK) {
+        (void)vfs_path_release(&resolved);
+        return syscall_error(syscall_vfs_error(result));
+    }
+    if (vfs_path_release(&resolved) != VFS_RESULT_OK) {
+        (void)vfs_handle_close(&handle);
+        return syscall_error(BORING_SYSCALL_EIO);
+    }
+    handle.offset = offset;
+    result = vfs_handle_read(&handle, buffer, safe_capacity, &transferred);
+    if (vfs_handle_close(&handle) != VFS_RESULT_OK) {
+        return syscall_error(BORING_SYSCALL_EIO);
+    }
+    if (result != VFS_RESULT_OK) {
+        return syscall_error(syscall_vfs_error(result));
+    }
+    if ((transferred != 0U) &&
+        !syscall_copy_to_user((uintptr_t)user_buffer, buffer, transferred)) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+    return (uint64_t)transferred;
+}
+
+static uint64_t syscall_fs_touch(uint64_t user_path, uint64_t path_length) {
+    char path[VFS_PATH_MAX + 1U];
+    char name[VFS_NAME_MAX + 1U];
+    struct process *const process = process_current();
+    struct vfs_path parent = { NULL, NULL };
+    struct vfs_path created = { NULL, NULL };
+    enum vfs_result result;
+    int copy_error;
+
+    copy_error = syscall_copy_explicit_string(
+        user_path, path_length, (size_t)VFS_PATH_MAX, path);
+    if (copy_error != 0) {
+        return syscall_error(copy_error);
+    }
+    result = syscall_fs_resolve_parent(process, path, (size_t)path_length,
+                                       &parent, name);
+    if (result != VFS_RESULT_OK) {
+        return syscall_error(syscall_vfs_error(result));
+    }
+    result = vfs_create_at(&parent, name, &created);
+    if (result == VFS_RESULT_OK) {
+        if (vfs_path_release(&created) != VFS_RESULT_OK) {
+            (void)vfs_path_release(&parent);
+            return syscall_error(BORING_SYSCALL_EIO);
+        }
+    }
+    if (vfs_path_release(&parent) != VFS_RESULT_OK) {
+        return syscall_error(BORING_SYSCALL_EIO);
+    }
+    return (result == VFS_RESULT_OK) ?
+        0ULL : syscall_error(syscall_vfs_error(result));
+}
+
+static uint64_t syscall_fs_write(uint64_t user_path,
+                                 uint64_t path_length,
+                                 uint64_t user_buffer,
+                                 uint64_t length) {
+    char path[VFS_PATH_MAX + 1U];
+    uint8_t buffer[BORING_SYSCALL_FS_IO_MAX];
+    struct process *const process = process_current();
+    struct vfs_path resolved = { NULL, NULL };
+    struct vfs_handle handle = { { NULL, NULL }, 0ULL, 0U, false };
+    size_t safe_length;
+    size_t transferred = 0U;
+    enum vfs_result result;
+    int copy_error;
+
+    if ((length > (uint64_t)BORING_SYSCALL_FS_IO_MAX) ||
+        (length > (uint64_t)SIZE_MAX)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    safe_length = (size_t)length;
+    if ((safe_length != 0U) &&
+        !syscall_copy_from_user(buffer, (uintptr_t)user_buffer,
+                                safe_length)) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+    copy_error = syscall_copy_explicit_string(
+        user_path, path_length, (size_t)VFS_PATH_MAX, path);
+    if (copy_error != 0) {
+        return syscall_error(copy_error);
+    }
+    if ((process == NULL) || !process_is_alive(process)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    result = vfs_resolve_process(process, path, &resolved);
+    if (result != VFS_RESULT_OK) {
+        return syscall_error(syscall_vfs_error(result));
+    }
+    result = vfs_truncate_path(&resolved, 0ULL);
+    if (result != VFS_RESULT_OK) {
+        (void)vfs_path_release(&resolved);
+        return syscall_error(syscall_vfs_error(result));
+    }
+    if (safe_length == 0U) {
+        if (vfs_path_release(&resolved) != VFS_RESULT_OK) {
+            return syscall_error(BORING_SYSCALL_EIO);
+        }
+        return 0ULL;
+    }
+    result = vfs_handle_open(&resolved, VFS_ACCESS_WRITE, &handle);
+    if (result != VFS_RESULT_OK) {
+        (void)vfs_path_release(&resolved);
+        return syscall_error(syscall_vfs_error(result));
+    }
+    if (vfs_path_release(&resolved) != VFS_RESULT_OK) {
+        (void)vfs_handle_close(&handle);
+        return syscall_error(BORING_SYSCALL_EIO);
+    }
+    result = vfs_handle_write(&handle, buffer, safe_length, &transferred);
+    if (vfs_handle_close(&handle) != VFS_RESULT_OK) {
+        return syscall_error(BORING_SYSCALL_EIO);
+    }
+    if (result != VFS_RESULT_OK) {
+        return syscall_error(syscall_vfs_error(result));
+    }
+    if (transferred != safe_length) {
+        return syscall_error(BORING_SYSCALL_EIO);
+    }
+    return (uint64_t)transferred;
+}
+
+static uint64_t syscall_fs_unlink(uint64_t user_path,
+                                  uint64_t path_length) {
+    char path[VFS_PATH_MAX + 1U];
+    char name[VFS_NAME_MAX + 1U];
+    struct process *const process = process_current();
+    struct vfs_path parent = { NULL, NULL };
+    enum vfs_result result;
+    int copy_error;
+
+    copy_error = syscall_copy_explicit_string(
+        user_path, path_length, (size_t)VFS_PATH_MAX, path);
+    if (copy_error != 0) {
+        return syscall_error(copy_error);
+    }
+    result = syscall_fs_resolve_parent(process, path, (size_t)path_length,
+                                       &parent, name);
+    if (result != VFS_RESULT_OK) {
+        return syscall_error(syscall_vfs_error(result));
+    }
+    result = vfs_unlink_at(&parent, name);
+    if (vfs_path_release(&parent) != VFS_RESULT_OK) {
+        return syscall_error(BORING_SYSCALL_EIO);
+    }
+    return (result == VFS_RESULT_OK) ?
+        0ULL : syscall_error(syscall_vfs_error(result));
+}
+
 bool syscall_console_safety_self_test(uintptr_t read_only_user_address,
                                       uintptr_t unmapped_user_address) {
     const uint64_t kernel_pointer = 0xffff800000000000ULL;
@@ -956,6 +1192,20 @@ void x86_64_syscall_dispatch(struct x86_64_syscall_frame *frame) {
             break;
         case BORING_SYS_FS_CHDIR:
             result = syscall_fs_chdir(frame->rdi, frame->rsi);
+            break;
+        case BORING_SYS_FS_READ:
+            result = syscall_fs_read(frame->rdi, frame->rsi, frame->rdx,
+                                     frame->r10, frame->r8);
+            break;
+        case BORING_SYS_FS_TOUCH:
+            result = syscall_fs_touch(frame->rdi, frame->rsi);
+            break;
+        case BORING_SYS_FS_WRITE:
+            result = syscall_fs_write(frame->rdi, frame->rsi, frame->rdx,
+                                      frame->r10);
+            break;
+        case BORING_SYS_FS_UNLINK:
+            result = syscall_fs_unlink(frame->rdi, frame->rsi);
             break;
         default:
             result = syscall_error(BORING_SYSCALL_ENOSYS);

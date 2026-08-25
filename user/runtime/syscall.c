@@ -133,3 +133,74 @@ long boring_fs_chdir(const char *path, size_t length) {
 
     return result;
 }
+
+long boring_fs_read(const char *path,
+                    size_t path_length,
+                    uint64_t offset,
+                    void *buffer,
+                    size_t capacity) {
+    long result;
+    register void *buffer_argument __asm__("r10") = buffer;
+    register size_t capacity_argument __asm__("r8") = capacity;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_FS_READ),
+          "D"(path),
+          "S"(path_length),
+          "d"(offset),
+          "r"(buffer_argument),
+          "r"(capacity_argument)
+        : "rcx", "r11", "cc", "memory");
+
+    return result;
+}
+
+long boring_fs_touch(const char *path, size_t length) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_FS_TOUCH),
+          "D"(path),
+          "S"(length)
+        : "rcx", "r11", "cc", "memory");
+
+    return result;
+}
+
+long boring_fs_write(const char *path,
+                     size_t path_length,
+                     const void *buffer,
+                     size_t length) {
+    long result;
+    register size_t length_argument __asm__("r10") = length;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_FS_WRITE),
+          "D"(path),
+          "S"(path_length),
+          "d"(buffer),
+          "r"(length_argument)
+        : "rcx", "r11", "cc", "memory");
+
+    return result;
+}
+
+long boring_fs_unlink(const char *path, size_t length) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_FS_UNLINK),
+          "D"(path),
+          "S"(length)
+        : "rcx", "r11", "cc", "memory");
+
+    return result;
+}

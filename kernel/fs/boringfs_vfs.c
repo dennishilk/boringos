@@ -21,6 +21,7 @@ struct boringfs_cached_node {
 struct boringfs_vfs {
     struct vfs_filesystem filesystem;
     const struct block_device *device;
+    bool read_only;
     struct boringfs_superblock superblock;
     struct boringfs_source source;
     struct boringfs_cached_node *nodes;
@@ -242,6 +243,92 @@ static bool boringfs_source_read(void *context,
     return true;
 }
 
+static bool store_cached_block(struct boringfs_vfs *boringfs,
+                               uint32_t fs_block) {
+    uint64_t first_sector;
+    uint64_t sector_count;
+
+    if ((boringfs == NULL) || boringfs->read_only ||
+        (fs_block >= boringfs->superblock.total_blocks) ||
+        !map_fs_blocks_to_sectors(fs_block, 1U,
+                                  &first_sector, &sector_count) ||
+        (sector_count > (uint64_t)UINT32_MAX) ||
+        (block_device_write(boringfs->device, first_sector,
+                            (uint32_t)sector_count,
+                            boringfs->block_cache) != BLOCK_DEVICE_RESULT_OK)) {
+        if (boringfs != NULL) {
+            boringfs->cache_valid = false;
+        }
+        return false;
+    }
+    boringfs->cached_block = fs_block;
+    boringfs->cache_valid = true;
+    return true;
+}
+
+static bool boringfs_source_write(struct boringfs_vfs *boringfs,
+                                  uint64_t offset,
+                                  const void *buffer,
+                                  size_t length) {
+    const uint8_t *source = (const uint8_t *)buffer;
+    size_t remaining = length;
+    uint64_t current = offset;
+
+    if ((boringfs == NULL) || boringfs->read_only ||
+        ((source == NULL) && (length != 0U)) ||
+        (offset > boringfs->source.size) ||
+        ((uint64_t)length > boringfs->source.size - offset)) {
+        return false;
+    }
+
+    while (remaining != 0U) {
+        const uint64_t fs_block64 = current / (uint64_t)BORINGFS_BLOCK_SIZE;
+        const size_t in_block =
+            (size_t)(current % (uint64_t)BORINGFS_BLOCK_SIZE);
+        size_t chunk = (size_t)BORINGFS_BLOCK_SIZE - in_block;
+
+        if ((fs_block64 > (uint64_t)UINT32_MAX) ||
+            (fs_block64 >= (uint64_t)boringfs->superblock.total_blocks)) {
+            return false;
+        }
+        if (chunk > remaining) {
+            chunk = remaining;
+        }
+        if (!boringfs->cache_valid ||
+            (boringfs->cached_block != (uint32_t)fs_block64)) {
+            if (!load_cached_block(boringfs, (uint32_t)fs_block64)) {
+                return false;
+            }
+        }
+        copy_bytes(&boringfs->block_cache[in_block], source, chunk);
+        if (!store_cached_block(boringfs, (uint32_t)fs_block64)) {
+            return false;
+        }
+        source += chunk;
+        remaining -= chunk;
+        current += (uint64_t)chunk;
+    }
+    return true;
+}
+
+static bool write_zeroed_block(struct boringfs_vfs *boringfs,
+                               uint32_t fs_block,
+                               const void *prefix,
+                               size_t prefix_length) {
+    if ((boringfs == NULL) || (fs_block < boringfs->superblock.data_start) ||
+        (fs_block >= boringfs->superblock.total_blocks) ||
+        ((prefix == NULL) && (prefix_length != 0U)) ||
+        (prefix_length > (size_t)BORINGFS_BLOCK_SIZE)) {
+        return false;
+    }
+    zero_bytes(boringfs->block_cache, (size_t)BORINGFS_BLOCK_SIZE);
+    if (prefix_length != 0U) {
+        copy_bytes(boringfs->block_cache, (const uint8_t *)prefix,
+                   prefix_length);
+    }
+    return store_cached_block(boringfs, fs_block);
+}
+
 static struct boringfs_vfs *context_from_filesystem(
     const struct vfs_filesystem *filesystem) {
     struct boringfs_vfs *boringfs;
@@ -281,6 +368,176 @@ static bool decode_object(struct boringfs_vfs *boringfs,
                                 (size_t)BORINGFS_OBJECT_RECORD_SIZE,
                                 object_out)) {
         return false;
+    }
+    return true;
+}
+
+static bool object_record_offset(struct boringfs_vfs *boringfs,
+                                 uint32_t object_id,
+                                 uint64_t *offset_out) {
+    uint64_t table_base;
+    uint64_t slot_offset;
+
+    return (boringfs != NULL) && (offset_out != NULL) &&
+           (object_id != BORINGFS_NULL_OBJECT_ID) &&
+           (object_id <= boringfs->superblock.object_count) &&
+           checked_mul_u64(
+               (uint64_t)boringfs->superblock.object_table_start,
+               (uint64_t)BORINGFS_BLOCK_SIZE, &table_base) &&
+           checked_mul_u64((uint64_t)(object_id - 1U),
+                           (uint64_t)BORINGFS_OBJECT_RECORD_SIZE,
+                           &slot_offset) &&
+           checked_add_u64(table_base, slot_offset, offset_out);
+}
+
+static bool write_object_raw(
+    struct boringfs_vfs *boringfs,
+    uint32_t object_id,
+    const uint8_t raw[BORINGFS_OBJECT_RECORD_SIZE]) {
+    uint64_t offset;
+
+    return (raw != NULL) &&
+           object_record_offset(boringfs, object_id, &offset) &&
+           boringfs_source_write(boringfs, offset, raw,
+                                 (size_t)BORINGFS_OBJECT_RECORD_SIZE);
+}
+
+static bool write_object(struct boringfs_vfs *boringfs,
+                         const struct boringfs_object *object) {
+    uint8_t raw[BORINGFS_OBJECT_RECORD_SIZE];
+
+    return (object != NULL) &&
+           boringfs_encode_object(raw, sizeof(raw), object) &&
+           write_object_raw(boringfs, object->object_id, raw);
+}
+
+static bool clear_object(struct boringfs_vfs *boringfs,
+                         uint32_t object_id) {
+    uint8_t raw[BORINGFS_OBJECT_RECORD_SIZE];
+
+    zero_bytes(raw, sizeof(raw));
+    return write_object_raw(boringfs, object_id, raw);
+}
+
+static bool bitmap_location(struct boringfs_vfs *boringfs,
+                            uint32_t block,
+                            uint64_t *offset_out,
+                            uint8_t *mask_out) {
+    uint64_t bitmap_base;
+    uint64_t byte_offset = (uint64_t)block / 8ULL;
+
+    if ((boringfs == NULL) || (offset_out == NULL) || (mask_out == NULL) ||
+        (block >= boringfs->superblock.total_blocks) ||
+        !checked_mul_u64((uint64_t)boringfs->superblock.bitmap_start,
+                         (uint64_t)BORINGFS_BLOCK_SIZE, &bitmap_base) ||
+        !checked_add_u64(bitmap_base, byte_offset, offset_out)) {
+        return false;
+    }
+    *mask_out = (uint8_t)(1U << (block % 8U));
+    return true;
+}
+
+static bool bitmap_get(struct boringfs_vfs *boringfs,
+                       uint32_t block,
+                       bool *allocated_out) {
+    uint64_t offset;
+    uint8_t mask;
+    uint8_t byte;
+
+    if ((allocated_out == NULL) ||
+        !bitmap_location(boringfs, block, &offset, &mask) ||
+        !boringfs_source_read(boringfs, offset, &byte, 1U)) {
+        return false;
+    }
+    *allocated_out = (byte & mask) != 0U;
+    return true;
+}
+
+static bool bitmap_set(struct boringfs_vfs *boringfs,
+                       uint32_t block,
+                       bool allocated) {
+    uint64_t offset;
+    uint8_t mask;
+    uint8_t byte;
+
+    if (!bitmap_location(boringfs, block, &offset, &mask) ||
+        (block < boringfs->superblock.data_start) ||
+        !boringfs_source_read(boringfs, offset, &byte, 1U)) {
+        return false;
+    }
+    if (allocated) {
+        byte = (uint8_t)(byte | mask);
+    } else {
+        byte = (uint8_t)(byte & (uint8_t)~mask);
+    }
+    return boringfs_source_write(boringfs, offset, &byte, 1U);
+}
+
+static bool find_free_block(struct boringfs_vfs *boringfs,
+                            uint32_t preferred,
+                            uint32_t *block_out) {
+    uint32_t block;
+    bool allocated;
+
+    if ((boringfs == NULL) || (block_out == NULL)) {
+        return false;
+    }
+    if ((preferred >= boringfs->superblock.data_start) &&
+        (preferred < boringfs->superblock.total_blocks) &&
+        bitmap_get(boringfs, preferred, &allocated) && !allocated) {
+        *block_out = preferred;
+        return true;
+    }
+    for (block = boringfs->superblock.data_start;
+         block < boringfs->superblock.total_blocks; ++block) {
+        if (!bitmap_get(boringfs, block, &allocated)) {
+            return false;
+        }
+        if (!allocated) {
+            *block_out = block;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool find_free_object(struct boringfs_vfs *boringfs,
+                             uint32_t *object_id_out) {
+    uint32_t object_id = BORINGFS_NULL_OBJECT_ID;
+
+    if ((boringfs == NULL) || (object_id_out == NULL)) {
+        return false;
+    }
+    for (object_id = BORINGFS_ROOT_OBJECT_ID + 1U;
+         object_id <= boringfs->superblock.object_count; ++object_id) {
+        struct boringfs_object object;
+        uint8_t raw[BORINGFS_OBJECT_RECORD_SIZE];
+
+        if (!decode_object(boringfs, object_id, &object, raw)) {
+            return false;
+        }
+        if (bytes_all_zero(raw, sizeof(raw))) {
+            *object_id_out = object_id;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool valid_new_name(const char *name, size_t name_length) {
+    size_t index;
+
+    if ((name == NULL) || (name_length == 0U) ||
+        (name_length > (size_t)BORINGFS_MAX_FILENAME) ||
+        !boringfs_utf8_valid((const uint8_t *)name, name_length) ||
+        ((name_length == 1U) && (name[0] == '.')) ||
+        ((name_length == 2U) && (name[0] == '.') && (name[1] == '.'))) {
+        return false;
+    }
+    for (index = 0U; index < name_length; ++index) {
+        if ((name[index] == '\0') || (name[index] == '/')) {
+            return false;
+        }
     }
     return true;
 }
@@ -431,6 +688,134 @@ static bool object_read_exact(struct boringfs_vfs *boringfs,
     return remaining == 0U;
 }
 
+static bool object_capacity(const struct boringfs_object *object,
+                            uint64_t *capacity_out) {
+    uint64_t capacity = 0ULL;
+    size_t extent_index;
+
+    if ((object == NULL) || (capacity_out == NULL) ||
+        (object->extent_count > BORINGFS_MAX_EXTENTS)) {
+        return false;
+    }
+    for (extent_index = 0U;
+         extent_index < (size_t)object->extent_count; ++extent_index) {
+        uint64_t extent_bytes;
+
+        if ((object->extents[extent_index].block_count == 0U) ||
+            !checked_mul_u64(
+                (uint64_t)object->extents[extent_index].block_count,
+                (uint64_t)BORINGFS_BLOCK_SIZE, &extent_bytes) ||
+            !checked_add_u64(capacity, extent_bytes, &capacity)) {
+            return false;
+        }
+    }
+    *capacity_out = capacity;
+    return true;
+}
+
+static bool object_write_exact(struct boringfs_vfs *boringfs,
+                               const struct boringfs_object *object,
+                               uint64_t logical_offset,
+                               const void *buffer,
+                               size_t length) {
+    uint64_t offset = logical_offset;
+    const uint8_t *source = (const uint8_t *)buffer;
+    size_t remaining = length;
+    size_t extent_index;
+
+    if ((boringfs == NULL) || (object == NULL) ||
+        ((source == NULL) && (length != 0U)) ||
+        (object->extent_count > BORINGFS_MAX_EXTENTS)) {
+        return false;
+    }
+    for (extent_index = 0U;
+         (extent_index < (size_t)object->extent_count) && (remaining != 0U);
+         ++extent_index) {
+        const struct boringfs_extent *const extent =
+            &object->extents[extent_index];
+        uint64_t extent_bytes;
+
+        if ((extent->block_count == 0U) ||
+            !checked_mul_u64((uint64_t)extent->block_count,
+                             (uint64_t)BORINGFS_BLOCK_SIZE,
+                             &extent_bytes)) {
+            return false;
+        }
+        if (offset >= extent_bytes) {
+            offset -= extent_bytes;
+            continue;
+        }
+        while ((offset < extent_bytes) && (remaining != 0U)) {
+            uint64_t physical_base;
+            uint64_t physical;
+            const uint64_t available64 = extent_bytes - offset;
+            size_t chunk = remaining;
+
+            if (available64 < (uint64_t)chunk) {
+                chunk = (size_t)available64;
+            }
+            if (!checked_mul_u64((uint64_t)extent->start_block,
+                                 (uint64_t)BORINGFS_BLOCK_SIZE,
+                                 &physical_base) ||
+                !checked_add_u64(physical_base, offset, &physical) ||
+                !boringfs_source_write(boringfs, physical, source, chunk)) {
+                return false;
+            }
+            source += chunk;
+            remaining -= chunk;
+            offset += (uint64_t)chunk;
+        }
+        offset = 0ULL;
+    }
+    return remaining == 0U;
+}
+
+static bool release_object_blocks(struct boringfs_vfs *boringfs,
+                                  const struct boringfs_object *object) {
+    size_t extent_index;
+
+    if ((boringfs == NULL) || (object == NULL) ||
+        (object->extent_count > BORINGFS_MAX_EXTENTS)) {
+        return false;
+    }
+    for (extent_index = 0U;
+         extent_index < (size_t)object->extent_count; ++extent_index) {
+        uint32_t offset;
+
+        for (offset = 0U;
+             offset < object->extents[extent_index].block_count; ++offset) {
+            const uint32_t block =
+                object->extents[extent_index].start_block + offset;
+
+            if (!bitmap_set(boringfs, block, false)) {
+                size_t rollback_extent;
+
+                for (rollback_extent = 0U;
+                     rollback_extent <= extent_index; ++rollback_extent) {
+                    uint32_t rollback_limit =
+                        object->extents[rollback_extent].block_count;
+                    uint32_t rollback_offset;
+
+                    if (rollback_extent == extent_index) {
+                        rollback_limit = offset;
+                    }
+                    for (rollback_offset = 0U;
+                         rollback_offset < rollback_limit;
+                         ++rollback_offset) {
+                        (void)bitmap_set(
+                            boringfs,
+                            object->extents[rollback_extent].start_block +
+                                rollback_offset,
+                            true);
+                    }
+                }
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 static enum vfs_result validate_directory_record(
     struct boringfs_vfs *boringfs,
     uint32_t directory_id,
@@ -526,6 +911,169 @@ static enum vfs_result read_directory_slot(
     *occupied_out = true;
     return validate_directory_record(boringfs, directory_id, raw,
                                      record_out, target_out);
+}
+
+static enum vfs_result find_directory_name(
+    struct boringfs_vfs *boringfs,
+    uint32_t directory_id,
+    const char *name,
+    size_t name_length,
+    uint64_t *slot_out,
+    uint8_t raw_out[BORINGFS_DIRECTORY_RECORD_SIZE],
+    struct boringfs_directory_record *record_out,
+    struct boringfs_object *target_out) {
+    struct boringfs_object directory;
+    uint8_t directory_raw[BORINGFS_OBJECT_RECORD_SIZE];
+    uint64_t record_count;
+    uint64_t slot;
+
+    if ((boringfs == NULL) || (name == NULL) || (slot_out == NULL) ||
+        (raw_out == NULL) || (record_out == NULL) || (target_out == NULL) ||
+        !decode_object(boringfs, directory_id, &directory, directory_raw) ||
+        (directory.state != BORINGFS_OBJECT_ALLOCATED) ||
+        (directory.type != BORINGFS_TYPE_DIRECTORY) ||
+        ((directory.size_bytes %
+          (uint64_t)BORINGFS_DIRECTORY_RECORD_SIZE) != 0ULL)) {
+        return VFS_RESULT_CORRUPT;
+    }
+    record_count = directory.size_bytes /
+                   (uint64_t)BORINGFS_DIRECTORY_RECORD_SIZE;
+    for (slot = 0ULL; slot < record_count; ++slot) {
+        bool occupied = false;
+        enum vfs_result result = read_directory_slot(
+            boringfs, directory_id, slot, raw_out, record_out,
+            target_out, &occupied);
+
+        if (result != VFS_RESULT_OK) {
+            return result;
+        }
+        if (occupied && names_equal(record_out->name,
+                                    (size_t)record_out->name_length,
+                                    name, name_length)) {
+            *slot_out = slot;
+            return VFS_RESULT_OK;
+        }
+    }
+    return VFS_RESULT_NOT_FOUND;
+}
+
+static enum vfs_result find_directory_hole(
+    struct boringfs_vfs *boringfs,
+    uint32_t directory_id,
+    const struct boringfs_object *directory,
+    uint64_t *slot_out,
+    bool *append_out) {
+    uint64_t record_count;
+    uint64_t slot;
+
+    if ((boringfs == NULL) || (directory == NULL) || (slot_out == NULL) ||
+        (append_out == NULL) ||
+        ((directory->size_bytes %
+          (uint64_t)BORINGFS_DIRECTORY_RECORD_SIZE) != 0ULL)) {
+        return VFS_RESULT_CORRUPT;
+    }
+    record_count = directory->size_bytes /
+                   (uint64_t)BORINGFS_DIRECTORY_RECORD_SIZE;
+    for (slot = 0ULL; slot < record_count; ++slot) {
+        uint8_t raw[BORINGFS_DIRECTORY_RECORD_SIZE];
+        struct boringfs_directory_record record;
+        struct boringfs_object target;
+        bool occupied = false;
+        enum vfs_result result = read_directory_slot(
+            boringfs, directory_id, slot, raw, &record, &target, &occupied);
+
+        if (result != VFS_RESULT_OK) {
+            return result;
+        }
+        if (!occupied) {
+            *slot_out = slot;
+            *append_out = false;
+            return VFS_RESULT_OK;
+        }
+    }
+    *slot_out = record_count;
+    *append_out = true;
+    return VFS_RESULT_OK;
+}
+
+static enum vfs_result directory_is_empty(struct boringfs_vfs *boringfs,
+                                          uint32_t directory_id,
+                                          const struct boringfs_object *object,
+                                          bool *empty_out) {
+    uint64_t record_count;
+    uint64_t slot;
+
+    if ((boringfs == NULL) || (object == NULL) || (empty_out == NULL) ||
+        (object->type != BORINGFS_TYPE_DIRECTORY) ||
+        ((object->size_bytes %
+          (uint64_t)BORINGFS_DIRECTORY_RECORD_SIZE) != 0ULL)) {
+        return VFS_RESULT_CORRUPT;
+    }
+    record_count = object->size_bytes /
+                   (uint64_t)BORINGFS_DIRECTORY_RECORD_SIZE;
+    for (slot = 0ULL; slot < record_count; ++slot) {
+        uint8_t raw[BORINGFS_DIRECTORY_RECORD_SIZE];
+        struct boringfs_directory_record record;
+        struct boringfs_object target;
+        bool occupied = false;
+        enum vfs_result result = read_directory_slot(
+            boringfs, directory_id, slot, raw, &record, &target, &occupied);
+
+        if (result != VFS_RESULT_OK) {
+            return result;
+        }
+        if (occupied) {
+            *empty_out = false;
+            return VFS_RESULT_OK;
+        }
+    }
+    *empty_out = true;
+    return VFS_RESULT_OK;
+}
+
+static enum vfs_result extend_directory(
+    struct boringfs_vfs *boringfs,
+    struct boringfs_object *directory,
+    uint32_t *allocated_block_out) {
+    uint32_t preferred = BORINGFS_LOCATION_NONE_U32;
+    uint32_t block = BORINGFS_LOCATION_NONE_U32;
+
+    if ((boringfs == NULL) || (directory == NULL) ||
+        (allocated_block_out == NULL) ||
+        (directory->extent_count > BORINGFS_MAX_EXTENTS)) {
+        return VFS_RESULT_CORRUPT;
+    }
+    if (directory->extent_count != 0U) {
+        const struct boringfs_extent *const last =
+            &directory->extents[(size_t)directory->extent_count - 1U];
+
+        if ((last->block_count <= UINT32_MAX - last->start_block) &&
+            (last->start_block + last->block_count <
+             boringfs->superblock.total_blocks)) {
+            preferred = last->start_block + last->block_count;
+        }
+    }
+    if (!find_free_block(boringfs, preferred, &block)) {
+        return VFS_RESULT_NO_SPACE;
+    }
+    if ((directory->extent_count != 0U) && (block == preferred)) {
+        struct boringfs_extent *const last =
+            &directory->extents[(size_t)directory->extent_count - 1U];
+
+        if (last->block_count == UINT32_MAX) {
+            return VFS_RESULT_NO_SPACE;
+        }
+        ++last->block_count;
+    } else {
+        if (directory->extent_count == BORINGFS_MAX_EXTENTS) {
+            return VFS_RESULT_NO_SPACE;
+        }
+        directory->extents[directory->extent_count].start_block = block;
+        directory->extents[directory->extent_count].block_count = 1U;
+        ++directory->extent_count;
+    }
+    *allocated_block_out = block;
+    return VFS_RESULT_OK;
 }
 
 static enum vfs_result boringfs_lookup(struct vfs_filesystem *filesystem,
@@ -691,10 +1239,169 @@ static enum vfs_result boringfs_readdir(struct vfs_filesystem *filesystem,
     return VFS_RESULT_NOT_FOUND;
 }
 
-static enum vfs_result readonly_mutation_result(
-    struct vfs_filesystem *filesystem) {
-    return (context_from_filesystem(filesystem) != NULL) ?
-        VFS_RESULT_ACCESS_DENIED : VFS_RESULT_INVALID_ARGUMENT;
+static enum vfs_result mutation_context(
+    struct vfs_filesystem *filesystem,
+    struct boringfs_vfs **boringfs_out) {
+    struct boringfs_vfs *const boringfs =
+        context_from_filesystem(filesystem);
+
+    if ((boringfs == NULL) || (boringfs_out == NULL)) {
+        return VFS_RESULT_INVALID_ARGUMENT;
+    }
+    *boringfs_out = boringfs;
+    return boringfs->read_only ? VFS_RESULT_ACCESS_DENIED : VFS_RESULT_OK;
+}
+
+static enum vfs_result boringfs_create_common(
+    struct vfs_filesystem *filesystem,
+    struct vfs_node *directory,
+    const char *name,
+    size_t name_length,
+    uint8_t type,
+    struct vfs_node **node_out) {
+    struct boringfs_vfs *boringfs = NULL;
+    uint32_t directory_id;
+    uint32_t object_id = BORINGFS_NULL_OBJECT_ID;
+    struct boringfs_object directory_object;
+    struct boringfs_object staged_directory;
+    struct boringfs_object child;
+    uint8_t directory_raw[BORINGFS_OBJECT_RECORD_SIZE];
+    uint8_t found_raw[BORINGFS_DIRECTORY_RECORD_SIZE];
+    struct boringfs_directory_record found_record;
+    struct boringfs_object found_target;
+    struct boringfs_directory_record new_record;
+    uint8_t new_record_raw[BORINGFS_DIRECTORY_RECORD_SIZE];
+    uint8_t zero_record[BORINGFS_DIRECTORY_RECORD_SIZE];
+    uint64_t found_slot = 0ULL;
+    uint64_t slot;
+    uint64_t logical_offset;
+    uint64_t capacity;
+    uint64_t new_size;
+    uint32_t allocated_block = BORINGFS_LOCATION_NONE_U32;
+    bool append = false;
+    bool bitmap_reserved = false;
+    enum vfs_result result;
+    size_t index;
+
+    if (node_out != NULL) {
+        *node_out = NULL;
+    }
+    result = mutation_context(filesystem, &boringfs);
+    if (result != VFS_RESULT_OK) {
+        return result;
+    }
+    if ((directory == NULL) || (name == NULL) || (node_out == NULL) ||
+        !node_object_id(boringfs, directory, &directory_id)) {
+        return VFS_RESULT_INVALID_ARGUMENT;
+    }
+    if (directory->type != VFS_NODE_DIRECTORY) {
+        return VFS_RESULT_NOT_DIRECTORY;
+    }
+    if (name_length > (size_t)BORINGFS_MAX_FILENAME) {
+        return VFS_RESULT_NAME_TOO_LONG;
+    }
+    if (!valid_new_name(name, name_length)) {
+        return VFS_RESULT_INVALID_ARGUMENT;
+    }
+    result = find_directory_name(
+        boringfs, directory_id, name, name_length, &found_slot,
+        found_raw, &found_record, &found_target);
+    if (result == VFS_RESULT_OK) {
+        return VFS_RESULT_ALREADY_EXISTS;
+    }
+    if (result != VFS_RESULT_NOT_FOUND) {
+        return result;
+    }
+    if (!find_free_object(boringfs, &object_id)) {
+        return VFS_RESULT_NO_SPACE;
+    }
+    if (!decode_object(boringfs, directory_id, &directory_object,
+                       directory_raw) ||
+        (directory_object.state != BORINGFS_OBJECT_ALLOCATED) ||
+        (directory_object.type != BORINGFS_TYPE_DIRECTORY) ||
+        !object_capacity(&directory_object, &capacity)) {
+        return VFS_RESULT_CORRUPT;
+    }
+    result = find_directory_hole(boringfs, directory_id, &directory_object,
+                                 &slot, &append);
+    if (result != VFS_RESULT_OK) {
+        return result;
+    }
+    staged_directory = directory_object;
+    if (!checked_mul_u64(slot,
+                         (uint64_t)BORINGFS_DIRECTORY_RECORD_SIZE,
+                         &logical_offset)) {
+        return VFS_RESULT_OVERFLOW;
+    }
+    if (append) {
+        if (!checked_add_u64(directory_object.size_bytes,
+                             (uint64_t)BORINGFS_DIRECTORY_RECORD_SIZE,
+                             &new_size)) {
+            return VFS_RESULT_OVERFLOW;
+        }
+        if (new_size > capacity) {
+            result = extend_directory(boringfs, &staged_directory,
+                                      &allocated_block);
+            if (result != VFS_RESULT_OK) {
+                return result;
+            }
+            if (!write_zeroed_block(boringfs, allocated_block, NULL, 0U) ||
+                !bitmap_set(boringfs, allocated_block, true)) {
+                return VFS_RESULT_CORRUPT;
+            }
+            bitmap_reserved = true;
+        }
+        staged_directory.size_bytes = new_size;
+    }
+
+    zero_bytes((uint8_t *)&child, sizeof(child));
+    child.state = BORINGFS_OBJECT_ALLOCATED;
+    child.type = type;
+    child.object_id = object_id;
+    child.parent_object_id = directory_id;
+
+    zero_bytes((uint8_t *)&new_record, sizeof(new_record));
+    new_record.object_id = object_id;
+    new_record.name_length = (uint16_t)name_length;
+    new_record.type_hint = type;
+    for (index = 0U; index < name_length; ++index) {
+        new_record.name[index] = (uint8_t)name[index];
+    }
+    if (!boringfs_encode_directory_record(new_record_raw,
+                                          sizeof(new_record_raw),
+                                          &new_record)) {
+        if (bitmap_reserved) {
+            (void)bitmap_set(boringfs, allocated_block, false);
+        }
+        return VFS_RESULT_CORRUPT;
+    }
+
+    if (!write_object(boringfs, &child)) {
+        if (bitmap_reserved) {
+            (void)bitmap_set(boringfs, allocated_block, false);
+        }
+        return VFS_RESULT_CORRUPT;
+    }
+    if (!object_write_exact(boringfs, &staged_directory, logical_offset,
+                            new_record_raw, sizeof(new_record_raw))) {
+        (void)clear_object(boringfs, object_id);
+        if (bitmap_reserved) {
+            (void)bitmap_set(boringfs, allocated_block, false);
+        }
+        return VFS_RESULT_CORRUPT;
+    }
+    if (append && !write_object(boringfs, &staged_directory)) {
+        zero_bytes(zero_record, sizeof(zero_record));
+        (void)object_write_exact(boringfs, &staged_directory, logical_offset,
+                                 zero_record, sizeof(zero_record));
+        (void)clear_object(boringfs, object_id);
+        if (bitmap_reserved) {
+            (void)bitmap_set(boringfs, allocated_block, false);
+        }
+        return VFS_RESULT_CORRUPT;
+    }
+    result = prepare_node(boringfs, object_id, directory, node_out);
+    return (result == VFS_RESULT_OK) ? VFS_RESULT_OK : VFS_RESULT_CORRUPT;
 }
 
 static enum vfs_result boringfs_create(struct vfs_filesystem *filesystem,
@@ -702,13 +1409,8 @@ static enum vfs_result boringfs_create(struct vfs_filesystem *filesystem,
                                        const char *name,
                                        size_t name_length,
                                        struct vfs_node **node_out) {
-    (void)directory;
-    (void)name;
-    (void)name_length;
-    if (node_out != NULL) {
-        *node_out = NULL;
-    }
-    return readonly_mutation_result(filesystem);
+    return boringfs_create_common(filesystem, directory, name, name_length,
+                                  BORINGFS_TYPE_REGULAR, node_out);
 }
 
 static enum vfs_result boringfs_mkdir(struct vfs_filesystem *filesystem,
@@ -716,33 +1418,120 @@ static enum vfs_result boringfs_mkdir(struct vfs_filesystem *filesystem,
                                       const char *name,
                                       size_t name_length,
                                       struct vfs_node **node_out) {
-    (void)directory;
-    (void)name;
-    (void)name_length;
-    if (node_out != NULL) {
-        *node_out = NULL;
+    return boringfs_create_common(filesystem, directory, name, name_length,
+                                  BORINGFS_TYPE_DIRECTORY, node_out);
+}
+
+static enum vfs_result boringfs_remove_common(
+    struct vfs_filesystem *filesystem,
+    struct vfs_node *directory,
+    const char *name,
+    size_t name_length,
+    bool directory_requested) {
+    struct boringfs_vfs *boringfs = NULL;
+    uint32_t directory_id;
+    uint64_t slot;
+    uint64_t logical_offset;
+    uint8_t directory_record_raw[BORINGFS_DIRECTORY_RECORD_SIZE];
+    uint8_t zero_record[BORINGFS_DIRECTORY_RECORD_SIZE];
+    struct boringfs_directory_record record;
+    struct boringfs_object target;
+    uint8_t target_raw[BORINGFS_OBJECT_RECORD_SIZE];
+    bool empty = false;
+    enum vfs_result result;
+    struct boringfs_cached_node *cached;
+
+    result = mutation_context(filesystem, &boringfs);
+    if (result != VFS_RESULT_OK) {
+        return result;
     }
-    return readonly_mutation_result(filesystem);
+    if ((directory == NULL) || (name == NULL) ||
+        !node_object_id(boringfs, directory, &directory_id)) {
+        return VFS_RESULT_INVALID_ARGUMENT;
+    }
+    if (directory->type != VFS_NODE_DIRECTORY) {
+        return VFS_RESULT_NOT_DIRECTORY;
+    }
+    if (name_length > (size_t)BORINGFS_MAX_FILENAME) {
+        return VFS_RESULT_NAME_TOO_LONG;
+    }
+    if (!valid_new_name(name, name_length)) {
+        return VFS_RESULT_INVALID_ARGUMENT;
+    }
+    result = find_directory_name(
+        boringfs, directory_id, name, name_length, &slot,
+        directory_record_raw, &record, &target);
+    if (result != VFS_RESULT_OK) {
+        return result;
+    }
+    if (directory_requested && (target.type != BORINGFS_TYPE_DIRECTORY)) {
+        return VFS_RESULT_NOT_DIRECTORY;
+    }
+    if (!directory_requested && (target.type != BORINGFS_TYPE_REGULAR)) {
+        return VFS_RESULT_NOT_REGULAR;
+    }
+    cached = &boringfs->nodes[(size_t)(record.object_id - 1U)];
+    if (cached->prepared && (cached->vfs.reference_count != 0U)) {
+        return VFS_RESULT_BUSY;
+    }
+    if (directory_requested) {
+        result = directory_is_empty(boringfs, record.object_id, &target,
+                                    &empty);
+        if (result != VFS_RESULT_OK) {
+            return result;
+        }
+        if (!empty) {
+            return VFS_RESULT_NOT_EMPTY;
+        }
+    }
+    if (!decode_object(boringfs, record.object_id, &target, target_raw) ||
+        !checked_mul_u64(slot,
+                         (uint64_t)BORINGFS_DIRECTORY_RECORD_SIZE,
+                         &logical_offset)) {
+        return VFS_RESULT_CORRUPT;
+    }
+    zero_bytes(zero_record, sizeof(zero_record));
+    {
+        struct boringfs_object parent;
+        uint8_t parent_raw[BORINGFS_OBJECT_RECORD_SIZE];
+
+        if (!decode_object(boringfs, directory_id, &parent, parent_raw) ||
+            !object_write_exact(boringfs, &parent, logical_offset,
+                                zero_record, sizeof(zero_record))) {
+            return VFS_RESULT_CORRUPT;
+        }
+        if (!clear_object(boringfs, record.object_id)) {
+            (void)object_write_exact(boringfs, &parent, logical_offset,
+                                     directory_record_raw,
+                                     sizeof(directory_record_raw));
+            return VFS_RESULT_CORRUPT;
+        }
+        if (!release_object_blocks(boringfs, &target)) {
+            (void)write_object_raw(boringfs, record.object_id, target_raw);
+            (void)object_write_exact(boringfs, &parent, logical_offset,
+                                     directory_record_raw,
+                                     sizeof(directory_record_raw));
+            return VFS_RESULT_CORRUPT;
+        }
+    }
+    zero_bytes((uint8_t *)cached, sizeof(*cached));
+    return VFS_RESULT_OK;
 }
 
 static enum vfs_result boringfs_unlink(struct vfs_filesystem *filesystem,
                                        struct vfs_node *directory,
                                        const char *name,
                                        size_t name_length) {
-    (void)directory;
-    (void)name;
-    (void)name_length;
-    return readonly_mutation_result(filesystem);
+    return boringfs_remove_common(filesystem, directory, name, name_length,
+                                  false);
 }
 
 static enum vfs_result boringfs_rmdir(struct vfs_filesystem *filesystem,
                                       struct vfs_node *directory,
                                       const char *name,
                                       size_t name_length) {
-    (void)directory;
-    (void)name;
-    (void)name_length;
-    return readonly_mutation_result(filesystem);
+    return boringfs_remove_common(filesystem, directory, name, name_length,
+                                  true);
 }
 
 static enum vfs_result boringfs_rename(struct vfs_filesystem *filesystem,
@@ -758,7 +1547,14 @@ static enum vfs_result boringfs_rename(struct vfs_filesystem *filesystem,
     (void)new_directory;
     (void)new_name;
     (void)new_name_length;
-    return readonly_mutation_result(filesystem);
+    {
+        struct boringfs_vfs *boringfs = NULL;
+        const enum vfs_result result =
+            mutation_context(filesystem, &boringfs);
+
+        (void)boringfs;
+        return (result == VFS_RESULT_OK) ? VFS_RESULT_NOT_SUPPORTED : result;
+    }
 }
 
 static enum vfs_result boringfs_write(struct vfs_filesystem *filesystem,
@@ -767,22 +1563,110 @@ static enum vfs_result boringfs_write(struct vfs_filesystem *filesystem,
                                       const void *buffer,
                                       size_t length,
                                       size_t *transferred_out) {
-    (void)node;
-    (void)offset;
-    (void)buffer;
-    (void)length;
+    struct boringfs_vfs *boringfs = NULL;
+    uint32_t object_id;
+    uint32_t block = BORINGFS_LOCATION_NONE_U32;
+    struct boringfs_object object;
+    struct boringfs_object updated;
+    uint8_t raw[BORINGFS_OBJECT_RECORD_SIZE];
+    enum vfs_result result;
+
     if (transferred_out != NULL) {
         *transferred_out = 0U;
     }
-    return readonly_mutation_result(filesystem);
+    result = mutation_context(filesystem, &boringfs);
+    if (result != VFS_RESULT_OK) {
+        return result;
+    }
+    if ((node == NULL) || (buffer == NULL) || (transferred_out == NULL) ||
+        !node_object_id(boringfs, node, &object_id)) {
+        return VFS_RESULT_INVALID_ARGUMENT;
+    }
+    if (node->type != VFS_NODE_REGULAR) {
+        return VFS_RESULT_NOT_REGULAR;
+    }
+    if ((offset != 0ULL) || (length > (size_t)BORINGFS_BLOCK_SIZE)) {
+        return VFS_RESULT_NOT_SUPPORTED;
+    }
+    if (!decode_object(boringfs, object_id, &object, raw) ||
+        (object.state != BORINGFS_OBJECT_ALLOCATED) ||
+        (object.type != BORINGFS_TYPE_REGULAR)) {
+        return VFS_RESULT_CORRUPT;
+    }
+    if (length == 0U) {
+        return VFS_RESULT_OK;
+    }
+    if ((object.size_bytes != 0ULL) || (object.extent_count != 0U)) {
+        return VFS_RESULT_NOT_SUPPORTED;
+    }
+    if (!find_free_block(boringfs, BORINGFS_LOCATION_NONE_U32, &block)) {
+        return VFS_RESULT_NO_SPACE;
+    }
+    if (!write_zeroed_block(boringfs, block, buffer, length) ||
+        !bitmap_set(boringfs, block, true)) {
+        return VFS_RESULT_CORRUPT;
+    }
+    updated = object;
+    updated.size_bytes = (uint64_t)length;
+    updated.extent_count = 1U;
+    updated.extents[0].start_block = block;
+    updated.extents[0].block_count = 1U;
+    if (!write_object(boringfs, &updated)) {
+        (void)bitmap_set(boringfs, block, false);
+        return VFS_RESULT_CORRUPT;
+    }
+    *transferred_out = length;
+    return VFS_RESULT_OK;
 }
 
 static enum vfs_result boringfs_truncate(struct vfs_filesystem *filesystem,
                                          struct vfs_node *node,
                                          uint64_t size) {
-    (void)node;
-    (void)size;
-    return readonly_mutation_result(filesystem);
+    struct boringfs_vfs *boringfs = NULL;
+    uint32_t object_id;
+    struct boringfs_object object;
+    struct boringfs_object updated;
+    uint8_t raw[BORINGFS_OBJECT_RECORD_SIZE];
+    enum vfs_result result;
+    size_t extent_index;
+
+    result = mutation_context(filesystem, &boringfs);
+    if (result != VFS_RESULT_OK) {
+        return result;
+    }
+    if ((node == NULL) || !node_object_id(boringfs, node, &object_id)) {
+        return VFS_RESULT_INVALID_ARGUMENT;
+    }
+    if (node->type != VFS_NODE_REGULAR) {
+        return VFS_RESULT_NOT_REGULAR;
+    }
+    if (!decode_object(boringfs, object_id, &object, raw) ||
+        (object.state != BORINGFS_OBJECT_ALLOCATED) ||
+        (object.type != BORINGFS_TYPE_REGULAR)) {
+        return VFS_RESULT_CORRUPT;
+    }
+    if (size == object.size_bytes) {
+        return VFS_RESULT_OK;
+    }
+    if (size != 0ULL) {
+        return VFS_RESULT_NOT_SUPPORTED;
+    }
+    updated = object;
+    updated.size_bytes = 0ULL;
+    updated.extent_count = 0U;
+    for (extent_index = 0U;
+         extent_index < (size_t)BORINGFS_MAX_EXTENTS; ++extent_index) {
+        updated.extents[extent_index].start_block = 0U;
+        updated.extents[extent_index].block_count = 0U;
+    }
+    if (!write_object(boringfs, &updated)) {
+        return VFS_RESULT_CORRUPT;
+    }
+    if (!release_object_blocks(boringfs, &object)) {
+        (void)write_object_raw(boringfs, object_id, raw);
+        return VFS_RESULT_CORRUPT;
+    }
+    return VFS_RESULT_OK;
 }
 
 static void free_mount_context(struct boringfs_vfs *boringfs,
@@ -802,9 +1686,10 @@ static void free_mount_context(struct boringfs_vfs *boringfs,
     }
 }
 
-enum vfs_result boringfs_vfs_create_readonly(
+static enum vfs_result boringfs_vfs_create(
     const struct block_device *device,
     uint64_t filesystem_id,
+    bool read_only,
     struct boringfs_vfs **boringfs_out,
     struct boringfs_validation_error *validation_error_out) {
     struct boringfs_vfs *boringfs = NULL;
@@ -826,7 +1711,7 @@ enum vfs_result boringfs_vfs_create_readonly(
     if ((device == NULL) || (boringfs_out == NULL) ||
         (validation_error_out == NULL) ||
         (device->logical_block_size != BORINGFS_DEVICE_SECTOR_SIZE) ||
-        (device->block_count == 0ULL) ||
+        (device->block_count == 0ULL) || (!read_only && device->read_only) ||
         !checked_mul_u64(device->block_count,
                          (uint64_t)device->logical_block_size,
                          &device_bytes)) {
@@ -843,6 +1728,7 @@ enum vfs_result boringfs_vfs_create_readonly(
     }
     zero_bytes((uint8_t *)boringfs, sizeof(*boringfs));
     boringfs->device = device;
+    boringfs->read_only = read_only;
     boringfs->source.context = boringfs;
     boringfs->source.size = device_bytes;
     boringfs->source.read = boringfs_source_read;
@@ -917,6 +1803,24 @@ enum vfs_result boringfs_vfs_create_readonly(
     }
     *boringfs_out = boringfs;
     return VFS_RESULT_OK;
+}
+
+enum vfs_result boringfs_vfs_create_readonly(
+    const struct block_device *device,
+    uint64_t filesystem_id,
+    struct boringfs_vfs **boringfs_out,
+    struct boringfs_validation_error *validation_error_out) {
+    return boringfs_vfs_create(device, filesystem_id, true, boringfs_out,
+                               validation_error_out);
+}
+
+enum vfs_result boringfs_vfs_create_writable(
+    const struct block_device *device,
+    uint64_t filesystem_id,
+    struct boringfs_vfs **boringfs_out,
+    struct boringfs_validation_error *validation_error_out) {
+    return boringfs_vfs_create(device, filesystem_id, false, boringfs_out,
+                               validation_error_out);
 }
 
 struct vfs_filesystem *boringfs_vfs_get_vfs(struct boringfs_vfs *boringfs) {
