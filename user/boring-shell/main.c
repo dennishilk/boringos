@@ -11,7 +11,7 @@
 #define BORING_SHELL_ESCAPE_MAX 8U
 #define BORING_SHELL_HISTORY_CAPACITY 16U
 #define BORING_SHELL_COMMAND_NAME_CAPACITY 16U
-#define BORING_SHELL_COMMAND_COUNT 20U
+#define BORING_SHELL_COMMAND_COUNT 19U
 #define BORING_SHELL_PROMPT_CAPACITY \
     (BORING_SYSTEM_USERNAME_CAPACITY + BORING_SYSTEM_HOSTNAME_CAPACITY + \
      BORING_SYSCALL_CWD_MAX + 8U)
@@ -40,8 +40,8 @@ static char shell_exec_path[BORING_SYSCALL_EXEC_PATH_MAX + 1U];
 static const char shell_command_names[BORING_SHELL_COMMAND_COUNT]
                                      [BORING_SHELL_COMMAND_NAME_CAPACITY] = {
     "help", "ls", "mkdir", "rmdir", "cd", "cat", "touch", "write",
-    "rm", "boringfetch", "clear", "pwd", "echo", "hostname", "uname",
-    "whoami", "ps", "history", "exit", "logout"
+    "rm", "clear", "pwd", "echo", "hostname", "uname", "whoami",
+    "ps", "history", "exit", "logout"
 };
 
 static void shell_idle_forever(void) __attribute__((noreturn));
@@ -579,15 +579,51 @@ static bool shell_apply_completion(const char *prompt,
     return shell_redraw_line(prompt, line, *length, *cursor);
 }
 
+static bool shell_command_completion_consider(
+    const char *candidate,
+    size_t candidate_length,
+    const char *prefix,
+    size_t prefix_length,
+    size_t *common_length,
+    size_t *matches) {
+    if ((candidate == NULL) || (prefix == NULL) ||
+        (common_length == NULL) || (matches == NULL) ||
+        (candidate_length == 0U) ||
+        (candidate_length >= sizeof(shell_completion_name))) {
+        return false;
+    }
+    if (!shell_text_starts_with(candidate, candidate_length,
+                                prefix, prefix_length)) {
+        return true;
+    }
+    if (*matches == 0U) {
+        size_t index;
+
+        for (index = 0U; index < candidate_length; ++index) {
+            shell_completion_name[index] = candidate[index];
+        }
+        shell_completion_name[candidate_length] = '\0';
+        *common_length = candidate_length;
+    } else {
+        *common_length = shell_common_prefix(
+            shell_completion_name, *common_length,
+            candidate, candidate_length);
+    }
+    ++(*matches);
+    return true;
+}
+
 static bool shell_complete_command(const char *prompt,
                                    char *line,
                                    size_t capacity,
                                    size_t *length,
                                    size_t *cursor) {
+    static const char bin_path[] = "/bin";
     const size_t prefix_length = *cursor;
     size_t common_length = 0U;
     size_t matches = 0U;
     size_t command_index;
+    uint64_t directory_index = 0ULL;
 
     for (command_index = 0U;
          command_index < (size_t)BORING_SHELL_COMMAND_COUNT;
@@ -596,30 +632,53 @@ static bool shell_complete_command(const char *prompt,
             shell_command_names[command_index],
             BORING_SHELL_COMMAND_NAME_CAPACITY - 1U);
 
-        if (!shell_text_starts_with(shell_command_names[command_index],
-                                    candidate_length, line, prefix_length)) {
+        if (!shell_command_completion_consider(
+                shell_command_names[command_index], candidate_length,
+                line, prefix_length, &common_length, &matches)) {
+            return false;
+        }
+    }
+    for (;;) {
+        struct boring_dirent entry;
+        const long result = boring_fs_readdir(
+            bin_path, sizeof(bin_path) - 1U,
+            directory_index, &entry);
+
+        if (result == 0L) {
+            break;
+        }
+        if ((result == -(long)BORING_SYSCALL_ENOENT) ||
+            (result == -(long)BORING_SYSCALL_ENOTDIR)) {
+            break;
+        }
+        if (result < 0L) {
+            return false;
+        }
+        if ((result != 1L) ||
+            (entry.name_length == 0U) ||
+            (entry.name_length >=
+             (uint32_t)BORING_DIRENT_NAME_CAPACITY) ||
+            (entry.name[entry.name_length] != '\0') ||
+            ((entry.type != BORING_DIRENT_TYPE_DIRECTORY) &&
+             (entry.type != BORING_DIRENT_TYPE_REGULAR))) {
+            return false;
+        }
+        ++directory_index;
+        if (entry.type != BORING_DIRENT_TYPE_REGULAR) {
             continue;
         }
-        if (matches == 0U) {
-            if (!shell_copy_text(shell_completion_name,
-                                 sizeof(shell_completion_name),
-                                 shell_command_names[command_index])) {
-                return false;
-            }
-            common_length = candidate_length;
-        } else {
-            common_length = shell_common_prefix(
-                shell_completion_name, common_length,
-                shell_command_names[command_index], candidate_length);
+        if (!shell_command_completion_consider(
+                entry.name, (size_t)entry.name_length,
+                line, prefix_length, &common_length, &matches)) {
+            return false;
         }
-        ++matches;
     }
     if (matches == 0U) {
         return shell_bell();
     }
-    return shell_apply_completion(prompt, line, capacity, length, cursor,
-                                  prefix_length, common_length,
-                                  matches == 1U, ' ');
+    return shell_apply_completion(
+        prompt, line, capacity, length, cursor,
+        prefix_length, common_length, matches == 1U, ' ');
 }
 
 static bool shell_complete_path(const char *prompt,
@@ -1087,7 +1146,9 @@ static bool shell_command_help(const char *argument) {
            shell_write_text("\r\nShell:\r\n") &&
            shell_write_text("  clear echo history help exit logout\r\n") &&
            shell_write_text("\r\nSystem:\r\n") &&
-           shell_write_text("  boringfetch uname hostname whoami ps\r\n");
+           shell_write_text("  uname hostname whoami ps\r\n") &&
+           shell_write_text("\r\nPrograms (/bin):\r\n") &&
+           shell_write_text("  boringfetch\r\n");
 }
 
 static bool shell_command_ls(const char *argument) {
@@ -1521,72 +1582,6 @@ static bool shell_command_exit(const char *command, const char *argument) {
     boring_exit(0);
 }
 
-static bool shell_command_boringfetch(const char *argument) {
-    struct boring_system_info info;
-    uint64_t used_memory;
-    uint64_t free_memory;
-    uint64_t uptime_seconds;
-    bool uptime_available = false;
-
-    if ((argument == NULL) || (argument[0] != '\0')) {
-        return shell_write_text("boringfetch: no arguments supported\r\n");
-    }
-    if (!shell_system_info(&info) ||
-        (info.free_memory_bytes > info.usable_memory_bytes)) {
-        return shell_write_text("boringfetch: system information unavailable\r\n");
-    }
-    used_memory = info.usable_memory_bytes - info.free_memory_bytes;
-    free_memory = info.free_memory_bytes;
-    uptime_seconds = 0ULL;
-    if (info.timer_frequency_millihz != 0U) {
-        const uint64_t frequency = (uint64_t)info.timer_frequency_millihz;
-        const uint64_t whole = info.uptime_ticks / frequency;
-
-        if (whole <= UINT64_MAX / 1000ULL) {
-            uptime_seconds = whole * 1000ULL +
-                ((info.uptime_ticks % frequency) * 1000ULL) / frequency;
-            uptime_available = true;
-        }
-    }
-    if (!shell_write_text("    ____             BoringOS\r\n") ||
-        !shell_write_text("   / __ )____  _____ -------------------------\r\n") ||
-        !shell_write_text("  / __  / __ \\/ ___/ OS: ") ||
-        !shell_write_text(info.os_name) || !shell_write_text("\r\n") ||
-        !shell_write_text(" / /_/ / /_/ / /    Kernel: ") ||
-        !shell_write_text(info.kernel_name) || !shell_write_text(" ") ||
-        !shell_write_text(info.kernel_version) || !shell_write_text("\r\n") ||
-        !shell_write_text("/_____/\\____/_/      Arch: ") ||
-        !shell_write_text(info.arch) || !shell_write_text("\r\n") ||
-        !shell_write_text("                     Hostname: ") ||
-        !shell_write_text(info.hostname) || !shell_write_text("\r\n") ||
-        !shell_write_text("                     User: ") ||
-        !shell_write_text(info.username) || !shell_write_text("\r\n") ||
-        !shell_write_text("                     Shell: boring-shell\r\n") ||
-        !shell_write_text("                     Root FS: ") ||
-        !shell_write_text(info.root_fs) || !shell_write_text("\r\n") ||
-        !shell_write_text("                     Root device: ") ||
-        !shell_write_text(info.root_device) || !shell_write_text("\r\n") ||
-        !shell_write_text("                     Memory: ") ||
-        !shell_write_u64(used_memory / BORING_SHELL_MIB) ||
-        !shell_write_text(" MiB / ") ||
-        !shell_write_u64(info.usable_memory_bytes / BORING_SHELL_MIB) ||
-        !shell_write_text(" MiB\r\n") ||
-        !shell_write_text("                     Free memory: ") ||
-        !shell_write_u64(free_memory / BORING_SHELL_MIB) ||
-        !shell_write_text(" MiB\r\n") ||
-        !shell_write_text("                     Processes: ") ||
-        !shell_write_u64((uint64_t)info.process_count) ||
-        !shell_write_text("\r\n                     PID: ") ||
-        !shell_write_u64(info.current_pid) || !shell_write_text("\r\n")) {
-        return false;
-    }
-    if (!uptime_available) {
-        return true;
-    }
-    return shell_write_text("                     Uptime: ") &&
-           shell_write_u64(uptime_seconds) && shell_write_text(" s\r\n");
-}
-
 static bool shell_execute_line(char *line) {
     char *command = NULL;
     char *argument = NULL;
@@ -1654,10 +1649,6 @@ static bool shell_execute_line(char *line) {
     if (shell_text_equals(command, "logout")) {
         return shell_command_exit("logout", argument);
     }
-    if (shell_text_equals(command, "boringfetch")) {
-        return shell_command_boringfetch(argument);
-    }
-
     return shell_command_external(command, argument);
 }
 

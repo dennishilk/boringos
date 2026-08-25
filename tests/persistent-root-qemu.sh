@@ -67,7 +67,7 @@ for line in 'BoringKernel 0.0.28-dev' '  mount-at-root: PASS' 'BoringFS root mou
 done
 grep -Fq 'boring@boringos:/$ ' "${LOG}" || fail 'missing root identity prompt'
 
-send '/bin/boringfetch'
+send 'boringfetch'
 for line in 'boring-launch: caller pid 2' 'boring-launch: child pid 3' 'boring-launch: independent address space' 'boring-launch: entry executable' 'boring-launch: stack rw-nx' 'boring-launch: higher-half supervisor-only' 'boring-launch: cwd inherited' 'boring-launch: VFS executable source /bin/boringfetch' 'boring-launch: handoff via SYSRETQ' '                     Root FS: BoringFS' '                     Root device: virtio-blk' '                     Processes: 3' '                     PID: 3' 'boring-exit: child pid 3 status 0 is zombie' 'boring-waitpid: reaped child pid 3'; do
     grep -Fqx "${line}" "${LOG}" || fail "missing first VFS exec marker: ${line}"
 done
@@ -97,9 +97,27 @@ send 'hostname'
 grep -Fqx 'boringos' "${LOG}" || fail 'hostname identity mismatch'
 send 'uname'
 grep -Fqx 'BoringOS BoringKernel 0.0.28-dev x86_64' "${LOG}" || fail 'uname identity mismatch'
+send '/bin/boringfetch'
+grep -Fqx 'boring-launch: child pid 4' "${LOG}" || fail 'explicit VFS path did not allocate PID 4'
+grep -Fqx '                     PID: 4' "${LOG}" || fail 'explicit VFS path did not run as PID 4'
+grep -Fqx 'boring-waitpid: reaped child pid 4' "${LOG}" || fail 'explicit VFS child was not reaped'
 printf 'boringf\t\n' >&3
 wait_prompt $((PROMPT + 1))
-grep -Fqx '    ____             BoringOS' "${LOG}" || fail 'command TAB did not invoke boringfetch'
+grep -Fqx 'boring-launch: child pid 5' "${LOG}" || fail 'external command TAB did not launch PID 5'
+grep -Fqx '                     PID: 5' "${LOG}" || fail 'external command TAB did not execute boringfetch'
+grep -Fqx 'boring-waitpid: reaped child pid 5' "${LOG}" || fail 'TAB-launched child was not reaped'
+send 'boringfetch extra'
+grep -Fqx 'boringfetch: no arguments supported' "${LOG}" || fail 'argc/argv did not reach standalone program'
+grep -Fqx 'boring-exit: child pid 6 status 2 is zombie' "${LOG}" || fail 'argv child exit status was not preserved'
+grep -Fqx 'boring-waitpid: reaped child pid 6' "${LOG}" || fail 'argv child was not reaped'
+send 'touch /bin/not-elf'
+send 'write -n /bin/not-elf bad'
+send '/bin/not-elf'
+grep -Fqx '/bin/not-elf: cannot execute' "${LOG}" || fail 'malformed VFS executable was not rejected as ENOEXEC'
+send 'ps'
+grep -Fqx '1 0 WAITING boring-init' "${LOG}" || fail 'PID1 missing after malformed ELF rollback'
+grep -Fqx '2 1 RUNNING boring-shell' "${LOG}" || fail 'shell missing after malformed ELF rollback'
+if grep -Eq ' ZOMBIE (boringfetch|not-elf)$' "${LOG}"; then fail 'zombie leaked after external execution'; fi
 send 'cd /'
 printf 'cat REA\t\n' >&3
 wait_prompt $((PROMPT + 1))
@@ -126,7 +144,7 @@ grep -Fqx 'boring-waitpid: reaped child pid 3' "${LOG}" || fail 'rebooted execut
 send 'cat /persist/a.txt'
 grep -Fqx 'still-here' "${LOG}" || fail 'reboot persistence failed'
 send 'boringfetch'
-for line in '    ____             BoringOS' '  / __  / __ \/ ___/ OS: BoringOS' ' / /_/ / /_/ / /    Kernel: BoringKernel 0.0.28-dev' '/_____/\____/_/      Arch: x86_64' '                     Hostname: boringos' '                     User: boring' '                     Shell: boring-shell' '                     Root FS: BoringFS' '                     Root device: virtio-blk' '                     Processes: 2' '                     PID: 2'; do
+for line in '    ____             BoringOS' '  / __  / __ \/ ___/ OS: BoringOS' ' / /_/ / /_/ / /    Kernel: BoringKernel 0.0.28-dev' '/_____/\____/_/      Arch: x86_64' '                     Hostname: boringos' '                     User: boring' '                     Shell: boring-shell' '                     Root FS: BoringFS' '                     Root device: virtio-blk' '                     Processes: 3' '                     PID: 4'; do
     grep -Fqx "${line}" "${LOG}" || fail "missing boringfetch line: ${line}"
 done
 grep -Eq '^                     Memory: [0-9]+ MiB / [1-9][0-9]* MiB$' "${LOG}" || fail 'memory is not real'
