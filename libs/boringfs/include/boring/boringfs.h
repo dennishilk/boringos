@@ -143,6 +143,22 @@ struct boringfs_validation_workspace {
     size_t object_reference_count_count;
 };
 
+typedef bool (*boringfs_source_read_fn)(void *context,
+                                        uint64_t offset,
+                                        void *buffer,
+                                        size_t length);
+
+struct boringfs_source {
+    void *context;
+    uint64_t size;
+    boringfs_source_read_fn read;
+};
+
+enum boringfs_validation_result boringfs_validate_source(
+    const struct boringfs_source *source,
+    const struct boringfs_validation_workspace *workspace,
+    struct boringfs_validation_error *error_out);
+
 enum boringfs_validation_result boringfs_validate_volume(
     const uint8_t *volume,
     size_t volume_size,

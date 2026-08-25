@@ -63,7 +63,7 @@ filesystem / storage consumer (future)
     ↓
 generic bounded block-device layer (Milestone 21 complete)
     ↓
-modern VirtIO PCI block backend (Milestone 22 in progress)
+modern VirtIO PCI block backend (Milestone 22 complete)
     ↓
 real QEMU raw disk I/O
 ```
@@ -71,7 +71,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.23-dev
+BoringKernel 0.0.24-dev
 ```
 
 The current syscall ABI is exactly:
@@ -424,21 +424,33 @@ merged-main CI: Run #183 / ID 32758477270 / push / main / 8d50823ccf7d069ae9c861
 
 The isolated `block` QEMU test mode uses RAM-backed acceptance devices only. Milestone 21 itself did not add a hardware storage driver, BoringFS mount, partition layer, storage syscall, or FD layer.
 
-## Milestone 22: QEMU VirtIO-block driver — CURRENT / IN PROGRESS
+## Milestone 22: QEMU VirtIO-block driver — COMPLETE
 
-Milestone 22 adds the first real hardware-backed storage path: modern VirtIO 1.x PCI only, bounded PCI capability discovery, explicit cache-disabled MMIO mappings, PMM-owned DMA, a split virtqueue, one synchronous polling request at a time, and registration as `vblk0` beneath the existing M21 block-device API.
+Milestone 22 added the first real hardware-backed storage path: modern VirtIO 1.x PCI only, bounded PCI capability discovery, explicit cache-disabled MMIO mappings, PMM-owned DMA, a split virtqueue, one synchronous polling request at a time, and registration as `vblk0` beneath the existing M21 block-device API.
 
 The disposable QEMU acceptance uses a deterministic raw disk and proves real host-authored reads, kernel writes, read-back, multi-request bounce-buffer chunking, neighbor preservation, and independent host-side persistence after QEMU exits.
 
-Milestone 22 does not add a kernel BoringFS mount, partition layer, storage syscall, FD layer, storage interrupts, or asynchronous I/O. Milestone 23 remains planned and unstarted during M22 implementation.
+Acceptance record:
+
+```text
+final PR: #33
+frozen implementation: c348c24d26fcb786cf850994043bb4568decc576
+implementation CI: Run #196 / ID 32816037074 / SUCCESS
+final closeout head: 67e3483f0fe46e032c4a66e77de2f538b098fd18
+final exact-head CI: Run #198 / ID 32816642864 / SUCCESS
+merged main: 805ebe1d8c13ca2bea197154dfd0a17a409edbc8
+merged-main CI: Run #199 / ID 32816812650 / push / main / SUCCESS
+```
+
+Milestone 22 did not add a kernel BoringFS mount, partition layer, storage syscall, FD layer, storage interrupts, or asynchronous I/O.
 
 ---
 
 # Stage 9 — BoringFS kernel integration
 
-## Milestone 23: read-only BoringFS mount — PLANNED
+## Milestone 23: read-only BoringFS mount — CURRENT
 
-Mount a host-formatted BoringFS volume through the generic block-device boundary and VFS, rejecting invalid metadata before exposure.
+Mount a host-formatted BoringFS volume through the generic block-device boundary and VFS, rejecting invalid metadata before exposure. Milestone 23 keeps RAMFS as the root, exposes the validated persistent volume at `/disk`, and proves real PID 2 directory traversal plus kernel-side regular-file reads through BoringFS extents. Mutation remains explicitly denied in this milestone.
 
 ## Milestone 24: BoringFS mutation support — PLANNED
 
@@ -472,22 +484,30 @@ Networking remains unrelated and deferred.
 
 # Exact current implementation milestone
 
-## Milestone 22 — modern VirtIO PCI block device
+## Milestone 23 — read-only BoringFS over VirtIO
 
-The current implementation item is **Milestone 22**. It is **CURRENT / IN PROGRESS** in this reconciliation.
+The current implementation item is **Milestone 23**. Milestones 24 and 25 remain **PLANNED** until M23 has completed its full exact-head closeout, guarded merge, and merged-main CI verification.
 
 Its architectural boundary is:
 
 ```text
-future filesystem / storage consumer
-              ↓
-      M21 generic block-device API
-              ↓
-       modern VirtIO block backend
-              ↓
-       modern VirtIO PCI transport
-              ↓
-         real QEMU raw disk
+host-formatted BoringFS
+          ↓
+   QEMU raw disk
+          ↓
+ modern VirtIO PCI
+          ↓
+        vblk0
+          ↓
+ M21 block-device API
+          ↓
+ shared BoringFS validator
+          ↓
+ read-only BoringFS VFS
+          ↓
+        /disk
+          ↓
+ PID 2 boring-shell
 ```
 
-Milestone 22 must not mount BoringFS in the kernel, parse partitions, change VFS/RAMFS semantics, add a storage syscall or FD layer, introduce storage interrupts/async I/O, or begin Milestone 23.
+Milestone 23 does not add filesystem mutation, storage syscalls, file descriptors, a persistent root, partition parsing, executable loading from BoringFS, journaling, or any desktop/display work.

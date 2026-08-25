@@ -31,6 +31,7 @@ SHELL_ELF := $(USER_BUILD_DIR)/boring-shell.elf
 ISO := $(BUILD_DIR)/boringos.iso
 MKBORINGFS := $(BUILD_DIR)/mkboringfs
 BORINGFSCK := $(BUILD_DIR)/boringfsck
+BORINGFS_FIXTURE := $(BUILD_DIR)/boringfs-fixture
 MKBORINGFS_VERIFY := $(BUILD_DIR)/mkboringfs-test/mkboringfs-verify
 BORINGFS_HEADER := libs/boringfs/include/boring/boringfs.h
 BORINGFS_CODEC := libs/boringfs/codec.c
@@ -114,8 +115,16 @@ TEST_HARNESS_C := kernel/core/block_device_test.c
 else ifeq ($(TEST_MODE),virtio-block)
 TEST_MODE_VALUE := 12
 TEST_HARNESS_C := kernel/core/virtio_blk_test.c
+else ifeq ($(TEST_MODE),boringfs-ro)
+TEST_MODE_VALUE := 13
+TEST_HARNESS_C := kernel/core/boringfs_ro_test.c
+BOOT_USER_ELF := $(SHELL_INIT_ELF)
+BOOT_USER_NAME := boring-init.elf
+BOOT_EXTRA_USER_ELF := $(SHELL_ELF)
+BOOT_EXTRA_USER_NAME := boring-shell.elf
+BOOT_LIMINE_CONF := limine-shell.conf
 else
-$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, block, or virtio-block)
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, block, virtio-block, or boringfs-ro)
 endif
 
 LIMINE_VERSION := 12.5.2
@@ -124,7 +133,7 @@ LIMINE_DIR := $(BUILD_DIR)/deps/limine-binary
 LIMINE_SHA256 := 4c760c09c53560d859b362319a3dc63b79cca3d47f35d69ab0106a13b8057055
 LIMINE_URL := https://github.com/Limine-Bootloader/Limine/releases/download/v$(LIMINE_VERSION)/limine-binary.tar.gz
 
-CPPFLAGS := -Ikernel/include -DBORING_TEST_MODE=$(TEST_MODE_VALUE)
+CPPFLAGS := -Ikernel/include -Ilibs/boringfs/include -DBORING_TEST_MODE=$(TEST_MODE_VALUE)
 CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
 	-m64 -mno-80387 -mno-mmx -mno-sse -mno-sse2 \
 	-mno-red-zone -mcmodel=kernel -O2 -g \
@@ -158,6 +167,9 @@ KERNEL_C_SOURCES := \
 	kernel/core/vfs.c \
 	kernel/core/ramfs.c \
 	kernel/core/block_device.c \
+	kernel/fs/boringfs_vfs.c \
+	libs/boringfs/codec.c \
+	libs/boringfs/validate.c \
 	kernel/drivers/virtio_blk.c \
 	kernel/core/task.c \
 	kernel/core/preemption_test.c \
@@ -191,7 +203,7 @@ KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCE
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
 
-.PHONY: all kernel user-elf user-runtime user-console user-init user-shell elf-audit runtime-audit console-audit init-audit shell-audit boringfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test run run-headless test clean distclean
+.PHONY: all kernel user-elf user-runtime user-console user-init user-shell elf-audit runtime-audit console-audit init-audit shell-audit boringfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test boringfs-fixture run run-headless test clean distclean
 
 all: $(ISO)
 
@@ -232,6 +244,8 @@ mkboringfs-test: $(MKBORINGFS) $(MKBORINGFS_VERIFY)
 
 boringfsck: $(BORINGFSCK)
 
+boringfs-fixture: $(BORINGFS_FIXTURE)
+
 boringfsck-test: $(MKBORINGFS) $(BORINGFSCK)
 	sh ./tests/boringfsck-test.sh
 
@@ -244,6 +258,11 @@ $(BORINGFSCK): tools/boringfsck.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) $(BORIN
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) \
 		tools/boringfsck.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) -o $@
+
+$(BORINGFS_FIXTURE): tests/boringfs-fixture.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) $(BORINGFS_HEADER)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) \
+		tests/boringfs-fixture.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) -o $@
 
 $(MKBORINGFS_VERIFY): tests/mkboringfs-verify.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) $(BORINGFS_HEADER)
 	@mkdir -p $(dir $@)
@@ -411,6 +430,7 @@ test:
 	sh ./tests/shell-qemu.sh
 	sh ./tests/block-device-qemu.sh
 	sh ./tests/virtio-block-qemu.sh
+	sh ./tests/boringfs-ro-qemu.sh
 	sh ./tests/boringfs-host-test.sh
 	$(MAKE) mkboringfs-test
 	$(MAKE) boringfsck-test
