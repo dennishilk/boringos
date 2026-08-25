@@ -18,13 +18,13 @@ SECTIONS
         *(.text .text.*)
     } :text
 
-    . = 0x0000000040001000;
+    . = ALIGN(0x1000);
     .rodata : ALIGN(0x1000)
     {
         *(.rodata .rodata.*)
     } :rodata
 
-    . = 0x0000000040002000;
+    . = ALIGN(0x1000);
     .data : ALIGN(8)
     {
         *(.data .data.*)
