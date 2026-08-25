@@ -13,6 +13,8 @@
 #define SINGLE_LBA 32ULL
 #define MULTI_FIRST_LBA 40ULL
 #define MULTI_COUNT 4U
+#define CHUNK_FIRST_LBA 64ULL
+#define CHUNK_COUNT 12U
 #define LEFT_LBA (MULTI_FIRST_LBA - 1ULL)
 #define RIGHT_LBA (MULTI_FIRST_LBA + (uint64_t)MULTI_COUNT)
 
@@ -122,6 +124,28 @@ static int verify_multi(FILE *file) {
     return 0;
 }
 
+static int verify_chunk(FILE *file) {
+    uint8_t sector[SECTOR_SIZE];
+    uint32_t relative;
+
+    for (relative = 0U; relative < CHUNK_COUNT; ++relative) {
+        size_t index;
+        const uint64_t lba = CHUNK_FIRST_LBA + (uint64_t)relative;
+
+        if (read_sector(file, lba, sector) != 0) {
+            return -1;
+        }
+        for (index = 0U; index < (size_t)SECTOR_SIZE; ++index) {
+            const uint8_t expected = (uint8_t)((0x6dU + (relative * 19U) +
+                ((uint32_t)index * 11U)) & 0xffU);
+            if (sector[index] != expected) {
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
 static int verify_initial_sector(FILE *file, uint64_t lba) {
     uint8_t sector[SECTOR_SIZE];
     size_t index;
@@ -160,7 +184,9 @@ static int verify_image(const char *path) {
         return 1;
     }
 
-    persisted_ok = (verify_single(file) == 0) && (verify_multi(file) == 0);
+    persisted_ok = (verify_single(file) == 0) &&
+                   (verify_multi(file) == 0) &&
+                   (verify_chunk(file) == 0);
     left_ok = verify_initial_sector(file, LEFT_LBA) == 0;
     right_ok = verify_initial_sector(file, RIGHT_LBA) == 0;
 

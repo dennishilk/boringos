@@ -12,15 +12,20 @@
 #define TEST_SINGLE_LBA 32ULL
 #define TEST_MULTI_FIRST_LBA 40ULL
 #define TEST_MULTI_COUNT 4U
+#define TEST_CHUNK_FIRST_LBA 64ULL
+#define TEST_CHUNK_COUNT 12U
 #define TEST_LEFT_NEIGHBOR (TEST_MULTI_FIRST_LBA - 1ULL)
 #define TEST_RIGHT_NEIGHBOR (TEST_MULTI_FIRST_LBA + (uint64_t)TEST_MULTI_COUNT)
 #define TEST_SECTOR_SIZE 512U
 #define TEST_MULTI_BYTES ((size_t)TEST_MULTI_COUNT * (size_t)TEST_SECTOR_SIZE)
+#define TEST_CHUNK_BYTES ((size_t)TEST_CHUNK_COUNT * (size_t)TEST_SECTOR_SIZE)
 
 static uint8_t test_single_write[TEST_SECTOR_SIZE];
 static uint8_t test_single_read[TEST_SECTOR_SIZE];
 static uint8_t test_multi_write[TEST_MULTI_BYTES];
 static uint8_t test_multi_read[TEST_MULTI_BYTES];
+static uint8_t test_chunk_write[TEST_CHUNK_BYTES];
+static uint8_t test_chunk_read[TEST_CHUNK_BYTES];
 static uint8_t test_scratch[TEST_SECTOR_SIZE];
 static uint8_t test_left_before[TEST_SECTOR_SIZE];
 static uint8_t test_right_before[TEST_SECTOR_SIZE];
@@ -115,6 +120,20 @@ static void test_fill_multi_write(void) {
         const size_t base = (size_t)sector * (size_t)TEST_SECTOR_SIZE;
         for (offset = 0U; offset < (size_t)TEST_SECTOR_SIZE; ++offset) {
             test_multi_write[base + offset] = test_multi_byte(sector, offset);
+        }
+    }
+}
+
+static void test_fill_chunk_write(void) {
+    uint32_t sector;
+
+    for (sector = 0U; sector < TEST_CHUNK_COUNT; ++sector) {
+        size_t offset;
+        const size_t base = (size_t)sector * (size_t)TEST_SECTOR_SIZE;
+        for (offset = 0U; offset < (size_t)TEST_SECTOR_SIZE; ++offset) {
+            test_chunk_write[base + offset] =
+                (uint8_t)((0x6dU + (sector * 19U) +
+                           ((uint32_t)offset * 11U)) & 0xffU);
         }
     }
 }
@@ -309,6 +328,22 @@ void virtio_blk_test_run(void) {
         test_fail("multi-sector-write-read-back");
     }
     serial_write_string("  multi-sector-write-read-back: PASS\n");
+
+    test_fill_chunk_write();
+    if (!virtio_blk_get_stats(&stats_before_bounds)) {
+        test_fail("chunking-stats-before");
+    }
+    if ((block_device_write(device, TEST_CHUNK_FIRST_LBA, TEST_CHUNK_COUNT,
+                            test_chunk_write) != BLOCK_DEVICE_RESULT_OK) ||
+        (block_device_read(device, TEST_CHUNK_FIRST_LBA, TEST_CHUNK_COUNT,
+                           test_chunk_read) != BLOCK_DEVICE_RESULT_OK) ||
+        !test_bytes_equal(test_chunk_read, test_chunk_write,
+                          sizeof(test_chunk_read)) ||
+        !virtio_blk_get_stats(&stats_after) ||
+        ((stats_after.submissions - stats_before_bounds.submissions) != 4ULL)) {
+        test_fail("multi-request-chunking");
+    }
+    serial_write_string("  multi-request-chunking: PASS\n");
 
     if ((block_device_read(device, TEST_LEFT_NEIGHBOR, 1U,
                            test_neighbor_after) != BLOCK_DEVICE_RESULT_OK) ||

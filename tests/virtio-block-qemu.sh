@@ -102,6 +102,7 @@ for line in \
     '  single-sector-write: PASS' \
     '  single-sector-read-back: PASS' \
     '  multi-sector-write-read-back: PASS' \
+    '  multi-request-chunking: PASS' \
     '  neighbor-preservation: PASS' \
     '  rejected-range-no-submit: PASS' \
     'VirtIO:' \
