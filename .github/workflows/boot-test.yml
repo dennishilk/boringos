@@ -84,6 +84,9 @@ jobs:
       - name: Generic bounded block-device layer
         run: sh ./tests/block-device-qemu.sh
 
+      - name: Modern VirtIO block device
+        run: sh ./tests/virtio-block-qemu.sh
+
       - name: BoringFS v0 codec and structural validator
         run: make boringfs-host-test
 
