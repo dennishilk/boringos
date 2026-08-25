@@ -29,5 +29,6 @@ long boring_fs_write(const char *path,
                      const void *buffer,
                      size_t length);
 long boring_fs_unlink(const char *path, size_t length);
+long boring_system_info(struct boring_system_info *info);
 
 #endif

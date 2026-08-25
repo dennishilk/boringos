@@ -6,6 +6,7 @@
 #include <boring/descriptor.h>
 #include <boring/elf_loader.h>
 #include <boring/process.h>
+#include <boring/pmm.h>
 #include <boring/ring3_memory.h>
 #include <boring/serial.h>
 #include <boring/syscall.h>
@@ -89,6 +90,13 @@ static struct syscall_stats syscall_state;
 static struct syscall_bootstrap_program bootstrap_program;
 static bool syscall_initialized;
 
+static bool syscall_user_range_accessible(uintptr_t user_address,
+                                          size_t length,
+                                          bool require_writable);
+static bool syscall_copy_to_user(uintptr_t user_address,
+                                 const void *source,
+                                 size_t length);
+
 static void syscall_fatal(const char *reason) __attribute__((noreturn));
 static void syscall_fatal(const char *reason) {
     serial_write_string("BoringKernel syscall fatal: ");
@@ -99,6 +107,28 @@ static void syscall_fatal(const char *reason) {
 
 static uint64_t syscall_error(int error_number) {
     return (uint64_t)(-(int64_t)error_number);
+}
+
+static uint64_t syscall_system_info(uint64_t user_info) {
+    struct pmm_stats stats;
+    struct boring_system_info info;
+
+    if (!syscall_user_range_accessible((uintptr_t)user_info, sizeof(info),
+                                       true)) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+    if (!pmm_get_stats(&stats) ||
+        (stats.free_frames > UINT64_MAX / PMM_PAGE_SIZE)) {
+        return syscall_error(BORING_SYSCALL_EIO);
+    }
+    info.abi_version = BORING_SYSTEM_INFO_ABI_VERSION;
+    info.reserved = 0U;
+    info.usable_memory_bytes = stats.usable_bytes;
+    info.free_memory_bytes = stats.free_frames * PMM_PAGE_SIZE;
+    if (!syscall_copy_to_user((uintptr_t)user_info, &info, sizeof(info))) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+    return 0ULL;
 }
 
 static void bootstrap_program_clear(void) {
@@ -1206,6 +1236,9 @@ void x86_64_syscall_dispatch(struct x86_64_syscall_frame *frame) {
             break;
         case BORING_SYS_FS_UNLINK:
             result = syscall_fs_unlink(frame->rdi, frame->rsi);
+            break;
+        case BORING_SYS_INFO:
+            result = syscall_system_info(frame->rdi);
             break;
         default:
             result = syscall_error(BORING_SYSCALL_ENOSYS);

@@ -44,6 +44,24 @@ static bool shell_write_text(const char *text) {
     return (text != NULL) && shell_write(text, boring_strlen(text));
 }
 
+static bool shell_write_u64(uint64_t value) {
+    char digits[21];
+    size_t count = 0U;
+    size_t index;
+
+    do {
+        digits[count] = (char)('0' + (char)(value % 10ULL));
+        value /= 10ULL;
+        ++count;
+    } while (value != 0ULL);
+    for (index = 0U; index < count / 2U; ++index) {
+        const char temporary = digits[index];
+        digits[index] = digits[count - index - 1U];
+        digits[count - index - 1U] = temporary;
+    }
+    return shell_write(digits, count);
+}
+
 static bool shell_is_space(char character) {
     return (character == ' ') || (character == '\t');
 }
@@ -77,6 +95,7 @@ static bool shell_syscall_safety(void) {
         (const char *)(uintptr_t)(UINTPTR_MAX - 1U);
 
     return (boring_fs_mkdir(NULL, 1U) == -(long)BORING_SYSCALL_EFAULT) &&
+           (boring_system_info(NULL) == -(long)BORING_SYSCALL_EFAULT) &&
            (boring_fs_mkdir(kernel_pointer, 1U) ==
             -(long)BORING_SYSCALL_EFAULT) &&
            (boring_fs_mkdir(overflow_pointer, 4U) ==
@@ -440,6 +459,29 @@ static bool shell_command_rm(const char *argument) {
     return shell_print_fs_error("rm", result);
 }
 
+static bool shell_command_boringfetch(const char *argument) {
+    struct boring_system_info info;
+
+    if ((argument == NULL) || (argument[0] != '\0')) {
+        return shell_write_text("boringfetch: no arguments supported\n");
+    }
+    if ((boring_system_info(&info) != 0L) ||
+        (info.abi_version != BORING_SYSTEM_INFO_ABI_VERSION)) {
+        return shell_write_text("boringfetch: system information unavailable\n");
+    }
+    return shell_write_text("    ____             BoringOS\n") &&
+           shell_write_text("   / __ )____  _____ -------------------------\n") &&
+           shell_write_text("  / __  / __ \\/ ___/ OS: BoringOS\n") &&
+           shell_write_text(" / /_/ / /_/ / /    Kernel: BoringKernel 0.0.26-dev\n") &&
+           shell_write_text("/_____/\\____/_/      Arch: x86_64\n") &&
+           shell_write_text("                     Memory usable: ") &&
+           shell_write_u64(info.usable_memory_bytes) &&
+           shell_write_text(" bytes\n                     Memory free: ") &&
+           shell_write_u64(info.free_memory_bytes) &&
+           shell_write_text(" bytes\n                     Root FS: BoringFS\n") &&
+           shell_write_text("                     Shell: boring-shell\n");
+}
+
 static bool shell_execute_line(char *line) {
     char *command = NULL;
     char *argument = NULL;
@@ -476,6 +518,9 @@ static bool shell_execute_line(char *line) {
     }
     if (shell_text_equals(command, "rm")) {
         return shell_command_rm(argument);
+    }
+    if (shell_text_equals(command, "boringfetch")) {
+        return shell_command_boringfetch(argument);
     }
 
     return shell_write_text("command not found: ") &&

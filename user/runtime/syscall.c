@@ -204,3 +204,16 @@ long boring_fs_unlink(const char *path, size_t length) {
 
     return result;
 }
+
+long boring_system_info(struct boring_system_info *info) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_INFO),
+          "D"(info)
+        : "rcx", "r11", "cc", "memory");
+
+    return result;
+}

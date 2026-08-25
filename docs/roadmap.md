@@ -90,9 +90,10 @@ The current syscall ABI is exactly:
 10 FS_TOUCH
 11 FS_WRITE
 12 FS_UNLINK
+13 INFO (versioned bounded system-information structure)
 ```
 
-There is still no numeric file-descriptor table, no stdin/stdout/stderr abstraction, no executable loading from VFS/BoringFS, no partition layer, no persistent root filesystem, no networking, no display/input stack, no BoringWM integration, no APIC migration and no SMP.
+There is still no numeric file-descriptor table, no stdin/stdout/stderr abstraction, no executable loading from VFS/BoringFS, no partition layer, no networking, no display/input stack, no BoringWM integration, no APIC migration and no SMP.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -540,3 +541,21 @@ M25 retains Limine ISO boot modules for `boring-init` and `boring-shell`; it
 does not yet load executables from BoringFS. It adds no partition parsing,
 journaling, crash-consistency claim, file descriptors, networking, or desktop
 work. Historical RAMFS and `/disk` acceptance modes remain regression gates.
+
+---
+
+# Stage 10 — native system identity
+
+## Milestone 26: native `boringfetch` — CURRENT
+
+The native-C `boringfetch` command runs inside the real ring-3
+`boring-shell`. Static OS, architecture, root-filesystem and shell identity is
+owned by BoringOS; usable and currently free physical memory come from one
+versioned, bounded `INFO` syscall structure populated by the PMM. No CPU,
+SMBIOS, network, uptime or other value is fabricated.
+
+The current process model has no exit/reaping or shell-to-child return path,
+so this first implementation is deliberately linked into the native shell
+ELF. It is not claimed to be a standalone `/bin/boringfetch` executable.
+VFS-backed executable loading remains a future milestone rather than being
+faked through a host shadow or boot-module path.

@@ -71,5 +71,11 @@ stop_vm
 start_vm second
 send 'cat persistence.txt'
 grep -Fq 'boring-root-persistenceboring> ' "${LOG}" || fail 'reboot persistence failed'
+send 'boringfetch'
+for line in '    ____             BoringOS' '  / __  / __ \/ ___/ OS: BoringOS' ' / /_/ / /_/ / /    Kernel: BoringKernel 0.0.26-dev' '/_____/\____/_/      Arch: x86_64' '                     Root FS: BoringFS' '                     Shell: boring-shell'; do
+    grep -Fqx "${line}" "${LOG}" || fail "missing boringfetch line: ${line}"
+done
+grep -Eq '^                     Memory usable: [1-9][0-9]* bytes$' "${LOG}" || fail 'usable memory is not real'
+grep -Eq '^                     Memory free: [1-9][0-9]* bytes$' "${LOG}" || fail 'free memory is not real'
 stop_vm
 echo 'Persistent BoringFS root reboot verification passed.'
