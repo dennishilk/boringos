@@ -97,13 +97,12 @@ jobs:
           PY
           git apply --check /tmp/m23.patch
           git apply --index /tmp/m23.patch
-          rm -f .github/workflows/m23-source-snapshot.yml
-          git add -A
+          git restore --source=HEAD --staged --worktree .github/workflows/boot-test.yml
           git diff --cached --check
-          git diff --cached --binary --full-index "$BASE_SHA" -- > /tmp/final-semantic.patch
-          test "$(wc -c < /tmp/final-semantic.patch)" -eq "$PATCH_SIZE"
-          test "$(sha256sum /tmp/final-semantic.patch | awk '{print $1}')" = "$PATCH_SHA256"
+          git diff --cached --binary --full-index -- . ':(exclude).github/workflows/boot-test.yml' > /tmp/nonworkflow.patch
+          test "$(wc -c < /tmp/nonworkflow.patch)" -eq 123871
+          test "$(sha256sum /tmp/nonworkflow.patch | awk '{print $1}')" = "178b557b8aab6df7af01140f8708ada4b84760db043c969373114fd9ae630282"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "Milestone 23: mount read-only BoringFS over VirtIO"
+          git commit -m "Milestone 23: publish read-only BoringFS semantics"
           git push origin HEAD:agent/boringfs-readonly-mount
