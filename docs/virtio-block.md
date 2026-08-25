@@ -104,9 +104,9 @@ A single VirtIO request transfers at most eight 512-byte sectors. Larger M21 req
 
 `tests/virtio-block-qemu.sh` creates a fresh 2-MiB raw image containing deterministic non-zero sector patterns, builds the isolated `virtio-block` kernel test mode, and attaches the image explicitly as a modern-only `virtio-blk-pci` device.
 
-The kernel proves discovery, status/feature negotiation, queue/DMA setup, M21 registration, a known host-authored sector read, first/last sector reads, single-sector write/read-back, four-sector write/read-back, neighbor preservation, and M21 bounds rejection without queue submission.
+The kernel proves discovery, status/feature negotiation, queue/DMA setup, M21 registration, a known host-authored sector read, first/last sector reads, single-sector write/read-back, four-sector write/read-back, a twelve-sector M21 request that is split into 8+4-sector hardware requests, neighbor preservation, and M21 bounds rejection without queue submission.
 
-After the kernel success marker, QEMU is stopped and the host opens the same raw file directly. It verifies the exact bytes written by BoringKernel and independently verifies both neighboring sectors remain equal to their original deterministic pattern.
+After the kernel success marker, QEMU is stopped and the host opens the same raw file directly. It verifies the exact bytes written by BoringKernel, including the twelve-sector chunked write, and independently verifies both neighboring sectors remain equal to their original deterministic pattern.
 
 ## Non-goals
 
