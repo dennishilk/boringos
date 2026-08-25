@@ -58,7 +58,7 @@ make -C "${ROOT}" boringfs-fixture boringfsck
 make -C "${ROOT}" TEST_MODE=persistent-root
 
 start_vm first
-for line in 'BoringKernel 0.0.25-dev' '  mount-at-root: PASS' 'BoringFS root mounted.' 'boring-init: pid 1' 'boring-shell: pid 2' 'boring-shell ready.'; do
+for line in 'BoringKernel 0.0.26-dev' '  mount-at-root: PASS' 'BoringFS root mounted.' 'boring-init: pid 1' 'boring-shell: pid 2' 'boring-shell ready.'; do
     grep -Fqx "${line}" "${LOG}" || fail "missing root boot marker: ${line}"
 done
 send 'touch persistence.txt'
