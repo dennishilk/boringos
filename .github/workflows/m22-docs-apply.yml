@@ -1,0 +1,22 @@
+name: M22 docs apply
+on:
+  push:
+    branches: [agent/virtio-block]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/virtio-block
+      - run: python3 scripts/m22-docs-patch.py
+      - run: rm scripts/m22-docs-patch.py .github/workflows/m22-docs-apply.yml
+      - run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/roadmap.md docs/virtio-block.md scripts/m22-docs-patch.py .github/workflows/m22-docs-apply.yml
+          git commit -m "Reconcile roadmap for Milestone 22"
+          git push origin HEAD:agent/virtio-block
