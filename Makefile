@@ -28,6 +28,9 @@ SHELL_INIT_ELF := $(USER_BUILD_DIR)/boring-init-shell.elf
 SHELL_MAIN_OBJECT := $(USER_BUILD_DIR)/boring-shell/main.o
 SHELL_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(SHELL_MAIN_OBJECT)
 SHELL_ELF := $(USER_BUILD_DIR)/boring-shell.elf
+BORINGFETCH_MAIN_OBJECT := $(USER_BUILD_DIR)/boringfetch/main.o
+BORINGFETCH_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(BORINGFETCH_MAIN_OBJECT)
+BORINGFETCH_ELF := $(USER_BUILD_DIR)/boringfetch.elf
 ISO := $(BUILD_DIR)/boringos.iso
 MKBORINGFS := $(BUILD_DIR)/mkboringfs
 BORINGFSCK := $(BUILD_DIR)/boringfsck
@@ -176,6 +179,8 @@ INIT_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 	-T user/boring-init/linker.ld
 SHELL_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 	-T user/boring-shell/linker.ld
+BORINGFETCH_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
+	-T user/boringfetch/linker.ld
 
 KERNEL_C_SOURCES := \
 	kernel/core/entry.c \
@@ -196,6 +201,7 @@ KERNEL_C_SOURCES := \
 	kernel/core/syscall.c \
 	kernel/core/elf_boot.c \
 	kernel/core/elf_loader.c \
+	kernel/core/elf_vfs.c \
 	$(TEST_HARNESS_C) \
 	kernel/arch/x86_64/vmm.c \
 	kernel/arch/x86_64/mmio.c \
@@ -221,7 +227,7 @@ KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCE
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
 
-.PHONY: all kernel user-elf user-runtime user-console user-init user-shell elf-audit runtime-audit console-audit init-audit shell-audit shell-host-test boringfs-host-test boringfs-vfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test boringfs-fixture qemu-bundle run run-headless test clean distclean
+.PHONY: all kernel user-elf user-runtime user-console user-init user-shell user-boringfetch elf-audit runtime-audit console-audit init-audit shell-audit boringfetch-audit shell-host-test boringfs-host-test boringfs-vfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test boringfs-fixture qemu-bundle run run-headless test clean distclean
 
 all: $(ISO)
 
@@ -237,6 +243,8 @@ user-init: $(INIT_ELF)
 
 user-shell: $(SHELL_INIT_ELF) $(SHELL_ELF)
 
+user-boringfetch: $(BORINGFETCH_ELF)
+
 elf-audit: $(ELF_SMOKE)
 	sh ./tests/elf-build-audit.sh
 
@@ -251,6 +259,9 @@ init-audit: $(INIT_ELF)
 
 shell-audit: $(SHELL_ELF)
 	sh ./tests/shell-build-audit.sh
+
+boringfetch-audit: $(BORINGFETCH_ELF)
+	sh ./tests/boringfetch-build-audit.sh
 
 shell-host-test: $(SHELL_HOST_TEST)
 	$(SHELL_HOST_TEST)
@@ -274,9 +285,10 @@ boringfs-fixture: $(BORINGFS_FIXTURE)
 qemu-bundle:
 	$(MAKE) TEST_MODE=persistent-root
 	$(MAKE) boringfs-fixture
+	$(MAKE) user-boringfetch
 	mkdir -p $(BUILD_DIR)/boringos-qemu-x86_64
 	cp $(ISO) $(BUILD_DIR)/boringos-qemu-x86_64/boringos.iso
-	$(BORINGFS_FIXTURE) $(BUILD_DIR)/boringos-qemu-x86_64/boringos-root.img valid
+	$(BORINGFS_FIXTURE) $(BUILD_DIR)/boringos-qemu-x86_64/boringos-root.img valid $(BORINGFETCH_ELF)
 	cp scripts/run-boringos.sh $(BUILD_DIR)/boringos-qemu-x86_64/run-boringos.sh
 	cp docs/RUNNING.md $(BUILD_DIR)/boringos-qemu-x86_64/README.md
 	cd $(BUILD_DIR)/boringos-qemu-x86_64 && sha256sum boringos.iso boringos-root.img > SHA256SUMS
@@ -424,6 +436,14 @@ $(SHELL_MAIN_OBJECT): user/boring-shell/main.c \
 $(SHELL_ELF): $(SHELL_OBJECTS) user/boring-shell/linker.ld
 	@mkdir -p $(dir $@)
 	$(LD) $(SHELL_LDFLAGS) $(SHELL_OBJECTS) -o $@
+
+$(BORINGFETCH_MAIN_OBJECT): user/boringfetch/main.c user/runtime/include/boring/syscall.h user/runtime/include/boring/string.h kernel/include/boring/syscall_abi.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(BORINGFETCH_ELF): $(BORINGFETCH_OBJECTS) user/boringfetch/linker.ld
+	@mkdir -p $(dir $@)
+	$(LD) $(BORINGFETCH_LDFLAGS) $(BORINGFETCH_OBJECTS) -o $@
 
 $(LIMINE_ARCHIVE):
 	@mkdir -p $(dir $@)

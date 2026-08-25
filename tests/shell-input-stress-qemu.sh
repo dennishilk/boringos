@@ -88,13 +88,13 @@ send_bytewise() {
 
 emit_cycle() {
     printf '%s\n' \
-        'boringfetch' \
-        'boringfetch' \
+        'hostname' \
+        'hostname' \
         'cd TEST' \
         'cd ..' \
         'help' \
         'ls' \
-        'boringfetch'
+        'hostname'
 }
 
 check_exact_count() {
@@ -124,7 +124,7 @@ send_command 'mkdir TEST'
 # Character-by-character pacing.
 i=0
 while [ "${i}" -lt "${CYCLES_SLOW}" ]; do
-    for command in 'boringfetch' 'boringfetch' 'cd TEST' 'cd ..' 'help' 'ls' 'boringfetch'; do
+    for command in 'hostname' 'hostname' 'cd TEST' 'cd ..' 'help' 'ls' 'hostname'; do
         send_bytewise "${command}"
         wait_prompt $((PROMPT + 1))
     done
@@ -158,7 +158,7 @@ wait_prompt $((PROMPT + CYCLES_MIXED * COMMANDS_PER_CYCLE))
 # -> shell line buffer. Exact counts catch dropped, duplicated, substituted,
 # merged, or leaked escape bytes even when a mutated command happens to be
 # syntactically valid.
-check_exact_count 'boring@boringos:/$ boringfetch' $((TOTAL_CYCLES * 3))
+check_exact_count 'boring@boringos:/$ hostname' $((TOTAL_CYCLES * 3))
 check_exact_count 'boring@boringos:/$ cd TEST' "${TOTAL_CYCLES}"
 check_exact_count 'boring@boringos:/TEST$ cd ..' "${TOTAL_CYCLES}"
 check_exact_count 'boring@boringos:/$ help' "${TOTAL_CYCLES}"
@@ -168,7 +168,7 @@ check_exact_count 'boring@boringos:/$ ls' "${TOTAL_CYCLES}"
 # must be consumed as control input; no CSI/SS3 suffix byte may reach command
 # parsing. These cases run after the exact 1,400-command witness above so its
 # historical byte-count contract remains directly comparable.
-printf 'boringfeth\033[Dc\n' >&3
+printf 'hostnae\033[Dm\n' >&3
 wait_prompt $((PROMPT + 1))
 printf 'hlp\033[H\033[Ce\n' >&3
 wait_prompt $((PROMPT + 1))
@@ -180,7 +180,7 @@ printf 'echo history-key\n\033[A\n' >&3
 wait_prompt $((PROMPT + 2))
 printf 'echo draft-key\033[A\033[B\n' >&3
 wait_prompt $((PROMPT + 1))
-printf 'boringf\t\n' >&3
+printf 'hostn\t\n' >&3
 wait_prompt $((PROMPT + 1))
 printf 'cd TE\t\n' >&3
 wait_prompt $((PROMPT + 1))

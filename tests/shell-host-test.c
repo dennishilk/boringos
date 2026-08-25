@@ -18,7 +18,8 @@ static const struct mock_dirent mock_dirents[] = {
     { ".", "TEAM", BORING_DIRENT_TYPE_DIRECTORY },
     { ".", "README.txt", BORING_DIRENT_TYPE_REGULAR },
     { ".", "alpha-one", BORING_DIRENT_TYPE_REGULAR },
-    { ".", "alpha-two", BORING_DIRENT_TYPE_REGULAR }
+    { ".", "alpha-two", BORING_DIRENT_TYPE_REGULAR },
+    { "/bin", "boringfetch", BORING_DIRENT_TYPE_REGULAR }
 };
 
 static const char *mock_input;
@@ -30,6 +31,10 @@ static char mock_written_path[BORING_SHELL_LINE_MAX + 1U];
 static unsigned char mock_written_bytes[BORING_SHELL_LINE_MAX + 1U];
 static size_t mock_written_length;
 static bool mock_timer_enabled;
+static char mock_launch_path[BORING_SYSCALL_EXEC_PATH_MAX + 1U];
+static char mock_launch_argv[BORING_SYSCALL_ARG_MAX][BORING_SHELL_LINE_MAX + 1U];
+static size_t mock_launch_argc;
+static uint64_t mock_wait_pid;
 
 static void test_fail(const char *message) {
     (void)fprintf(stderr, "shell host test failed: %s\n", message);
@@ -186,6 +191,42 @@ long boring_fs_unlink(const char *path, size_t length) {
     return 0L;
 }
 
+long boring_launch_argv(const char *path,
+                        size_t path_length,
+                        const char *const argv[],
+                        size_t argc) {
+    size_t index;
+
+    if ((path == NULL) || (argv == NULL) ||
+        (path_length >= sizeof(mock_launch_path)) ||
+        (strlen(path) != path_length) ||
+        (argc == 0U) || (argc > (size_t)BORING_SYSCALL_ARG_MAX)) {
+        return -(long)BORING_SYSCALL_EINVAL;
+    }
+    (void)memcpy(mock_launch_path, path, path_length + 1U);
+    mock_launch_argc = argc;
+    for (index = 0U; index < argc; ++index) {
+        const size_t length = (argv[index] != NULL) ?
+            strlen(argv[index]) : sizeof(mock_launch_argv[index]);
+
+        if ((argv[index] == NULL) ||
+            (length >= sizeof(mock_launch_argv[index]))) {
+            return -(long)BORING_SYSCALL_EINVAL;
+        }
+        (void)memcpy(mock_launch_argv[index], argv[index], length + 1U);
+    }
+    return 3L;
+}
+
+long boring_waitpid(uint64_t pid, int *status) {
+    if ((pid != 3ULL) || (status == NULL)) {
+        return -(long)BORING_SYSCALL_EINVAL;
+    }
+    mock_wait_pid = pid;
+    *status = 0;
+    return 3L;
+}
+
 long boring_system_info(struct boring_system_info *info) {
     if (info == NULL) {
         return -(long)BORING_SYSCALL_EFAULT;
@@ -196,7 +237,7 @@ long boring_system_info(struct boring_system_info *info) {
     (void)strcpy(info->username, "boring");
     (void)strcpy(info->os_name, "BoringOS");
     (void)strcpy(info->kernel_name, "BoringKernel");
-    (void)strcpy(info->kernel_version, "0.0.28-dev");
+    (void)strcpy(info->kernel_version, "0.0.29-dev");
     (void)strcpy(info->arch, "x86_64");
     (void)strcpy(info->root_fs, "RAMFS");
     (void)strcpy(info->root_device, "memory");
@@ -235,8 +276,8 @@ int main(void) {
     size_t index;
     char write_line[] = "write note.txt exact-text";
     char write_no_newline[] = "write -n raw.txt exact-bytes";
-    char fetch_without_timer[] = "boringfetch";
-    char fetch_with_timer[] = "boringfetch";
+    char external_fetch[] = "boringfetch";
+    char external_fetch_arg[] = "boringfetch extra";
 
     shell_history_reset();
     expect_line("plain text\n", sizeof(shell_history_draft), "plain text",
@@ -326,25 +367,34 @@ int main(void) {
     test_require(strcmp(mock_output, "rm: is a directory\r\n") == 0,
                  "central EISDIR user-facing mapping");
 
-    mock_timer_enabled = false;
-    mock_output_length = 0U;
-    mock_output[0] = '\0';
-    test_require(shell_execute_line(fetch_without_timer),
-                 "boringfetch without timer execution");
-    test_require(strstr(mock_output, "Memory: 8 MiB / 128 MiB\r\n") != NULL,
-                 "boringfetch real used/usable memory");
-    test_require(strstr(mock_output, "Free memory: 120 MiB\r\n") != NULL,
-                 "boringfetch real free memory");
-    test_require(strstr(mock_output, "Uptime:") == NULL,
-                 "boringfetch omits unavailable uptime");
+    mock_launch_path[0] = '\0';
+    mock_launch_argc = 0U;
+    mock_wait_pid = 0ULL;
+    test_require(shell_execute_line(external_fetch),
+                 "external boringfetch execution");
+    test_require(strcmp(mock_launch_path, "/bin/boringfetch") == 0,
+                 "external command resolves fixed /bin path");
+    test_require(mock_launch_argc == 1U,
+                 "external command argc");
+    test_require(strcmp(mock_launch_argv[0], "boringfetch") == 0,
+                 "external command argv0");
+    test_require(mock_wait_pid == 3ULL,
+                 "external command waitpid");
 
-    mock_timer_enabled = true;
-    mock_output_length = 0U;
-    mock_output[0] = '\0';
-    test_require(shell_execute_line(fetch_with_timer),
-                 "boringfetch with timer execution");
-    test_require(strstr(mock_output, "Uptime: 12 s\r\n") != NULL,
-                 "boringfetch derives uptime from real tick frequency");
+    mock_launch_path[0] = '\0';
+    mock_launch_argc = 0U;
+    mock_wait_pid = 0ULL;
+    test_require(shell_execute_line(external_fetch_arg),
+                 "external boringfetch argv execution");
+    test_require(strcmp(mock_launch_path, "/bin/boringfetch") == 0,
+                 "external argv command resolves /bin path");
+    test_require(mock_launch_argc == 2U,
+                 "external argv argc");
+    test_require(strcmp(mock_launch_argv[0], "boringfetch") == 0 &&
+                 strcmp(mock_launch_argv[1], "extra") == 0,
+                 "external argv content");
+    test_require(mock_wait_pid == 3ULL,
+                 "external argv waitpid");
 
     (void)puts("BoringOS shell host editor/completion tests passed.");
     return 0;

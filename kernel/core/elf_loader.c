@@ -71,27 +71,59 @@ static void byte_copy(void *destination, const void *source, size_t length) {
     }
 }
 
-static bool range_inside(size_t total, uint64_t offset, uint64_t length) {
+static bool range_inside(uint64_t total, uint64_t offset, uint64_t length) {
     uint64_t end;
 
-    if ((offset > (uint64_t)total) || (length > UINT64_MAX - offset)) {
+    if ((offset > total) || (length > UINT64_MAX - offset)) {
         return false;
     }
     end = offset + length;
-    return end <= (uint64_t)total;
+    return end <= total;
 }
 
-static bool read_object(const uint8_t *bytes,
-                        size_t size,
+static bool source_read_exact(const struct boring_elf_source *source,
+                              uint64_t offset,
+                              void *buffer,
+                              size_t length) {
+    return (source != NULL) && (source->read != NULL) &&
+           (buffer != NULL) &&
+           range_inside(source->size, offset, (uint64_t)length) &&
+           source->read(source->context, offset, buffer, length);
+}
+
+static bool read_object(const struct boring_elf_source *source,
                         uint64_t offset,
                         void *object,
                         size_t object_size) {
-    if ((bytes == NULL) || (object == NULL) ||
-        !range_inside(size, offset, (uint64_t)object_size)) {
+    return source_read_exact(source, offset, object, object_size);
+}
+
+static bool memory_source_read(void *context,
+                               uint64_t offset,
+                               void *buffer,
+                               size_t length) {
+    const struct boring_elf_memory_source *memory =
+        (const struct boring_elf_memory_source *)context;
+
+    if ((memory == NULL) || (memory->bytes == NULL) || (buffer == NULL) ||
+        !range_inside(memory->source.size, offset, (uint64_t)length)) {
         return false;
     }
+    byte_copy(buffer, &memory->bytes[(size_t)offset], length);
+    return true;
+}
 
-    byte_copy(object, &bytes[(size_t)offset], object_size);
+bool boring_elf_memory_source_init(struct boring_elf_memory_source *memory,
+                                   const uint8_t *bytes,
+                                   size_t size) {
+    if ((memory == NULL) || (bytes == NULL) || (size == 0U) ||
+        (size > (size_t)BORING_ELF_MODULE_MAX_SIZE)) {
+        return false;
+    }
+    memory->source.size = (uint64_t)size;
+    memory->source.read = memory_source_read;
+    memory->source.context = memory;
+    memory->bytes = bytes;
     return true;
 }
 
@@ -227,8 +259,7 @@ static void image_clear(struct boring_elf_image *image) {
     }
 }
 
-bool boring_elf_validate(const uint8_t *module_bytes,
-                         size_t module_size,
+bool boring_elf_validate_source(const struct boring_elf_source *source,
                          uintptr_t stack_base,
                          size_t stack_size,
                          struct boring_elf_validation *validation) {
@@ -240,15 +271,15 @@ bool boring_elf_validate(const uint8_t *module_bytes,
     bool entry_ok = false;
 
     validation_clear(validation);
-    if ((module_bytes == NULL) || (validation == NULL) ||
-        (module_size < (size_t)ELF64_EHDR_SIZE) ||
-        (module_size > (size_t)BORING_ELF_MODULE_MAX_SIZE) ||
+    if ((source == NULL) || (source->read == NULL) ||
+        (validation == NULL) ||
+        (source->size < (uint64_t)ELF64_EHDR_SIZE) ||
+        (source->size > (uint64_t)BORING_ELF_MODULE_MAX_SIZE) ||
         ((stack_base & (uintptr_t)(BORING_ELF_PAGE_SIZE - 1ULL)) != 0U) ||
         (stack_size == 0U) ||
         (((uint64_t)stack_size & (BORING_ELF_PAGE_SIZE - 1ULL)) != 0ULL) ||
         !ring3_user_range_valid(stack_base, stack_size) ||
-        !read_object(module_bytes, module_size, 0ULL,
-                     &header, sizeof(header))) {
+        !read_object(source, 0ULL, &header, sizeof(header))) {
         return false;
     }
 
@@ -268,7 +299,7 @@ bool boring_elf_validate(const uint8_t *module_bytes,
         !mul_u64((uint64_t)header.phnum, (uint64_t)header.phentsize,
                  &program_table_bytes) ||
         !add_u64(header.phoff, program_table_bytes, &program_table_end) ||
-        (program_table_end > (uint64_t)module_size) ||
+        (program_table_end > source->size) ||
         !add_u64((uint64_t)stack_base, (uint64_t)stack_size, &stack_end)) {
         return false;
     }
@@ -287,8 +318,8 @@ bool boring_elf_validate(const uint8_t *module_bytes,
         if (!mul_u64((uint64_t)index, (uint64_t)header.phentsize,
                      &phdr_offset) ||
             !add_u64(header.phoff, phdr_offset, &phdr_offset) ||
-            !read_object(module_bytes, module_size, phdr_offset,
-                         &program_header, sizeof(program_header))) {
+            !read_object(source, phdr_offset, &program_header,
+                         sizeof(program_header))) {
             return false;
         }
 
@@ -315,7 +346,7 @@ bool boring_elf_validate(const uint8_t *module_bytes,
             ((program_header.offset & (BORING_ELF_PAGE_SIZE - 1ULL)) != 0ULL) ||
             ((program_header.vaddr % program_header.align) !=
              (program_header.offset % program_header.align)) ||
-            !range_inside(module_size, program_header.offset,
+            !range_inside(source->size, program_header.offset,
                           program_header.filesz) ||
             !add_u64(program_header.vaddr, program_header.memsz,
                      &memory_end) ||
@@ -374,6 +405,18 @@ bool boring_elf_validate(const uint8_t *module_bytes,
 
     return (validation->load_segment_count != 0U) && entry_ok &&
            ring3_user_range_valid((uintptr_t)header.entry, 1U);
+}
+
+bool boring_elf_validate(const uint8_t *module_bytes,
+                         size_t module_size,
+                         uintptr_t stack_base,
+                         size_t stack_size,
+                         struct boring_elf_validation *validation) {
+    struct boring_elf_memory_source memory;
+
+    return boring_elf_memory_source_init(&memory, module_bytes, module_size) &&
+           boring_elf_validate_source(&memory.source, stack_base, stack_size,
+                                      validation);
 }
 
 static bool add_owned_page(struct boring_elf_image *image,
@@ -466,9 +509,8 @@ static bool map_owned_page(struct boring_elf_image *image,
         writable, executable);
 }
 
-bool boring_elf_load(struct process *process,
-                     const uint8_t *module_bytes,
-                     size_t module_size,
+bool boring_elf_load_source(struct process *process,
+                            const struct boring_elf_source *source,
                      uintptr_t stack_base,
                      size_t stack_size,
                      struct boring_elf_image *image) {
@@ -481,8 +523,8 @@ bool boring_elf_load(struct process *process,
         (process_current() == process) ||
         (stack_size != (size_t)(BORING_ELF_STACK_PAGES *
                                 BORING_ELF_PAGE_SIZE)) ||
-        !boring_elf_validate(module_bytes, module_size, stack_base, stack_size,
-                             &validation)) {
+        !boring_elf_validate_source(source, stack_base, stack_size,
+                                    &validation)) {
         return false;
     }
 
@@ -491,7 +533,7 @@ bool boring_elf_load(struct process *process,
     image->entry = validation.entry;
     image->stack_base = stack_base;
     image->stack_top = stack_base + (uintptr_t)stack_size;
-    image->module_size = (uint64_t)module_size;
+    image->module_size = source->size;
     image->program_header_count = validation.program_header_count;
     image->load_segment_count = validation.load_segment_count;
     for (segment_index = 0U;
@@ -527,10 +569,12 @@ bool boring_elf_load(struct process *process,
             if (remaining_file != 0ULL) {
                 copy_length = (remaining_file > BORING_ELF_PAGE_SIZE) ?
                     (size_t)BORING_ELF_PAGE_SIZE : (size_t)remaining_file;
-                byte_copy(kernel_page,
-                          &module_bytes[(size_t)(segment->file_offset +
-                                                 page_delta)],
-                          copy_length);
+                if (!source_read_exact(source,
+                                       segment->file_offset + page_delta,
+                                       kernel_page, copy_length)) {
+                    (void)boring_elf_unload(image);
+                    return false;
+                }
                 remaining_file -= (uint64_t)copy_length;
             }
         }
@@ -559,4 +603,18 @@ bool boring_elf_load(struct process *process,
     }
 
     return true;
+}
+
+
+bool boring_elf_load(struct process *process,
+                     const uint8_t *module_bytes,
+                     size_t module_size,
+                     uintptr_t stack_base,
+                     size_t stack_size,
+                     struct boring_elf_image *image) {
+    struct boring_elf_memory_source memory;
+
+    return boring_elf_memory_source_init(&memory, module_bytes, module_size) &&
+           boring_elf_load_source(process, &memory.source, stack_base,
+                                  stack_size, image);
 }

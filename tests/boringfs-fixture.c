@@ -18,6 +18,8 @@
 #define WELCOME_BLOCK 12U
 #define VERSION_BLOCK 13U
 #define ARCH_BLOCK1 14U
+#define BIN_BLOCK 15U
+#define BORINGFETCH_BLOCK0 16U
 #define ARCH_SIZE 4200U
 
 static const char readme_text[] = "Welcome to BoringOS.\n";
@@ -160,11 +162,37 @@ static bool write_dirent(uint8_t *volume,
         &volume[offset], (size_t)BORINGFS_DIRECTORY_RECORD_SIZE, &record);
 }
 
-static bool build_valid(uint8_t *volume, size_t volume_size) {
+static bool build_valid(uint8_t *volume, size_t volume_size,
+                        const uint8_t *program_bytes,
+                        size_t program_size) {
     struct boringfs_superblock superblock;
     struct boringfs_extent extent[2];
     uint32_t block;
+    uint32_t program_blocks = 0U;
     size_t index;
+    const bool have_program = (program_bytes != NULL);
+
+    if (have_program) {
+        const size_t maximum_program_size =
+            ((size_t)FIXTURE_BLOCKS - (size_t)BORINGFETCH_BLOCK0) *
+            (size_t)BORINGFS_BLOCK_SIZE;
+        size_t blocks;
+
+        if ((program_size == 0U) ||
+            (program_size > maximum_program_size)) {
+            return false;
+        }
+        blocks = (program_size + (size_t)BORINGFS_BLOCK_SIZE - 1U) /
+                 (size_t)BORINGFS_BLOCK_SIZE;
+        if ((blocks == 0U) || (blocks > (size_t)UINT32_MAX) ||
+            ((size_t)BORINGFETCH_BLOCK0 + blocks >
+             (size_t)FIXTURE_BLOCKS)) {
+            return false;
+        }
+        program_blocks = (uint32_t)blocks;
+    } else if (program_size != 0U) {
+        return false;
+    }
 
     if (volume_size != (size_t)FIXTURE_BLOCKS *
                        (size_t)BORINGFS_BLOCK_SIZE) {
@@ -185,12 +213,20 @@ static bool build_valid(uint8_t *volume, size_t volume_size) {
     for (block = ROOT_BLOCK; block <= ARCH_BLOCK1; ++block) {
         bitmap_set(volume, block, true);
     }
+    if (have_program) {
+        bitmap_set(volume, BIN_BLOCK, true);
+        for (block = BORINGFETCH_BLOCK0;
+             block < BORINGFETCH_BLOCK0 + program_blocks; ++block) {
+            bitmap_set(volume, block, true);
+        }
+    }
 
     extent[0].start_block = ROOT_BLOCK;
     extent[0].block_count = 1U;
     if (!make_object(volume, volume_size, &superblock, 1U, 1U,
                      BORINGFS_TYPE_DIRECTORY,
-                     4ULL * (uint64_t)BORINGFS_DIRECTORY_RECORD_SIZE,
+                     (have_program ? 5ULL : 4ULL) *
+                         (uint64_t)BORINGFS_DIRECTORY_RECORD_SIZE,
                      extent, 1U)) {
         return false;
     }
@@ -254,6 +290,23 @@ static bool build_valid(uint8_t *volume, size_t volume_size) {
                      extent, 1U)) {
         return false;
     }
+    if (have_program) {
+        extent[0].start_block = BIN_BLOCK;
+        extent[0].block_count = 1U;
+        if (!make_object(volume, volume_size, &superblock, 11U, 1U,
+                         BORINGFS_TYPE_DIRECTORY,
+                         (uint64_t)BORINGFS_DIRECTORY_RECORD_SIZE,
+                         extent, 1U)) {
+            return false;
+        }
+        extent[0].start_block = BORINGFETCH_BLOCK0;
+        extent[0].block_count = program_blocks;
+        if (!make_object(volume, volume_size, &superblock, 12U, 11U,
+                         BORINGFS_TYPE_REGULAR,
+                         (uint64_t)program_size, extent, 1U)) {
+            return false;
+        }
+    }
 
     if (!write_dirent(volume, volume_size, ROOT_BLOCK, 0ULL, 2U,
                       BORINGFS_TYPE_REGULAR, "README.txt") ||
@@ -275,6 +328,13 @@ static bool build_valid(uint8_t *volume, size_t volume_size) {
                       BORINGFS_TYPE_REGULAR, "version.txt")) {
         return false;
     }
+    if (have_program &&
+        (!write_dirent(volume, volume_size, ROOT_BLOCK, 4ULL, 11U,
+                       BORINGFS_TYPE_DIRECTORY, "bin") ||
+         !write_dirent(volume, volume_size, BIN_BLOCK, 0ULL, 12U,
+                       BORINGFS_TYPE_REGULAR, "boringfetch"))) {
+        return false;
+    }
 
     (void)memcpy(&volume[(size_t)README_BLOCK * BORINGFS_BLOCK_SIZE],
                  readme_text, sizeof(readme_text) - 1U);
@@ -284,6 +344,11 @@ static bool build_valid(uint8_t *volume, size_t volume_size) {
                  welcome_text, sizeof(welcome_text) - 1U);
     (void)memcpy(&volume[(size_t)VERSION_BLOCK * BORINGFS_BLOCK_SIZE],
                  version_text, sizeof(version_text) - 1U);
+    if (have_program) {
+        (void)memcpy(
+            &volume[(size_t)BORINGFETCH_BLOCK0 * BORINGFS_BLOCK_SIZE],
+            program_bytes, program_size);
+    }
     for (index = 0U; index < ARCH_SIZE; ++index) {
         const uint32_t block_number = (index < BORINGFS_BLOCK_SIZE) ?
             ARCH_BLOCK0 : ARCH_BLOCK1;
@@ -366,6 +431,41 @@ static enum boringfs_validation_result validate_fixture(
     return boringfs_validate_volume(volume, volume_size, &workspace, &error);
 }
 
+static bool read_program(const char *path,
+                     uint8_t **bytes_out,
+                     size_t *size_out) {
+    const size_t capacity =
+        ((size_t)FIXTURE_BLOCKS - (size_t)BORINGFETCH_BLOCK0) *
+        (size_t)BORINGFS_BLOCK_SIZE;
+    FILE *file;
+    uint8_t *bytes;
+    size_t size;
+
+    if ((path == NULL) || (bytes_out == NULL) || (size_out == NULL)) {
+        return false;
+    }
+    *bytes_out = NULL;
+    *size_out = 0U;
+    file = fopen(path, "rb");
+    if (file == NULL) {
+        return false;
+    }
+    bytes = (uint8_t *)malloc(capacity + 1U);
+    if (bytes == NULL) {
+        (void)fclose(file);
+        return false;
+    }
+    size = fread(bytes, 1U, capacity + 1U, file);
+    if (ferror(file) || (fclose(file) != 0) ||
+        (size == 0U) || (size > capacity)) {
+        free(bytes);
+        return false;
+    }
+    *bytes_out = bytes;
+    *size_out = size;
+    return true;
+}
+
 static int write_image(const char *path, const uint8_t *volume, size_t size) {
     FILE *file = fopen(path, "wb");
 
@@ -384,17 +484,24 @@ int main(int argc, char **argv) {
     const size_t volume_size =
         (size_t)FIXTURE_BLOCKS * (size_t)BORINGFS_BLOCK_SIZE;
     uint8_t *volume;
+    uint8_t *program_bytes = NULL;
+    size_t program_size = 0U;
     enum boringfs_validation_result result;
     const char *kind;
     int status;
 
-    if (argc != 3) {
+    if ((argc != 3) && (argc != 4)) {
         (void)fprintf(stderr,
-                      "usage: %s <output> <valid|bad-magic|bad-geometry|bad-bitmap|bad-object|bad-extent|bad-directory>\n",
+                      "usage: %s <output> <valid|bad-magic|bad-geometry|bad-bitmap|bad-object|bad-extent|bad-directory> [program-elf]\n",
                       argv[0]);
         return 2;
     }
     kind = argv[2];
+    if ((argc == 4) && (strcmp(kind, "valid") != 0)) {
+        (void)fputs("program ELF is supported only for valid fixtures\n",
+                    stderr);
+        return 2;
+    }
     if ((strcmp(kind, "valid") != 0) &&
         (strcmp(kind, "bad-magic") != 0) &&
         (strcmp(kind, "bad-geometry") != 0) &&
@@ -406,12 +513,21 @@ int main(int argc, char **argv) {
         return 2;
     }
 
+    if ((argc == 4) &&
+        !read_program(argv[3], &program_bytes, &program_size)) {
+        (void)fprintf(stderr, "cannot read bounded program ELF: %s\n",
+                      argv[3]);
+        return 2;
+    }
     volume = (uint8_t *)malloc(volume_size);
-    if ((volume == NULL) || !build_valid(volume, volume_size)) {
+    if ((volume == NULL) ||
+        !build_valid(volume, volume_size, program_bytes, program_size)) {
+        free(program_bytes);
         free(volume);
         (void)fputs("fixture construction failed\n", stderr);
         return 2;
     }
+    free(program_bytes);
     if (strcmp(kind, "valid") != 0) {
         corrupt(volume, kind);
     }

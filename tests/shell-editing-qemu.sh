@@ -77,10 +77,10 @@ send() {
 }
 
 # Insert the missing 'c' before the final h using Left Arrow.
-printf 'boringfeth\033[Dc\n' >&3
+printf 'hostnae\033[Dm\n' >&3
 wait_prompt $((PROMPT + 1))
-grep -Fqx '    ____             BoringOS' "${LOG}" ||
-    fail 'left-arrow insertion did not execute boringfetch'
+grep -Fqx 'boringos' "${LOG}" ||
+    fail 'left-arrow insertion did not execute hostname'
 
 # Delete the extra X using Left Arrow + Delete (CSI 3~).
 printf 'helpX\033[D\033[3~\n' >&3
@@ -127,10 +127,10 @@ send 'touch alpha-one'
 send 'write alpha-one common-prefix-file'
 send 'touch alpha-two'
 
-printf 'boringf\t\n' >&3
+printf 'hostn\t\n' >&3
 wait_prompt $((PROMPT + 1))
-grep -Fqx '    ____             BoringOS' "${LOG}" ||
-    fail 'boringf TAB did not execute boringfetch'
+grep -Fqx 'boringos' "${LOG}" ||
+    fail 'hostn TAB did not execute hostname'
 
 printf 'cd TES\t\n' >&3
 wait_prompt $((PROMPT + 1))

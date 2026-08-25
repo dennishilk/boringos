@@ -21,6 +21,9 @@ jobs:
       - name: Audit generated ELF userspace artifact
         run: sh ./tests/elf-build-audit.sh
 
+      - name: Standalone boringfetch build audit
+        run: sh ./tests/boringfetch-build-audit.sh
+
       - name: Audit generated native C runtime artifact
         run: sh ./tests/runtime-build-audit.sh
 
