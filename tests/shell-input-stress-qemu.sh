@@ -44,7 +44,8 @@ fail() {
 }
 
 prompt_count() {
-    (grep -Ec '^boring@boringos:/[^$]*\$ ' "${LOG}" 2>/dev/null || true)
+    count=$(grep -Ec '^boring@boringos:/[^$]*\$ ' "${LOG}" 2>/dev/null || true)
+    printf '%s\n' "${count:-0}"
 }
 
 failure_seen() {

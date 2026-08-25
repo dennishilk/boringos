@@ -569,8 +569,9 @@ Implemented shell behavior includes:
   `boringfetch`;
 - line-oriented `write <path> <text>` with one trailing newline by default,
   and exact no-newline bytes through `write -n`;
-- Boringfetch v2 fields for real hostname, user, root metadata, PMM memory,
-  live process count/current PID and real PIT-derived uptime.
+- Boringfetch v2 fields for real hostname, user, root metadata, PMM memory and
+  live process count/current PID; PIT-derived uptime is shown only when the
+  active boot mode supplies initialized timer statistics.
 
 `EXIT` now terminates the launched shell, unloads its ELF mappings and leaves
 a non-runnable zombie with a preserved status. PID 1 resumes, uses `WAITPID`

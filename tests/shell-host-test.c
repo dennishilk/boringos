@@ -29,6 +29,7 @@ static size_t mock_output_length;
 static char mock_written_path[BORING_SHELL_LINE_MAX + 1U];
 static unsigned char mock_written_bytes[BORING_SHELL_LINE_MAX + 1U];
 static size_t mock_written_length;
+static bool mock_timer_enabled;
 
 static void test_fail(const char *message) {
     (void)fprintf(stderr, "shell host test failed: %s\n", message);
@@ -199,6 +200,14 @@ long boring_system_info(struct boring_system_info *info) {
     (void)strcpy(info->arch, "x86_64");
     (void)strcpy(info->root_fs, "RAMFS");
     (void)strcpy(info->root_device, "memory");
+    info->usable_memory_bytes = 128ULL * BORING_SHELL_MIB;
+    info->free_memory_bytes = 120ULL * BORING_SHELL_MIB;
+    info->process_count = 2U;
+    info->current_pid = 2ULL;
+    if (mock_timer_enabled) {
+        info->uptime_ticks = 1234ULL;
+        info->timer_frequency_millihz = 100000U;
+    }
     return 0L;
 }
 
@@ -226,6 +235,8 @@ int main(void) {
     size_t index;
     char write_line[] = "write note.txt exact-text";
     char write_no_newline[] = "write -n raw.txt exact-bytes";
+    char fetch_without_timer[] = "boringfetch";
+    char fetch_with_timer[] = "boringfetch";
 
     shell_history_reset();
     expect_line("plain text\n", sizeof(shell_history_draft), "plain text",
@@ -314,6 +325,26 @@ int main(void) {
                  "EISDIR mapping execution");
     test_require(strcmp(mock_output, "rm: is a directory\r\n") == 0,
                  "central EISDIR user-facing mapping");
+
+    mock_timer_enabled = false;
+    mock_output_length = 0U;
+    mock_output[0] = '\0';
+    test_require(shell_execute_line(fetch_without_timer),
+                 "boringfetch without timer execution");
+    test_require(strstr(mock_output, "Memory: 8 MiB / 128 MiB\r\n") != NULL,
+                 "boringfetch real used/usable memory");
+    test_require(strstr(mock_output, "Free memory: 120 MiB\r\n") != NULL,
+                 "boringfetch real free memory");
+    test_require(strstr(mock_output, "Uptime:") == NULL,
+                 "boringfetch omits unavailable uptime");
+
+    mock_timer_enabled = true;
+    mock_output_length = 0U;
+    mock_output[0] = '\0';
+    test_require(shell_execute_line(fetch_with_timer),
+                 "boringfetch with timer execution");
+    test_require(strstr(mock_output, "Uptime: 12 s\r\n") != NULL,
+                 "boringfetch derives uptime from real tick frequency");
 
     (void)puts("BoringOS shell host editor/completion tests passed.");
     return 0;

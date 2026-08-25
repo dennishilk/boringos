@@ -29,7 +29,10 @@ stop_vm() {
 cleanup() { stop_vm; rm -rf "${TMPDIR_PATH}"; }
 trap cleanup EXIT INT TERM
 fail() { echo "$1" >&2; cat "${LOG}" >&2 2>/dev/null || true; cat "${QEMU_LOG}" >&2 2>/dev/null || true; exit 1; }
-prompt_count() { (grep -Ec '^boring@boringos:/[^$]*\$ ' "${LOG}" 2>/dev/null || true); }
+prompt_count() {
+    count=$(grep -Ec '^boring@boringos:/[^$]*\$ ' "${LOG}" 2>/dev/null || true)
+    printf '%s\n' "${count:-0}"
+}
 wait_prompt() {
     target=$1; attempt=0
     while [ "${attempt}" -lt 400 ]; do
@@ -114,6 +117,9 @@ for line in '    ____             BoringOS' '  / __  / __ \/ ___/ OS: BoringOS' 
 done
 grep -Eq '^                     Memory: [0-9]+ MiB / [1-9][0-9]* MiB$' "${LOG}" || fail 'memory is not real'
 grep -Eq '^                     Free memory: [0-9]+ MiB$' "${LOG}" || fail 'free memory is not real'
-grep -Eq '^                     Uptime: [0-9]+ s$' "${LOG}" || fail 'uptime is not real'
+if grep -Eq '^                     Uptime:' "${LOG}" &&
+   ! grep -Eq '^                     Uptime: [0-9]+ s$' "${LOG}"; then
+    fail 'reported uptime is not derived from real timer data'
+fi
 stop_vm
 echo 'Persistent BoringFS root reboot verification passed.'
