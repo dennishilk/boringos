@@ -16,16 +16,94 @@ jobs:
         with:
           ref: agent/boringfs-readonly-mount
           fetch-depth: 0
-      - name: Apply exact M23 implementation
+      - name: Reconstruct and apply exact M23 semantic patch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: 805ebe1d8c13ca2bea197154dfd0a17a409edbc8
+          PATCH_SHA256: 0650fd75dfa9cb1f7052a100fa87a9ab52b726f9915a186eb298dc14c0274369
+          PATCH_SIZE: '124427'
         run: |
-          python3 -c 'import base64,json,os,urllib.request; sha="36c6f940d8ce8e6edf2ea5256bc96c6c84cada85"; req=urllib.request.Request("https://api.github.com/repos/dennishilk/boringos/git/blobs/"+sha,headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],"Accept":"application/vnd.github+json"}); data=json.load(urllib.request.urlopen(req)); open("/tmp/m23.tar.xz","wb").write(base64.b64decode(data["content"]))'
-          tar -xJf /tmp/m23.tar.xz -C .
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          python3 <<'PY'
+          import base64, hashlib, json, os, urllib.request
+
+          blobs = [
+              "320c0d3b215dbe2188052ae126da4afc425c9f30",
+              "c4e79b7b90de7dd2f80fd37f4a521d9747c915ca",
+              "f9ff5be7fef7df2402304fb1e9f384dbf2689b51",
+              "3efe69ebdfaa43b679266ffddb32d8dd1d0a599d",
+              "baa20e6fe2a0618322680522e0561a67caf6375a",
+              "b2d3d48a1a6934a83ca5e59235852dfe0ddcc751",
+              "28e15e4cb313a5aa429912915d17b3426eae577f",
+              "3b2211389227faf2e379d4b27bbb18c5653770e0",
+              "902bb2d43bc76e9485ceef594296d92a49e3098e",
+              "e07ef69773c59d73446da1b7ed3e322bebf2311f",
+              "e404c9d1b1331b668309936ce1d84280571a1ae1",
+              "4f5954afc15504c365b81af78737e61e282edfcd",
+              "a4043177866b37f66cdddfc8da9d31aa2ef98211",
+              "1686a2fde66d4a54637ca2aa3b691310b857374e",
+              "ba9555c0072b540498c1b82278c91097309647b4",
+              "d1d32f7bdcb72fcf31fe8bbc6d4c4280459e9baa",
+              "8cbb7f8e49e2963a16104d618de9bf12af2c7616",
+              "ec67067740085339b6604565f2c5f0d0465fe056",
+              "721e3679dedc3c737eb387340fb21c3615c1972e",
+              "3673d8e6309272cdbdb7dd0d09e24ea7231cf321",
+              "c12deff122a1a9a785e3688a15b78cf9980d8dac",
+              "a9e4708e789a9430a9a0165e901fefc36664b4d1",
+              "d9607e710bbd94d523d9eccce18e001ba57b4b7c",
+              "22ed9483a3c542ae612bfca024508818eb32b2d4",
+              "ca5ffeed7e7d8c16248e9cd409252962bf8a3908",
+              "56f3a29806d43a7ae14222115c06fd117d485bff",
+              "45d8fa733c1e0b6259588497bed22dbbb7be07da",
+              "7e847c3ce3afb4330f0a19f76eb97b99f7dd8287",
+              "50991c241ac54c3fbe9c7cddf8f5adb94a970b50",
+              "1abb129ac72c8a6a5e6b178f1b9f30fb628bde94",
+              "c24f6e764f8c4e5f145d2b23c1be5bb07db9698c",
+              "a97a634520db7fed255d9dacc0d230fd38b7b55a",
+              "5a857d3ba8c8dc8f29360ecced019277b4566401",
+              "ce47730d4a4c41cb79bb87d15b24e34c2698415e",
+          ]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+          out = bytearray()
+          for sha in blobs:
+              req = urllib.request.Request(
+                  f"https://api.github.com/repos/{repo}/git/blobs/{sha}",
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(req) as response:
+                  data = json.load(response)
+              chunk = base64.b64decode(data["content"])
+              git_blob = hashlib.sha1(b"blob " + str(len(chunk)).encode() + b"\0" + chunk).hexdigest()
+              if git_blob != sha:
+                  raise SystemExit(f"blob integrity failure: expected {sha}, got {git_blob}")
+              out.extend(chunk)
+          expected_size = int(os.environ["PATCH_SIZE"])
+          expected_sha = os.environ["PATCH_SHA256"]
+          actual_sha = hashlib.sha256(out).hexdigest()
+          if len(out) != expected_size:
+              raise SystemExit(f"patch size mismatch: {len(out)} != {expected_size}")
+          if actual_sha != expected_sha:
+              raise SystemExit(f"patch SHA-256 mismatch: {actual_sha} != {expected_sha}")
+          with open("/tmp/m23.patch", "wb") as f:
+              f.write(out)
+          print(f"M23 reconstructed patch: {len(out)} bytes SHA-256 {actual_sha}")
+          PY
+          git apply --check /tmp/m23.patch
+          git apply --index /tmp/m23.patch
           rm -f .github/workflows/m23-source-snapshot.yml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --check
+          git diff --cached --binary --full-index "$BASE_SHA" -- > /tmp/final-semantic.patch
+          test "$(wc -c < /tmp/final-semantic.patch)" -eq "$PATCH_SIZE"
+          test "$(sha256sum /tmp/final-semantic.patch | awk '{print $1}')" = "$PATCH_SHA256"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "Milestone 23: mount read-only BoringFS over VirtIO"
           git push origin HEAD:agent/boringfs-readonly-mount
