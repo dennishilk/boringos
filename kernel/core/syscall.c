@@ -967,10 +967,21 @@ static uint64_t syscall_launch(struct x86_64_syscall_frame *frame,
     serial_write_string("\nboring-launch: child root ");
     serial_write_hex_u64(child->address_space.root_physical);
     serial_write_string("\nboring-launch: independent address space\n");
-    serial_write_string("boring-launch: entry executable\n");
-    serial_write_string("boring-launch: stack rw-nx\n");
+    if (source_is_vfs) {
+        serial_write_string("boring-launch: entry executable\n");
+    } else {
+        serial_write_string("boring-launch: shell entry executable\n");
+    }
+    if (source_is_vfs) {
+        serial_write_string("boring-launch: stack rw-nx\n");
+    } else {
+        serial_write_string("boring-launch: shell stack rw-nx\n");
+    }
     serial_write_string("boring-launch: higher-half supervisor-only\n");
     serial_write_string("boring-launch: cwd inherited\n");
+    if (!source_is_vfs) {
+        serial_write_string("boring-launch: pid 1 remains alive\n");
+    }
     if (source_is_vfs) {
         serial_write_string("boring-launch: VFS executable source ");
         serial_write_string(path);
