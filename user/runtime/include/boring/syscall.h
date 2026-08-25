@@ -11,6 +11,8 @@ long boring_debug_write(const void *buffer, size_t length);
 long boring_console_write(const void *buffer, size_t length);
 long boring_console_read(void *buffer, size_t length);
 long boring_launch(const char *program_name, size_t length);
+long boring_launch_argv(const char *path, size_t path_length,
+                        const char *const argv[], size_t argc);
 long boring_fs_readdir(const char *path,
                        size_t path_length,
                        uint64_t index,

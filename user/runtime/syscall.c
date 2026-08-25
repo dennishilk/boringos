@@ -49,15 +49,27 @@ long boring_console_read(void *buffer, size_t length) {
     return result;
 }
 
-long boring_launch(const char *program_name, size_t length) {
+long boring_launch_argv(const char *path,
+                        size_t path_length,
+                        const char *const argv[],
+                        size_t argc) {
     long result;
+    register size_t argc_argument __asm__("r10") = argc;
 
     __asm__ volatile(
         "syscall"
         : "=a"(result)
-        : "a"((uint64_t)BORING_SYS_LAUNCH), "D"(program_name), "S"(length)
+        : "a"((uint64_t)BORING_SYS_LAUNCH), "D"(path), "S"(path_length),
+          "d"(argv), "r"(argc_argument)
         : "rcx", "r11", "cc", "memory");
     return result;
+}
+
+long boring_launch(const char *program_name, size_t length) {
+    const char *argv[1];
+
+    argv[0] = program_name;
+    return boring_launch_argv(program_name, length, argv, 1U);
 }
 
 long boring_fs_readdir(const char *path,

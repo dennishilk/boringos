@@ -69,7 +69,7 @@ static bool init_launch_safety(void) {
            (boring_launch(shell_name, 0U) ==
             -(long)BORING_SYSCALL_EINVAL) &&
            (boring_launch(shell_name,
-                          (size_t)BORING_SYSCALL_LAUNCH_NAME_MAX + 1U) ==
+                          (size_t)BORING_SYSCALL_EXEC_PATH_MAX + 1U) ==
             -(long)BORING_SYSCALL_ENAMETOOLONG) &&
            (boring_launch(embedded_nul, sizeof(embedded_nul)) ==
             -(long)BORING_SYSCALL_EINVAL) &&

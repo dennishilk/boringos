@@ -5,6 +5,7 @@
 #include <boring/cpu.h>
 #include <boring/descriptor.h>
 #include <boring/elf_loader.h>
+#include <boring/elf_vfs.h>
 #include <boring/process.h>
 #include <boring/pmm.h>
 #include <boring/ring3_memory.h>
@@ -44,6 +45,10 @@
 
 #define BOOTSTRAP_PROGRAM_STACK_BASE 0x0000000040010000ULL
 #define BOOTSTRAP_PROGRAM_STACK_SIZE ((size_t)BORING_ELF_PAGE_SIZE)
+#define SYSCALL_LAUNCH_DEPTH_MAX 2U
+#define SYSCALL_ARG_RUNTIME_RESERVE 2048U
+#define SYSCALL_ARG_POINTER_BYTES (((size_t)BORING_SYSCALL_ARG_MAX + 1U) * sizeof(uint64_t))
+#define SYSCALL_ARG_BLOCK_MAX (SYSCALL_ARG_POINTER_BYTES + (size_t)BORING_SYSCALL_ARG_BYTES_MAX + 15U)
 
 struct syscall_bootstrap_program {
     char name[BORING_SYSCALL_LAUNCH_NAME_MAX + 1U];
@@ -62,6 +67,13 @@ struct syscall_suspended_launch {
     bool active;
     bool child_exited;
     bool image_loaded;
+};
+
+struct syscall_launch_arguments {
+    size_t argc;
+    size_t total_bytes;
+    uint16_t offsets[BORING_SYSCALL_ARG_MAX];
+    char data[BORING_SYSCALL_ARG_BYTES_MAX];
 };
 
 _Static_assert(sizeof(struct x86_64_syscall_frame) == 144U,
@@ -104,7 +116,8 @@ uint64_t x86_64_syscall_user_rsp_scratch __attribute__((aligned(8)));
 
 static struct syscall_stats syscall_state;
 static struct syscall_bootstrap_program bootstrap_program;
-static struct syscall_suspended_launch suspended_launch;
+static struct syscall_suspended_launch suspended_launch[SYSCALL_LAUNCH_DEPTH_MAX];
+static size_t suspended_launch_depth;
 static bool syscall_initialized;
 
 static bool syscall_user_range_accessible(uintptr_t user_address,
@@ -238,16 +251,35 @@ static void bootstrap_program_clear(void) {
     bootstrap_program.registered = false;
 }
 
+static void suspended_launch_slot_clear(
+    struct syscall_suspended_launch *launch) {
+    if (launch == NULL) {
+        return;
+    }
+    launch->parent = NULL;
+    launch->child = NULL;
+    syscall_zero_bytes(&launch->parent_frame, sizeof(launch->parent_frame));
+    syscall_zero_bytes(&launch->image, sizeof(launch->image));
+    launch->exit_status = 0;
+    launch->active = false;
+    launch->child_exited = false;
+    launch->image_loaded = false;
+}
+
 static void suspended_launch_clear(void) {
-    suspended_launch.parent = NULL;
-    suspended_launch.child = NULL;
-    syscall_zero_bytes(&suspended_launch.parent_frame,
-                       sizeof(suspended_launch.parent_frame));
-    syscall_zero_bytes(&suspended_launch.image, sizeof(suspended_launch.image));
-    suspended_launch.exit_status = 0;
-    suspended_launch.active = false;
-    suspended_launch.child_exited = false;
-    suspended_launch.image_loaded = false;
+    size_t index;
+
+    for (index = 0U; index < (size_t)SYSCALL_LAUNCH_DEPTH_MAX; ++index) {
+        suspended_launch_slot_clear(&suspended_launch[index]);
+    }
+    suspended_launch_depth = 0U;
+}
+
+static struct syscall_suspended_launch *suspended_launch_top(void) {
+    if (suspended_launch_depth == 0U) {
+        return NULL;
+    }
+    return &suspended_launch[suspended_launch_depth - 1U];
 }
 
 bool syscall_stack_contains(uintptr_t stack_pointer) {
@@ -402,6 +434,53 @@ static bool syscall_copy_to_user(uintptr_t user_address,
     return true;
 }
 
+static bool syscall_copy_to_process(struct process *process,
+                                    uintptr_t user_address,
+                                    const void *source_buffer,
+                                    size_t length) {
+    struct vmm_stats vmm_stats;
+    const uint8_t *input = (const uint8_t *)source_buffer;
+    uintptr_t current = user_address;
+    size_t remaining = length;
+
+    if ((process == NULL) || !process_is_alive(process) ||
+        process->address_space.bootstrap || (source_buffer == NULL) ||
+        !ring3_user_range_valid(user_address, length) ||
+        !vmm_get_stats(&vmm_stats)) {
+        return false;
+    }
+    while (remaining != 0U) {
+        uint64_t physical;
+        uint64_t kernel_virtual;
+        const size_t page_offset =
+            (size_t)((uint64_t)current & (VMM_PAGE_SIZE - 1ULL));
+        size_t chunk = (size_t)VMM_PAGE_SIZE - page_offset;
+        size_t index;
+        uint8_t *destination;
+
+        if (chunk > remaining) {
+            chunk = remaining;
+        }
+        if (!ring3_user_translate(&process->address_space, current, true,
+                                  &physical) ||
+            (physical > UINT64_MAX - vmm_stats.hhdm_offset)) {
+            return false;
+        }
+        kernel_virtual = vmm_stats.hhdm_offset + physical;
+        if ((kernel_virtual >> 48U) != 0xffffULL) {
+            return false;
+        }
+        destination = (uint8_t *)(uintptr_t)kernel_virtual;
+        for (index = 0U; index < chunk; ++index) {
+            destination[index] = input[index];
+        }
+        input += chunk;
+        current += (uintptr_t)chunk;
+        remaining -= chunk;
+    }
+    return true;
+}
+
 static int syscall_copy_explicit_string(uint64_t user_address,
                                         uint64_t length,
                                         size_t maximum,
@@ -429,6 +508,143 @@ static int syscall_copy_explicit_string(uint64_t user_address,
     }
     buffer[safe_length] = '\0';
     return 0;
+}
+
+static int syscall_copy_launch_arguments(
+    uint64_t user_argv,
+    uint64_t raw_argc,
+    struct syscall_launch_arguments *arguments) {
+    uint64_t pointers[BORING_SYSCALL_ARG_MAX];
+    size_t argc;
+    size_t index;
+
+    if ((arguments == NULL) || (raw_argc == 0ULL) ||
+        (raw_argc > (uint64_t)BORING_SYSCALL_ARG_MAX) ||
+        (raw_argc > (uint64_t)SIZE_MAX)) {
+        return BORING_SYSCALL_EINVAL;
+    }
+    argc = (size_t)raw_argc;
+    syscall_zero_bytes(arguments, sizeof(*arguments));
+    if (!syscall_copy_from_user(pointers, (uintptr_t)user_argv,
+                                argc * sizeof(pointers[0]))) {
+        return BORING_SYSCALL_EFAULT;
+    }
+    arguments->argc = argc;
+    for (index = 0U; index < argc; ++index) {
+        size_t argument_length = 0U;
+        const uint64_t pointer = pointers[index];
+
+        if (pointer == 0ULL) {
+            return BORING_SYSCALL_EFAULT;
+        }
+        if (arguments->total_bytes > (size_t)UINT16_MAX) {
+            return BORING_SYSCALL_EINVAL;
+        }
+        arguments->offsets[index] = (uint16_t)arguments->total_bytes;
+        for (;;) {
+            char value;
+            uint64_t address;
+
+            if (arguments->total_bytes >=
+                (size_t)BORING_SYSCALL_ARG_BYTES_MAX) {
+                return BORING_SYSCALL_ENAMETOOLONG;
+            }
+            if ((uint64_t)argument_length > UINT64_MAX - pointer) {
+                return BORING_SYSCALL_EFAULT;
+            }
+            address = pointer + (uint64_t)argument_length;
+            if (!syscall_copy_from_user(&value, (uintptr_t)address, 1U)) {
+                return BORING_SYSCALL_EFAULT;
+            }
+            arguments->data[arguments->total_bytes] = value;
+            ++arguments->total_bytes;
+            if (value == '\0') {
+                break;
+            }
+            ++argument_length;
+        }
+    }
+    return 0;
+}
+
+static void syscall_store_u64(uint8_t *destination, uint64_t value) {
+    size_t index;
+
+    for (index = 0U; index < sizeof(value); ++index) {
+        destination[index] = (uint8_t)(value >> (index * 8U));
+    }
+}
+
+static bool syscall_prepare_child_arguments(
+    struct process *child,
+    const struct boring_elf_image *image,
+    const struct syscall_launch_arguments *arguments,
+    uintptr_t *entry_rsp_out,
+    uintptr_t *argv_out) {
+    uint8_t block[SYSCALL_ARG_BLOCK_MAX];
+    size_t pointer_bytes;
+    size_t block_size;
+    size_t aligned_size;
+    uintptr_t entry_rsp;
+    size_t index;
+
+    if ((child == NULL) || (image == NULL) || (arguments == NULL) ||
+        (entry_rsp_out == NULL) || (argv_out == NULL) ||
+        (arguments->argc == 0U) ||
+        (arguments->argc > (size_t)BORING_SYSCALL_ARG_MAX)) {
+        return false;
+    }
+    pointer_bytes = (arguments->argc + 1U) * sizeof(uint64_t);
+    if ((pointer_bytes > sizeof(block)) ||
+        (arguments->total_bytes > sizeof(block) - pointer_bytes)) {
+        return false;
+    }
+    block_size = pointer_bytes + arguments->total_bytes;
+    if (block_size > SIZE_MAX - 15U) {
+        return false;
+    }
+    aligned_size = (block_size + 15U) & ~(size_t)15U;
+    if ((aligned_size > BOOTSTRAP_PROGRAM_STACK_SIZE) ||
+        ((size_t)SYSCALL_ARG_RUNTIME_RESERVE >
+         BOOTSTRAP_PROGRAM_STACK_SIZE - aligned_size)) {
+        return false;
+    }
+    entry_rsp = image->stack_top - (uintptr_t)aligned_size;
+    if ((entry_rsp & 0x0fU) != 0U) {
+        return false;
+    }
+    syscall_zero_bytes(block, sizeof(block));
+    for (index = 0U; index < arguments->argc; ++index) {
+        const uintptr_t string_address =
+            entry_rsp + (uintptr_t)pointer_bytes +
+            (uintptr_t)arguments->offsets[index];
+        syscall_store_u64(&block[index * sizeof(uint64_t)],
+                          (uint64_t)string_address);
+    }
+    for (index = 0U; index < arguments->total_bytes; ++index) {
+        block[pointer_bytes + index] = (uint8_t)arguments->data[index];
+    }
+    if (!syscall_copy_to_process(child, entry_rsp, block, block_size)) {
+        return false;
+    }
+    *entry_rsp_out = entry_rsp;
+    *argv_out = entry_rsp;
+    return true;
+}
+
+static const char *syscall_path_basename(const char *path) {
+    const char *base = path;
+    size_t index;
+
+    if (path == NULL) {
+        return NULL;
+    }
+    for (index = 0U; path[index] != '\0'; ++index) {
+        if ((path[index] == '/') && (path[index + 1U] != '\0')) {
+            base = &path[index + 1U];
+        }
+    }
+    return base;
 }
 
 static int syscall_vfs_error(enum vfs_result result) {
@@ -604,58 +820,133 @@ static uint64_t syscall_launch_rollback(struct process *child,
 }
 
 static uint64_t syscall_launch(struct x86_64_syscall_frame *frame,
-                               uint64_t user_name,
-                               uint64_t length) {
-    char name[BORING_SYSCALL_LAUNCH_NAME_MAX + 1U];
+                               uint64_t user_path,
+                               uint64_t path_length,
+                               uint64_t user_argv,
+                               uint64_t raw_argc) {
+    char path[BORING_SYSCALL_EXEC_PATH_MAX + 1U];
+    struct syscall_launch_arguments arguments;
     struct process *const parent = process_current();
     struct process *child = NULL;
     struct vfs_path parent_cwd = { NULL, NULL };
     struct boring_elf_image image;
+    struct boring_elf_memory_source memory_source;
+    struct boring_elf_vfs_source vfs_source = {
+        { 0ULL, NULL, NULL }, { { NULL, NULL }, 0ULL, 0U, false }, false
+    };
+    const struct boring_elf_source *source = NULL;
     struct ring3_user_mapping_info entry_info;
     struct ring3_user_mapping_info stack_info;
+    struct syscall_suspended_launch *launch;
+    const char *process_name;
+    enum vfs_result vfs_result;
+    uintptr_t entry_rsp = 0U;
+    uintptr_t child_argv = 0U;
     int copy_error;
+    bool source_is_vfs = false;
     bool image_loaded = false;
 
     if ((frame == NULL) || (parent == NULL) || !process_is_alive(parent) ||
-        (parent->pid != 1ULL) || suspended_launch.active) {
+        (parent->pid == 0ULL) ||
+        (suspended_launch_depth >= (size_t)SYSCALL_LAUNCH_DEPTH_MAX)) {
         return syscall_error(BORING_SYSCALL_EACCES);
     }
+    if (suspended_launch_depth == 0U) {
+        if (parent->pid != 1ULL) {
+            return syscall_error(BORING_SYSCALL_EACCES);
+        }
+    } else {
+        struct syscall_suspended_launch *const current = suspended_launch_top();
+
+        if ((current == NULL) || !current->active || current->child_exited ||
+            (current->child != parent)) {
+            return syscall_error(BORING_SYSCALL_EACCES);
+        }
+    }
     copy_error = syscall_copy_explicit_string(
-        user_name, length, (size_t)BORING_SYSCALL_LAUNCH_NAME_MAX, name);
+        user_path, path_length, (size_t)BORING_SYSCALL_EXEC_PATH_MAX, path);
     if (copy_error != 0) {
         return syscall_error(copy_error);
     }
-    if (!bootstrap_program.registered) {
-        return syscall_error(BORING_SYSCALL_ENOTSUP);
+    copy_error = syscall_copy_launch_arguments(user_argv, raw_argc, &arguments);
+    if (copy_error != 0) {
+        return syscall_error(copy_error);
     }
-    if (!bootstrap_program_name_equals(name, (size_t)length)) {
-        return syscall_error(BORING_SYSCALL_ENOENT);
+
+    if ((parent->pid == 1ULL) && bootstrap_program.registered &&
+        bootstrap_program_name_equals(path, (size_t)path_length)) {
+        if (!boring_elf_memory_source_init(&memory_source,
+                                           bootstrap_program.module_bytes,
+                                           bootstrap_program.module_size)) {
+            return syscall_error(BORING_SYSCALL_EIO);
+        }
+        source = &memory_source.source;
+    } else {
+        vfs_result = boring_elf_vfs_source_open(parent, path, &vfs_source);
+        if (vfs_result != VFS_RESULT_OK) {
+            return syscall_error((vfs_result == VFS_RESULT_OVERFLOW) ?
+                BORING_SYSCALL_ENOEXEC : syscall_vfs_error(vfs_result));
+        }
+        source = &vfs_source.source;
+        source_is_vfs = true;
+    }
+
+    process_name = syscall_path_basename(path);
+    if ((process_name == NULL) || (process_name[0] == '\0') ||
+        (syscall_text_length(process_name, (size_t)KERNEL_PROCESS_NAME_MAX) >
+         (size_t)KERNEL_PROCESS_NAME_MAX)) {
+        if (source_is_vfs) {
+            (void)boring_elf_vfs_source_close(&vfs_source);
+        }
+        return syscall_error(BORING_SYSCALL_ENAMETOOLONG);
     }
     if (!process_get_cwd(parent, &parent_cwd)) {
+        if (source_is_vfs) {
+            (void)boring_elf_vfs_source_close(&vfs_source);
+        }
         return syscall_error(BORING_SYSCALL_EINVAL);
     }
     if (!process_create(&child) || (child == NULL)) {
         (void)vfs_path_release(&parent_cwd);
+        if (source_is_vfs) {
+            (void)boring_elf_vfs_source_close(&vfs_source);
+        }
         return syscall_error(BORING_SYSCALL_ENOSPC);
     }
-    if (!process_set_name(child, name) || !process_set_cwd(child, &parent_cwd)) {
+    if (!process_set_name(child, process_name) ||
+        !process_set_cwd(child, &parent_cwd)) {
         (void)vfs_path_release(&parent_cwd);
+        if (source_is_vfs) {
+            (void)boring_elf_vfs_source_close(&vfs_source);
+        }
         return syscall_launch_rollback(child, &image, false,
                                        BORING_SYSCALL_EIO);
     }
     if (vfs_path_release(&parent_cwd) != VFS_RESULT_OK) {
+        if (source_is_vfs) {
+            (void)boring_elf_vfs_source_close(&vfs_source);
+        }
         return syscall_launch_rollback(child, &image, false,
                                        BORING_SYSCALL_EIO);
     }
-    if (!boring_elf_load(child, bootstrap_program.module_bytes,
-                         bootstrap_program.module_size,
-                         (uintptr_t)BOOTSTRAP_PROGRAM_STACK_BASE,
-                         BOOTSTRAP_PROGRAM_STACK_SIZE, &image)) {
+    if (!boring_elf_load_source(child, source,
+                                (uintptr_t)BOOTSTRAP_PROGRAM_STACK_BASE,
+                                BOOTSTRAP_PROGRAM_STACK_SIZE, &image)) {
+        if (source_is_vfs) {
+            (void)boring_elf_vfs_source_close(&vfs_source);
+        }
         return syscall_launch_rollback(child, &image, false,
-                                       BORING_SYSCALL_EIO);
+                                       BORING_SYSCALL_ENOEXEC);
     }
     image_loaded = true;
-    if ((child->address_space.root_physical ==
+    if (source_is_vfs &&
+        (boring_elf_vfs_source_close(&vfs_source) != VFS_RESULT_OK)) {
+        return syscall_launch_rollback(child, &image, image_loaded,
+                                       BORING_SYSCALL_EIO);
+    }
+    if (!syscall_prepare_child_arguments(child, &image, &arguments,
+                                         &entry_rsp, &child_argv) ||
+        (child->address_space.root_physical ==
          parent->address_space.root_physical) ||
         !ring3_user_query_mapping(&child->address_space, image.entry,
                                   &entry_info) ||
@@ -676,22 +967,31 @@ static uint64_t syscall_launch(struct x86_64_syscall_frame *frame,
     serial_write_string("\nboring-launch: child root ");
     serial_write_hex_u64(child->address_space.root_physical);
     serial_write_string("\nboring-launch: independent address space\n");
-    serial_write_string("boring-launch: shell entry executable\n");
-    serial_write_string("boring-launch: shell stack rw-nx\n");
+    serial_write_string("boring-launch: entry executable\n");
+    serial_write_string("boring-launch: stack rw-nx\n");
     serial_write_string("boring-launch: higher-half supervisor-only\n");
     serial_write_string("boring-launch: cwd inherited\n");
-    serial_write_string("boring-launch: pid 1 remains alive\n");
+    if (source_is_vfs) {
+        serial_write_string("boring-launch: VFS executable source ");
+        serial_write_string(path);
+        serial_write_string("\n");
+    } else {
+        serial_write_string("boring-launch: boot-module executable source\n");
+    }
 
-    suspended_launch.parent = parent;
-    suspended_launch.child = child;
-    suspended_launch.parent_frame = *frame;
-    suspended_launch.image = image;
-    suspended_launch.exit_status = 0;
-    suspended_launch.active = true;
-    suspended_launch.child_exited = false;
-    suspended_launch.image_loaded = true;
+    launch = &suspended_launch[suspended_launch_depth];
+    suspended_launch_slot_clear(launch);
+    launch->parent = parent;
+    launch->child = child;
+    launch->parent_frame = *frame;
+    launch->image = image;
+    launch->exit_status = 0;
+    launch->active = true;
+    launch->child_exited = false;
+    launch->image_loaded = true;
+    ++suspended_launch_depth;
 
-    frame->user_rsp = (uint64_t)image.stack_top;
+    frame->user_rsp = (uint64_t)entry_rsp;
     frame->user_rip = (uint64_t)image.entry;
     frame->rbx = 0ULL;
     frame->rbp = 0ULL;
@@ -699,8 +999,8 @@ static uint64_t syscall_launch(struct x86_64_syscall_frame *frame,
     frame->r13 = 0ULL;
     frame->r14 = 0ULL;
     frame->r15 = 0ULL;
-    frame->rdi = 0ULL;
-    frame->rsi = 0ULL;
+    frame->rdi = (uint64_t)arguments.argc;
+    frame->rsi = (uint64_t)child_argv;
     frame->rdx = 0ULL;
     frame->r10 = 0ULL;
     frame->r8 = 0ULL;
@@ -708,8 +1008,11 @@ static uint64_t syscall_launch(struct x86_64_syscall_frame *frame,
     frame->reserved = 0ULL;
 
     if (!process_activate(child)) {
-        *frame = suspended_launch.parent_frame;
-        suspended_launch_clear();
+        struct x86_64_syscall_frame saved_parent_frame = launch->parent_frame;
+
+        --suspended_launch_depth;
+        suspended_launch_slot_clear(launch);
+        *frame = saved_parent_frame;
         return syscall_launch_rollback(child, &image, image_loaded,
                                        BORING_SYSCALL_EIO);
     }
@@ -1274,55 +1577,56 @@ static uint64_t syscall_process_snapshot(uint64_t index, uint64_t user_info) {
 
 static uint64_t syscall_exit(struct x86_64_syscall_frame *frame,
                              uint64_t raw_status) {
+    struct syscall_suspended_launch *const launch = suspended_launch_top();
     struct process *const child = process_current();
     struct process *parent;
     uint64_t child_pid;
 
-    if ((frame == NULL) || !suspended_launch.active ||
-        suspended_launch.child_exited ||
-        (child == NULL) || (child != suspended_launch.child) ||
-        !process_is_alive(child) || (suspended_launch.parent == NULL)) {
+    if ((frame == NULL) || (launch == NULL) || !launch->active ||
+        launch->child_exited || (child == NULL) || (child != launch->child) ||
+        !process_is_alive(child) || (launch->parent == NULL)) {
         return syscall_error(BORING_SYSCALL_EINVAL);
     }
-    parent = suspended_launch.parent;
+    parent = launch->parent;
     child_pid = child->pid;
-    suspended_launch.exit_status = (int32_t)raw_status;
+    launch->exit_status = (int32_t)raw_status;
 
     if (!process_activate(parent)) {
         syscall_fatal("cannot resume parent during SYS_EXIT");
     }
-    if (suspended_launch.image_loaded) {
-        if (!boring_elf_unload(&suspended_launch.image)) {
+    if (launch->image_loaded) {
+        if (!boring_elf_unload(&launch->image)) {
             syscall_fatal("cannot release child ELF pages during SYS_EXIT");
         }
-        suspended_launch.image_loaded = false;
+        launch->image_loaded = false;
     }
     if (!process_mark_finished(child)) {
         syscall_fatal("cannot mark child zombie during SYS_EXIT");
     }
-    suspended_launch.child_exited = true;
+    launch->child_exited = true;
     serial_write_string("boring-exit: child pid ");
     serial_write_u64(child_pid);
     serial_write_string(" status ");
-    serial_write_u64((uint64_t)(uint32_t)suspended_launch.exit_status);
+    serial_write_u64((uint64_t)(uint32_t)launch->exit_status);
     serial_write_string(" is zombie\n");
-    *frame = suspended_launch.parent_frame;
+    *frame = launch->parent_frame;
     return child_pid;
 }
 
 static uint64_t syscall_waitpid(uint64_t pid, uint64_t user_status) {
+    struct syscall_suspended_launch *const launch = suspended_launch_top();
     struct process *const parent = process_current();
-    const int32_t status = suspended_launch.exit_status;
     struct process *child;
+    int32_t status;
 
-    if ((parent == NULL) || !process_is_alive(parent) ||
-        !suspended_launch.active || !suspended_launch.child_exited ||
-        (suspended_launch.parent != parent) ||
-        (suspended_launch.child == NULL) ||
-        (suspended_launch.child->pid != pid) ||
-        (suspended_launch.child->parent_pid != parent->pid)) {
+    if ((launch == NULL) || (parent == NULL) || !process_is_alive(parent) ||
+        !launch->active || !launch->child_exited ||
+        (launch->parent != parent) || (launch->child == NULL) ||
+        (launch->child->pid != pid) ||
+        (launch->child->parent_pid != parent->pid)) {
         return syscall_error(BORING_SYSCALL_ENOENT);
     }
+    status = launch->exit_status;
     if ((user_status != 0ULL) &&
         (!syscall_user_range_accessible((uintptr_t)user_status,
                                         sizeof(status), true) ||
@@ -1330,14 +1634,15 @@ static uint64_t syscall_waitpid(uint64_t pid, uint64_t user_status) {
                                sizeof(status)))) {
         return syscall_error(BORING_SYSCALL_EFAULT);
     }
-    child = suspended_launch.child;
+    child = launch->child;
     if (!process_destroy(child)) {
         return syscall_error(BORING_SYSCALL_EIO);
     }
     serial_write_string("boring-waitpid: reaped child pid ");
     serial_write_u64(pid);
     serial_write_string("\n");
-    suspended_launch_clear();
+    suspended_launch_slot_clear(launch);
+    --suspended_launch_depth;
     return pid;
 }
 
@@ -1504,7 +1809,8 @@ void x86_64_syscall_dispatch(struct x86_64_syscall_frame *frame) {
             result = syscall_console_read(frame->rdi, frame->rsi);
             break;
         case BORING_SYS_LAUNCH:
-            result = syscall_launch(frame, frame->rdi, frame->rsi);
+            result = syscall_launch(frame, frame->rdi, frame->rsi,
+                                    frame->rdx, frame->r10);
             break;
         case BORING_SYS_FS_READDIR:
             result = syscall_fs_readdir(frame->rdi, frame->rsi,

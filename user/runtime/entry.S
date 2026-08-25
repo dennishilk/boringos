@@ -1,3 +1,5 @@
+#include <boring/syscall_abi.h>
+
 .section .text.entry
 .code64
 .globl _start
@@ -9,6 +11,9 @@ _start:
 
     call boring_main
     movslq %eax, %r12
+    movq %r12, %rdi
+    movq $BORING_SYS_EXIT, %rax
+    syscall
 
 .globl boring_runtime_after_main
 boring_runtime_after_main:
