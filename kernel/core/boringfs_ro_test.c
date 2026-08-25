@@ -300,10 +300,10 @@ void boringfs_ro_test_run(void) {
     disk_filesystem = boringfs_vfs_get_vfs(disk_boringfs);
     if ((disk_filesystem == NULL) ||
         ((BORINGFS_TEST_ROOT != 0) ?
-         (vfs_init(disk_filesystem) != VFS_RESULT_OK) :
+         ((vfs_init(disk_filesystem) != VFS_RESULT_OK) ||
+          (vfs_get_root(&root) != VFS_RESULT_OK)) :
          (vfs_mount_filesystem(disk_filesystem, &disk_mountpoint) !=
-          VFS_RESULT_OK)) ||
-        (vfs_get_root(&root) != VFS_RESULT_OK)) {
+          VFS_RESULT_OK))) {
         boringfs_ro_test_fail("boringfs-mount");
     }
     serial_write_string("BoringFS over VirtIO:\n");
