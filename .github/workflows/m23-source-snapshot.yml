@@ -1,0 +1,26 @@
+name: M23 source snapshot
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    if: github.head_ref == 'agent/boringfs-readonly-mount'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package exact checkout
+        run: |
+          git rev-parse HEAD > SNAPSHOT_HEAD.txt
+          tar --exclude=.git -czf boringos-source.tgz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m23-source-snapshot
+          path: boringos-source.tgz
+          if-no-files-found: error
+          retention-days: 1
