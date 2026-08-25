@@ -285,9 +285,10 @@ boringfs-fixture: $(BORINGFS_FIXTURE)
 qemu-bundle:
 	$(MAKE) TEST_MODE=persistent-root
 	$(MAKE) boringfs-fixture
+	$(MAKE) user-boringfetch
 	mkdir -p $(BUILD_DIR)/boringos-qemu-x86_64
 	cp $(ISO) $(BUILD_DIR)/boringos-qemu-x86_64/boringos.iso
-	$(BORINGFS_FIXTURE) $(BUILD_DIR)/boringos-qemu-x86_64/boringos-root.img valid
+	$(BORINGFS_FIXTURE) $(BUILD_DIR)/boringos-qemu-x86_64/boringos-root.img valid $(BORINGFETCH_ELF)
 	cp scripts/run-boringos.sh $(BUILD_DIR)/boringos-qemu-x86_64/run-boringos.sh
 	cp docs/RUNNING.md $(BUILD_DIR)/boringos-qemu-x86_64/README.md
 	cd $(BUILD_DIR)/boringos-qemu-x86_64 && sha256sum boringos.iso boringos-root.img > SHA256SUMS

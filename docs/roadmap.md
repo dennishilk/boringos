@@ -598,17 +598,45 @@ layer, VFS-backed executable loading, networking, graphics or BoringWM.
 
 # Stage 12 — filesystem-backed native programs
 
-## Milestone 28: VFS-backed executable loading and standalone `boringfetch` — CURRENT
+## Milestone 28: VFS-backed executable loading and standalone `boringfetch` — COMPLETE
 
-Milestone 28 generalizes the existing validated static ELF64 loader so the
-same parser, validation rules and Ring-3 mapping policy can consume bounded
-VFS-backed regular files as well as the established Limine boot-module source.
-The first required filesystem-resident native program is `/bin/boringfetch`;
-the shell will resolve it externally, launch it as a child process, wait/reap
-that child, and return to the same interactive prompt.
+Milestone 28 generalizes the validated static ELF64 loader around one bounded
+source interface. The established Limine boot-module path is now a memory
+source adapter and regular VFS files use a bounded VFS source adapter; both
+feed the same validator, mapping rules and rollback path.
 
-The intended program format remains deliberately narrow: static freestanding
-little-endian x86_64 `ET_EXEC` ELF64 with validated `PT_LOAD` segments. There
-is no dynamic linker, shared libraries, `fork`, signals, job control, pipes,
-redirection, configurable `PATH`, permissions model, package manager,
-framebuffer or POSIX compatibility claim in M28.
+Accepted M28 behavior includes:
+
+- static freestanding little-endian x86_64 `ET_EXEC` ELF64 with bounded,
+  validated `PT_LOAD` segments and no writable+executable mapping;
+- regular-file execution through VFS without a whole-file kernel shadow copy;
+- native foreground `LAUNCH` / `EXIT` / `WAITPID` semantics with a separate
+  Ring-3 child address space, zombie status preservation and explicit reap;
+- a bounded BoringOS argc/argv ABI: at most 16 arguments, at most 1024 copied
+  argument bytes in total, with `RDI=argc` and `RSI=argv` at userspace entry;
+- fixed shell resolution of bare program names through `/bin/<name>`, while a
+  command containing `/` is treated as an explicit path; there is no `PATH`;
+- the former shell-integrated `boringfetch` removed in favor of a standalone
+  `/bin/boringfetch` ELF stored in real persistent BoringFS;
+- command completion for regular files discovered from real `/bin` VFS
+  directory entries;
+- repeated child launch, exit-status propagation, wait/reap and prompt return;
+- malformed/non-ELF VFS execution rejection without a process/zombie leak; and
+- successful `/bin/boringfetch` execution again after reboot from the same
+  persistent BoringFS image.
+
+The human-runnable QEMU bundle is seeded with the same standalone
+`boringfetch.elf`, and CI audits that artifact in addition to the historical
+userspace ELF gates.
+
+The program model remains deliberately narrow. M28 does not add a dynamic
+linker, shared libraries, POSIX `fork`/`exec`, signals, job control, pipes,
+redirection, configurable `PATH`, permissions, a package manager, framebuffer,
+networking or BoringWM.
+
+Pre-closeout semantic freeze:
+
+```text
+feature head: 9664d5ae8118308f68a75faa95998d7b244aa216
+exact-head verification: Run 32887074825 / SUCCESS
+```
