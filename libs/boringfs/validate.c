@@ -32,6 +32,48 @@ static bool checked_u64_to_size(uint64_t value, size_t *out) {
     return true;
 }
 
+static bool source_read_exact(const struct boringfs_source *source,
+                              uint64_t offset,
+                              void *buffer,
+                              size_t length) {
+    if ((source == NULL) || (source->read == NULL) ||
+        ((buffer == NULL) && (length != 0U)) ||
+        (offset > source->size) ||
+        ((uint64_t)length > source->size - offset)) {
+        return false;
+    }
+    return (length == 0U) ||
+           source->read(source->context, offset, buffer, length);
+}
+
+struct boringfs_memory_source {
+    const uint8_t *bytes;
+    size_t size;
+};
+
+static bool memory_source_read(void *context,
+                               uint64_t offset,
+                               void *buffer,
+                               size_t length) {
+    struct boringfs_memory_source *const memory =
+        (struct boringfs_memory_source *)context;
+    uint8_t *const destination = (uint8_t *)buffer;
+    size_t offset_size;
+    size_t index;
+
+    if ((memory == NULL) || (memory->bytes == NULL) ||
+        ((destination == NULL) && (length != 0U)) ||
+        !checked_u64_to_size(offset, &offset_size) ||
+        (offset_size > memory->size) ||
+        (length > memory->size - offset_size)) {
+        return false;
+    }
+    for (index = 0U; index < length; ++index) {
+        destination[index] = memory->bytes[offset_size + index];
+    }
+    return true;
+}
+
 static bool bytes_all_zero(const uint8_t *bytes, size_t length) {
     size_t index;
 
@@ -94,18 +136,17 @@ static bool magic_valid(const uint8_t *magic) {
     return bytes_equal(magic, expected, (size_t)BORINGFS_MAGIC_SIZE);
 }
 
-static bool bitmap_bit(const uint8_t *volume,
-                       size_t volume_size,
+static bool bitmap_bit(const struct boringfs_source *source,
                        const struct boringfs_superblock *superblock,
                        uint64_t block,
                        bool *allocated_out) {
     uint64_t bitmap_base;
     uint64_t byte_offset;
     uint64_t absolute;
-    size_t absolute_size;
+    uint8_t byte;
     uint8_t mask;
 
-    if ((volume == NULL) || (superblock == NULL) ||
+    if ((source == NULL) || (superblock == NULL) ||
         (allocated_out == NULL) ||
         !checked_mul_u64((uint64_t)superblock->bitmap_start,
                          (uint64_t)BORINGFS_BLOCK_SIZE,
@@ -114,27 +155,24 @@ static bool bitmap_bit(const uint8_t *volume,
     }
     byte_offset = block / 8ULL;
     if (!checked_add_u64(bitmap_base, byte_offset, &absolute) ||
-        !checked_u64_to_size(absolute, &absolute_size) ||
-        (absolute_size >= volume_size)) {
+        !source_read_exact(source, absolute, &byte, 1U)) {
         return false;
     }
     mask = (uint8_t)(1U << (unsigned int)(block % 8ULL));
-    *allocated_out = (volume[absolute_size] & mask) != 0U;
+    *allocated_out = (byte & mask) != 0U;
     return true;
 }
 
-static const uint8_t *object_record_bytes(
-    const uint8_t *volume,
-    size_t volume_size,
+static bool read_object_record(
+    const struct boringfs_source *source,
     const struct boringfs_superblock *superblock,
-    uint32_t object_id) {
+    uint32_t object_id,
+    uint8_t raw[BORINGFS_OBJECT_RECORD_SIZE]) {
     uint64_t table_base;
     uint64_t slot_offset;
     uint64_t absolute;
-    uint64_t end;
-    size_t absolute_size;
 
-    if ((volume == NULL) || (superblock == NULL) ||
+    if ((source == NULL) || (superblock == NULL) || (raw == NULL) ||
         (object_id == BORINGFS_NULL_OBJECT_ID) ||
         (object_id > superblock->object_count) ||
         !checked_mul_u64((uint64_t)superblock->object_table_start,
@@ -143,33 +181,26 @@ static const uint8_t *object_record_bytes(
         !checked_mul_u64((uint64_t)(object_id - 1U),
                          (uint64_t)BORINGFS_OBJECT_RECORD_SIZE,
                          &slot_offset) ||
-        !checked_add_u64(table_base, slot_offset, &absolute) ||
-        !checked_add_u64(absolute,
-                         (uint64_t)BORINGFS_OBJECT_RECORD_SIZE,
-                         &end) ||
-        (end > (uint64_t)volume_size) ||
-        !checked_u64_to_size(absolute, &absolute_size)) {
-        return NULL;
+        !checked_add_u64(table_base, slot_offset, &absolute)) {
+        return false;
     }
-    return &volume[absolute_size];
+    return source_read_exact(source, absolute, raw,
+                             (size_t)BORINGFS_OBJECT_RECORD_SIZE);
 }
 
-static bool decode_object_id(const uint8_t *volume,
-                             size_t volume_size,
+static bool decode_object_id(const struct boringfs_source *source,
                              const struct boringfs_superblock *superblock,
                              uint32_t object_id,
                              struct boringfs_object *out) {
-    const uint8_t *record = object_record_bytes(volume, volume_size,
-                                                 superblock, object_id);
+    uint8_t raw[BORINGFS_OBJECT_RECORD_SIZE];
 
-    return (record != NULL) &&
-           boringfs_decode_object(record,
+    return read_object_record(source, superblock, object_id, raw) &&
+           boringfs_decode_object(raw,
                                   (size_t)BORINGFS_OBJECT_RECORD_SIZE,
                                   out);
 }
 
-static bool logical_object_read(const uint8_t *volume,
-                                size_t volume_size,
+static bool logical_object_read(const struct boringfs_source *source,
                                 const struct boringfs_object *object,
                                 uint64_t logical_offset,
                                 uint8_t *destination,
@@ -179,7 +210,7 @@ static bool logical_object_read(const uint8_t *volume,
     size_t output_index = 0U;
     size_t extent_index;
 
-    if ((volume == NULL) || (object == NULL) ||
+    if ((source == NULL) || (object == NULL) ||
         ((destination == NULL) && (length != 0U))) {
         return false;
     }
@@ -206,26 +237,19 @@ static bool logical_object_read(const uint8_t *volume,
             uint64_t available64 = extent_bytes - offset;
             size_t available;
             size_t chunk;
-            size_t physical_size;
-            size_t index;
 
             if (!checked_mul_u64(
                     (uint64_t)object->extents[extent_index].start_block,
                     (uint64_t)BORINGFS_BLOCK_SIZE,
                     &physical_base) ||
                 !checked_add_u64(physical_base, offset, &physical) ||
-                !checked_u64_to_size(available64, &available) ||
-                !checked_u64_to_size(physical, &physical_size)) {
+                !checked_u64_to_size(available64, &available)) {
                 return false;
             }
             chunk = (remaining < available) ? remaining : available;
-            if ((physical_size > volume_size) ||
-                (chunk > volume_size - physical_size)) {
+            if (!source_read_exact(source, physical,
+                                   &destination[output_index], chunk)) {
                 return false;
-            }
-            for (index = 0U; index < chunk; ++index) {
-                destination[output_index + index] =
-                    volume[physical_size + index];
             }
             output_index += chunk;
             remaining -= chunk;
@@ -347,8 +371,7 @@ const char *boringfs_validation_result_name(
 }
 
 static enum boringfs_validation_result validate_superblock(
-    const uint8_t *volume,
-    size_t volume_size,
+    const struct boringfs_source *source,
     struct boringfs_superblock *superblock,
     struct boringfs_validation_error *error) {
     uint32_t expected_bitmap_blocks;
@@ -359,13 +382,20 @@ static enum boringfs_validation_result validate_superblock(
     uint64_t rounded_object_bytes;
     uint64_t declared_bytes;
     uint64_t bitmap_storage_bits;
+    uint8_t superblock_bytes[BORINGFS_SUPERBLOCK_HEADER_SIZE];
+    uint8_t reserved_chunk[256U];
+    uint64_t reserved_offset;
 
-    if (volume_size < (size_t)BORINGFS_BLOCK_SIZE) {
+    if ((source == NULL) || (source->size < (uint64_t)BORINGFS_BLOCK_SIZE)) {
         return fail_result(error, BORINGFS_VALIDATE_TRUNCATED_VOLUME,
                            BORINGFS_LOCATION_NONE_U32, 0U,
                            BORINGFS_LOCATION_NONE_U64);
     }
-    if (!boringfs_decode_superblock(volume, volume_size, superblock)) {
+    if (!source_read_exact(source, 0ULL, superblock_bytes,
+                           (size_t)BORINGFS_SUPERBLOCK_HEADER_SIZE) ||
+        !boringfs_decode_superblock(
+            superblock_bytes, (size_t)BORINGFS_SUPERBLOCK_HEADER_SIZE,
+            superblock)) {
         return fail_result(error, BORINGFS_VALIDATE_BAD_SUPERBLOCK,
                            BORINGFS_LOCATION_NONE_U32, 0U,
                            BORINGFS_LOCATION_NONE_U64);
@@ -398,13 +428,25 @@ static enum boringfs_validation_result validate_superblock(
         (superblock->root_object_id != BORINGFS_ROOT_OBJECT_ID) ||
         (superblock->object_record_size != BORINGFS_OBJECT_RECORD_SIZE) ||
         (superblock->directory_record_size != BORINGFS_DIRECTORY_RECORD_SIZE) ||
-        !bytes_all_zero(&volume[64], 64U) ||
-        !bytes_all_zero(&volume[BORINGFS_SUPERBLOCK_HEADER_SIZE],
-                        (size_t)BORINGFS_BLOCK_SIZE -
-                        (size_t)BORINGFS_SUPERBLOCK_HEADER_SIZE)) {
+        !bytes_all_zero(&superblock_bytes[64], 64U)) {
         return fail_result(error, BORINGFS_VALIDATE_BAD_SUPERBLOCK,
                            BORINGFS_LOCATION_NONE_U32, 0U,
                            BORINGFS_LOCATION_NONE_U64);
+    }
+    reserved_offset = (uint64_t)BORINGFS_SUPERBLOCK_HEADER_SIZE;
+    while (reserved_offset < (uint64_t)BORINGFS_BLOCK_SIZE) {
+        const uint64_t remaining = (uint64_t)BORINGFS_BLOCK_SIZE -
+                                   reserved_offset;
+        const size_t chunk = (remaining < (uint64_t)sizeof(reserved_chunk)) ?
+            (size_t)remaining : sizeof(reserved_chunk);
+
+        if (!source_read_exact(source, reserved_offset, reserved_chunk, chunk) ||
+            !bytes_all_zero(reserved_chunk, chunk)) {
+            return fail_result(error, BORINGFS_VALIDATE_BAD_SUPERBLOCK,
+                               BORINGFS_LOCATION_NONE_U32, 0U,
+                               BORINGFS_LOCATION_NONE_U64);
+        }
+        reserved_offset += (uint64_t)chunk;
     }
 
     if (superblock->total_blocks > UINT32_MAX -
@@ -443,13 +485,12 @@ static enum boringfs_validation_result validate_superblock(
         (superblock->data_start > superblock->total_blocks) ||
         !checked_mul_u64((uint64_t)superblock->total_blocks,
                          (uint64_t)BORINGFS_BLOCK_SIZE,
-                         &declared_bytes) ||
-        (declared_bytes > (uint64_t)SIZE_MAX)) {
+                         &declared_bytes)) {
         return fail_result(error, BORINGFS_VALIDATE_BAD_LAYOUT,
                            BORINGFS_LOCATION_NONE_U32, 0U,
                            BORINGFS_LOCATION_NONE_U64);
     }
-    if ((uint64_t)volume_size < declared_bytes) {
+    if (declared_bytes > source->size) {
         return fail_result(error, BORINGFS_VALIDATE_TRUNCATED_VOLUME,
                            BORINGFS_LOCATION_NONE_U32,
                            superblock->total_blocks,
@@ -467,8 +508,7 @@ static enum boringfs_validation_result validate_superblock(
 }
 
 static enum boringfs_validation_result validate_bitmap_metadata_and_tail(
-    const uint8_t *volume,
-    size_t volume_size,
+    const struct boringfs_source *source,
     const struct boringfs_superblock *superblock,
     uint32_t *block_owner,
     struct boringfs_validation_error *error) {
@@ -478,7 +518,7 @@ static enum boringfs_validation_result validate_bitmap_metadata_and_tail(
     for (block = 0ULL; block < (uint64_t)superblock->data_start; ++block) {
         bool allocated = false;
 
-        if (!bitmap_bit(volume, volume_size, superblock, block, &allocated) ||
+        if (!bitmap_bit(source, superblock, block, &allocated) ||
             !allocated) {
             return fail_result(error, BORINGFS_VALIDATE_BAD_BITMAP,
                                BORINGFS_LOCATION_NONE_U32,
@@ -499,7 +539,7 @@ static enum boringfs_validation_result validate_bitmap_metadata_and_tail(
          block < bitmap_storage_bits; ++block) {
         bool allocated = false;
 
-        if (!bitmap_bit(volume, volume_size, superblock, block, &allocated) ||
+        if (!bitmap_bit(source, superblock, block, &allocated) ||
             !allocated) {
             return fail_result(error, BORINGFS_VALIDATE_BAD_BITMAP,
                                BORINGFS_LOCATION_NONE_U32,
@@ -512,21 +552,19 @@ static enum boringfs_validation_result validate_bitmap_metadata_and_tail(
 }
 
 static enum boringfs_validation_result validate_objects_and_extents(
-    const uint8_t *volume,
-    size_t volume_size,
+    const struct boringfs_source *source,
     const struct boringfs_superblock *superblock,
     uint32_t *block_owner,
     struct boringfs_validation_error *error) {
     uint32_t object_id;
 
     for (object_id = 1U; object_id <= superblock->object_count; ++object_id) {
-        const uint8_t *raw = object_record_bytes(volume, volume_size,
-                                                  superblock, object_id);
+        uint8_t raw[BORINGFS_OBJECT_RECORD_SIZE];
         struct boringfs_object object;
         uint64_t capacity = 0ULL;
         size_t extent_index;
 
-        if (raw == NULL) {
+        if (!read_object_record(source, superblock, object_id, raw)) {
             return fail_result(error, BORINGFS_VALIDATE_TRUNCATED_VOLUME,
                                object_id, BORINGFS_LOCATION_NONE_U32,
                                BORINGFS_LOCATION_NONE_U64);
@@ -631,7 +669,7 @@ static enum boringfs_validation_result validate_objects_and_extents(
                             object_id, (uint32_t)block,
                             BORINGFS_LOCATION_NONE_U64);
                     }
-                    if (!bitmap_bit(volume, volume_size, superblock,
+                    if (!bitmap_bit(source, superblock,
                                     block, &allocated) || !allocated) {
                         return fail_result(error, BORINGFS_VALIDATE_BAD_BITMAP,
                                            object_id, (uint32_t)block,
@@ -651,14 +689,13 @@ static enum boringfs_validation_result validate_objects_and_extents(
 }
 
 static enum boringfs_validation_result validate_parents_and_cycles(
-    const uint8_t *volume,
-    size_t volume_size,
+    const struct boringfs_source *source,
     const struct boringfs_superblock *superblock,
     struct boringfs_validation_error *error) {
     uint32_t object_id;
     struct boringfs_object root;
 
-    if (!decode_object_id(volume, volume_size, superblock,
+    if (!decode_object_id(source, superblock,
                           BORINGFS_ROOT_OBJECT_ID, &root) ||
         (root.state != BORINGFS_OBJECT_ALLOCATED) ||
         (root.type != BORINGFS_TYPE_DIRECTORY) ||
@@ -676,7 +713,7 @@ static enum boringfs_validation_result validate_parents_and_cycles(
         uint32_t steps;
         bool reached_root = false;
 
-        if (!decode_object_id(volume, volume_size, superblock,
+        if (!decode_object_id(source, superblock,
                               object_id, &object)) {
             return fail_result(error, BORINGFS_VALIDATE_BAD_OBJECT_RECORD,
                                object_id, BORINGFS_LOCATION_NONE_U32,
@@ -685,7 +722,7 @@ static enum boringfs_validation_result validate_parents_and_cycles(
         if (object.state == BORINGFS_OBJECT_FREE) {
             continue;
         }
-        if (!decode_object_id(volume, volume_size, superblock,
+        if (!decode_object_id(source, superblock,
                               object.parent_object_id, &parent) ||
             (parent.state != BORINGFS_OBJECT_ALLOCATED) ||
             (parent.type != BORINGFS_TYPE_DIRECTORY)) {
@@ -702,7 +739,7 @@ static enum boringfs_validation_result validate_parents_and_cycles(
                 reached_root = true;
                 break;
             }
-            if (!decode_object_id(volume, volume_size, superblock,
+            if (!decode_object_id(source, superblock,
                                   cursor, &current) ||
                 (current.state != BORINGFS_OBJECT_ALLOCATED) ||
                 (current.parent_object_id == BORINGFS_NULL_OBJECT_ID) ||
@@ -750,8 +787,7 @@ static bool directory_name_valid(
 }
 
 static enum boringfs_validation_result read_directory_record(
-    const uint8_t *volume,
-    size_t volume_size,
+    const struct boringfs_source *source,
     const struct boringfs_object *directory,
     uint64_t record_index,
     uint8_t raw[BORINGFS_DIRECTORY_RECORD_SIZE],
@@ -761,7 +797,7 @@ static enum boringfs_validation_result read_directory_record(
     if (!checked_mul_u64(record_index,
                          (uint64_t)BORINGFS_DIRECTORY_RECORD_SIZE,
                          &logical_offset) ||
-        !logical_object_read(volume, volume_size, directory,
+        !logical_object_read(source, directory,
                              logical_offset, raw,
                              (size_t)BORINGFS_DIRECTORY_RECORD_SIZE)) {
         return fail_result(error, BORINGFS_VALIDATE_BAD_DIRECTORY_RECORD,
@@ -773,8 +809,7 @@ static enum boringfs_validation_result read_directory_record(
 }
 
 static enum boringfs_validation_result validate_directories(
-    const uint8_t *volume,
-    size_t volume_size,
+    const struct boringfs_source *source,
     const struct boringfs_superblock *superblock,
     uint8_t *reference_count,
     struct boringfs_validation_error *error) {
@@ -786,7 +821,7 @@ static enum boringfs_validation_result validate_directories(
         uint64_t record_count;
         uint64_t record_index;
 
-        if (!decode_object_id(volume, volume_size, superblock,
+        if (!decode_object_id(source, superblock,
                               directory_id, &directory)) {
             return fail_result(error, BORINGFS_VALIDATE_BAD_OBJECT_RECORD,
                                directory_id, BORINGFS_LOCATION_NONE_U32,
@@ -807,7 +842,7 @@ static enum boringfs_validation_result validate_directories(
             uint64_t previous_index;
             enum boringfs_validation_result result;
 
-            result = read_directory_record(volume, volume_size, &directory,
+            result = read_directory_record(source, &directory,
                                            record_index, raw, error);
             if (result != BORINGFS_VALIDATE_OK) {
                 return result;
@@ -847,7 +882,7 @@ static enum boringfs_validation_result validate_directories(
                                    BORINGFS_LOCATION_NONE_U32,
                                    record_index);
             }
-            if (!decode_object_id(volume, volume_size, superblock,
+            if (!decode_object_id(source, superblock,
                                   record.object_id, &target) ||
                 (target.state != BORINGFS_OBJECT_ALLOCATED)) {
                 return fail_result(error,
@@ -882,7 +917,7 @@ static enum boringfs_validation_result validate_directories(
                 uint8_t previous_raw[BORINGFS_DIRECTORY_RECORD_SIZE];
                 struct boringfs_directory_record previous;
 
-                result = read_directory_record(volume, volume_size,
+                result = read_directory_record(source,
                                                &directory, previous_index,
                                                previous_raw, error);
                 if (result != BORINGFS_VALIDATE_OK) {
@@ -926,8 +961,7 @@ static enum boringfs_validation_result validate_directories(
 }
 
 static enum boringfs_validation_result validate_references(
-    const uint8_t *volume,
-    size_t volume_size,
+    const struct boringfs_source *source,
     const struct boringfs_superblock *superblock,
     const uint8_t *reference_count,
     struct boringfs_validation_error *error) {
@@ -942,7 +976,7 @@ static enum boringfs_validation_result validate_references(
     for (object_id = 2U; object_id <= superblock->object_count; ++object_id) {
         struct boringfs_object object;
 
-        if (!decode_object_id(volume, volume_size, superblock,
+        if (!decode_object_id(source, superblock,
                               object_id, &object)) {
             return fail_result(error, BORINGFS_VALIDATE_BAD_OBJECT_RECORD,
                                object_id, BORINGFS_LOCATION_NONE_U32,
@@ -966,8 +1000,7 @@ static enum boringfs_validation_result validate_references(
 }
 
 static enum boringfs_validation_result validate_allocation_ownership(
-    const uint8_t *volume,
-    size_t volume_size,
+    const struct boringfs_source *source,
     const struct boringfs_superblock *superblock,
     const uint32_t *block_owner,
     struct boringfs_validation_error *error) {
@@ -977,7 +1010,7 @@ static enum boringfs_validation_result validate_allocation_ownership(
          block < superblock->total_blocks; ++block) {
         bool allocated = false;
 
-        if (!bitmap_bit(volume, volume_size, superblock,
+        if (!bitmap_bit(source, superblock,
                         (uint64_t)block, &allocated)) {
             return fail_result(error, BORINGFS_VALIDATE_BAD_BITMAP,
                                BORINGFS_LOCATION_NONE_U32, block,
@@ -992,9 +1025,8 @@ static enum boringfs_validation_result validate_allocation_ownership(
     return BORINGFS_VALIDATE_OK;
 }
 
-enum boringfs_validation_result boringfs_validate_volume(
-    const uint8_t *volume,
-    size_t volume_size,
+enum boringfs_validation_result boringfs_validate_source(
+    const struct boringfs_source *source,
     const struct boringfs_validation_workspace *workspace,
     struct boringfs_validation_error *error_out) {
     struct boringfs_superblock superblock;
@@ -1002,7 +1034,8 @@ enum boringfs_validation_result boringfs_validate_volume(
     size_t index;
 
     clear_error(error_out);
-    if ((volume == NULL) || (workspace == NULL) || (error_out == NULL) ||
+    if ((source == NULL) || (source->read == NULL) ||
+        (workspace == NULL) || (error_out == NULL) ||
         (workspace->block_owner == NULL) ||
         (workspace->object_reference_count == NULL)) {
         return fail_result(error_out, BORINGFS_VALIDATE_INVALID_ARGUMENT,
@@ -1011,7 +1044,7 @@ enum boringfs_validation_result boringfs_validate_volume(
                            BORINGFS_LOCATION_NONE_U64);
     }
 
-    result = validate_superblock(volume, volume_size, &superblock, error_out);
+    result = validate_superblock(source, &superblock, error_out);
     if (result != BORINGFS_VALIDATE_OK) {
         return result;
     }
@@ -1032,32 +1065,55 @@ enum boringfs_validation_result boringfs_validate_volume(
     }
 
     result = validate_bitmap_metadata_and_tail(
-        volume, volume_size, &superblock, workspace->block_owner, error_out);
+        source, &superblock, workspace->block_owner, error_out);
     if (result != BORINGFS_VALIDATE_OK) {
         return result;
     }
     result = validate_objects_and_extents(
-        volume, volume_size, &superblock, workspace->block_owner, error_out);
+        source, &superblock, workspace->block_owner, error_out);
     if (result != BORINGFS_VALIDATE_OK) {
         return result;
     }
-    result = validate_parents_and_cycles(volume, volume_size,
+    result = validate_parents_and_cycles(source,
                                          &superblock, error_out);
     if (result != BORINGFS_VALIDATE_OK) {
         return result;
     }
-    result = validate_directories(volume, volume_size, &superblock,
+    result = validate_directories(source, &superblock,
                                   workspace->object_reference_count,
                                   error_out);
     if (result != BORINGFS_VALIDATE_OK) {
         return result;
     }
-    result = validate_references(volume, volume_size, &superblock,
+    result = validate_references(source, &superblock,
                                  workspace->object_reference_count,
                                  error_out);
     if (result != BORINGFS_VALIDATE_OK) {
         return result;
     }
     return validate_allocation_ownership(
-        volume, volume_size, &superblock, workspace->block_owner, error_out);
+        source, &superblock, workspace->block_owner, error_out);
+}
+
+enum boringfs_validation_result boringfs_validate_volume(
+    const uint8_t *volume,
+    size_t volume_size,
+    const struct boringfs_validation_workspace *workspace,
+    struct boringfs_validation_error *error_out) {
+    struct boringfs_memory_source memory;
+    struct boringfs_source source;
+
+    if (volume == NULL) {
+        clear_error(error_out);
+        return fail_result(error_out, BORINGFS_VALIDATE_INVALID_ARGUMENT,
+                           BORINGFS_LOCATION_NONE_U32,
+                           BORINGFS_LOCATION_NONE_U32,
+                           BORINGFS_LOCATION_NONE_U64);
+    }
+    memory.bytes = volume;
+    memory.size = volume_size;
+    source.context = &memory;
+    source.size = (uint64_t)volume_size;
+    source.read = memory_source_read;
+    return boringfs_validate_source(&source, workspace, error_out);
 }

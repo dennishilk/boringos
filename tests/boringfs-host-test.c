@@ -309,6 +309,37 @@ static bool build_nontrivial_fixture(void) {
     return true;
 }
 
+struct test_source_context {
+    const uint8_t *bytes;
+    size_t length;
+};
+
+static bool test_source_read(void *context,
+                             uint64_t offset,
+                             void *buffer,
+                             size_t length) {
+    struct test_source_context *const source =
+        (struct test_source_context *)context;
+    uint8_t *const destination = (uint8_t *)buffer;
+    size_t offset_size;
+    size_t index;
+
+    if ((source == NULL) || (source->bytes == NULL) ||
+        ((destination == NULL) && (length != 0U)) ||
+        (offset > (uint64_t)SIZE_MAX)) {
+        return false;
+    }
+    offset_size = (size_t)offset;
+    if ((offset_size > source->length) ||
+        (length > source->length - offset_size)) {
+        return false;
+    }
+    for (index = 0U; index < length; ++index) {
+        destination[index] = source->bytes[offset_size + index];
+    }
+    return true;
+}
+
 static enum boringfs_validation_result validate_with_error(
     const uint8_t *volume,
     size_t length,
@@ -565,6 +596,36 @@ static void fixture_and_workspace_tests(void) {
                BORINGFS_VALIDATE_INSUFFICIENT_WORKSPACE,
                "insufficient workspace rejected");
     (void)puts("valid fixtures and workspace: PASS");
+}
+
+static void source_adapter_tests(void) {
+    uint32_t source_block_owner[BORINGFS_MAX_BLOCKS];
+    uint8_t source_reference_count[BORINGFS_MAX_OBJECTS];
+    const struct boringfs_validation_workspace workspace = {
+        .block_owner = source_block_owner,
+        .block_owner_count = (size_t)BORINGFS_MAX_BLOCKS,
+        .object_reference_count = source_reference_count,
+        .object_reference_count_count = (size_t)BORINGFS_MAX_OBJECTS
+    };
+    struct test_source_context context = {
+        .bytes = nontrivial_volume,
+        .length = sizeof(nontrivial_volume)
+    };
+    struct boringfs_source source = {
+        .context = &context,
+        .size = (uint64_t)sizeof(nontrivial_volume),
+        .read = test_source_read
+    };
+    struct boringfs_validation_error error;
+
+    check_true(boringfs_validate_source(&source, &workspace, &error) ==
+                   BORINGFS_VALIDATE_OK,
+               "reader-backed validator accepts valid fixture");
+    source.size = (uint64_t)sizeof(nontrivial_volume) - 1ULL;
+    check_true(boringfs_validate_source(&source, &workspace, &error) ==
+                   BORINGFS_VALIDATE_TRUNCATED_VOLUME,
+               "reader-backed validator enforces declared source bounds");
+    (void)puts("reader-backed validator: PASS");
 }
 
 static void superblock_corruption_tests(void) {
@@ -881,6 +942,7 @@ int main(void) {
     golden_codec_tests();
     utf8_tests();
     fixture_and_workspace_tests();
+    source_adapter_tests();
     superblock_corruption_tests();
     bitmap_corruption_tests();
     object_corruption_tests();
