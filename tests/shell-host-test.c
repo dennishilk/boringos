@@ -186,6 +186,23 @@ long boring_fs_unlink(const char *path, size_t length) {
     return 0L;
 }
 
+long boring_launch_argv(const char *path,
+                        size_t path_length,
+                        const char *const argv[],
+                        size_t argc) {
+    (void)path;
+    (void)path_length;
+    (void)argv;
+    (void)argc;
+    return -(long)BORING_SYSCALL_ENOENT;
+}
+
+long boring_waitpid(uint64_t pid, int *status) {
+    (void)pid;
+    (void)status;
+    return -(long)BORING_SYSCALL_ENOENT;
+}
+
 long boring_system_info(struct boring_system_info *info) {
     if (info == NULL) {
         return -(long)BORING_SYSCALL_EFAULT;

@@ -7,6 +7,10 @@
 #include <boring/syscall_abi.h>
 
 #define BORINGFETCH_MIB 1048576ULL
+#define BORINGFETCH_DATA_MARKER 0x424f52494e474654ULL
+
+static volatile uint64_t boringfetch_data_marker =
+    BORINGFETCH_DATA_MARKER;
 
 int boring_main(int argc, char **argv);
 
@@ -160,7 +164,10 @@ static bool boringfetch_render(void) {
 int boring_main(int argc, char **argv) {
     int status = 0;
 
-    if ((argc != 1) || (argv == NULL) || (argv[0] == NULL)) {
+    if (boringfetch_data_marker != BORINGFETCH_DATA_MARKER) {
+        (void)boringfetch_text("boringfetch: runtime data unavailable\r\n");
+        status = 3;
+    } else if ((argc != 1) || (argv == NULL) || (argv[0] == NULL)) {
         (void)boringfetch_text("boringfetch: no arguments supported\r\n");
         status = 2;
     } else if (!boringfetch_render()) {

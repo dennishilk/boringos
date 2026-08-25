@@ -36,6 +36,7 @@ static char shell_prompt[BORING_SHELL_PROMPT_CAPACITY];
 static char shell_completion_path[BORING_SHELL_LINE_MAX + 1U];
 static char shell_completion_name[BORING_DIRENT_NAME_CAPACITY];
 static char shell_write_buffer[BORING_SHELL_LINE_MAX + 1U];
+static char shell_exec_path[BORING_SYSCALL_EXEC_PATH_MAX + 1U];
 static const char shell_command_names[BORING_SHELL_COMMAND_COUNT]
                                      [BORING_SHELL_COMMAND_NAME_CAPACITY] = {
     "help", "ls", "mkdir", "rmdir", "cd", "cat", "touch", "write",
@@ -1406,6 +1407,111 @@ static bool shell_command_history(const char *argument) {
     return true;
 }
 
+static bool shell_build_exec_path(const char *command) {
+    static const char bin_prefix[] = "/bin/";
+    size_t command_length;
+    size_t index;
+    bool explicit_path = false;
+
+    if ((command == NULL) || (command[0] == '\0')) {
+        return false;
+    }
+    command_length = boring_strlen(command);
+    if (command_length > (size_t)BORING_SYSCALL_EXEC_PATH_MAX) {
+        return false;
+    }
+    for (index = 0U; index < command_length; ++index) {
+        if (command[index] == '/') {
+            explicit_path = true;
+            break;
+        }
+    }
+    if (explicit_path) {
+        return shell_copy_text(shell_exec_path, sizeof(shell_exec_path),
+                               command);
+    }
+    if (command_length > sizeof(shell_exec_path) - sizeof(bin_prefix)) {
+        return false;
+    }
+    for (index = 0U; index < sizeof(bin_prefix) - 1U; ++index) {
+        shell_exec_path[index] = bin_prefix[index];
+    }
+    for (index = 0U; index < command_length; ++index) {
+        shell_exec_path[sizeof(bin_prefix) - 1U + index] = command[index];
+    }
+    shell_exec_path[sizeof(bin_prefix) - 1U + command_length] = '\0';
+    return true;
+}
+
+static bool shell_command_external(char *command, char *argument) {
+    const char *argv[BORING_SYSCALL_ARG_MAX];
+    size_t argc = 0U;
+    char *cursor;
+    long launch_result;
+    long wait_result;
+    int status = 0;
+
+    if ((command == NULL) || (command[0] == '\0') ||
+        !shell_build_exec_path(command)) {
+        return shell_write_text("command name too long\r\n");
+    }
+    argv[argc] = command;
+    ++argc;
+    cursor = argument;
+    while ((cursor != NULL) && (cursor[0] != '\0')) {
+        while ((cursor[0] != '\0') && shell_is_space(cursor[0])) {
+            ++cursor;
+        }
+        if (cursor[0] == '\0') {
+            break;
+        }
+        if (argc >= (size_t)BORING_SYSCALL_ARG_MAX) {
+            return shell_write_text("shell: too many arguments\r\n");
+        }
+        argv[argc] = cursor;
+        ++argc;
+        while ((cursor[0] != '\0') && !shell_is_space(cursor[0])) {
+            ++cursor;
+        }
+        if (cursor[0] != '\0') {
+            cursor[0] = '\0';
+            ++cursor;
+        }
+    }
+
+    launch_result = boring_launch_argv(
+        shell_exec_path, boring_strlen(shell_exec_path), argv, argc);
+    if (launch_result < 0L) {
+        if (launch_result == -(long)BORING_SYSCALL_ENOENT) {
+            return shell_write_text("command not found: ") &&
+                   shell_write_text(command) && shell_write_text("\r\n");
+        }
+        if (launch_result == -(long)BORING_SYSCALL_ENOEXEC) {
+            return shell_write_text(command) &&
+                   shell_write_text(": cannot execute\r\n");
+        }
+        if (launch_result == -(long)BORING_SYSCALL_EISDIR) {
+            return shell_write_text(command) &&
+                   shell_write_text(": is a directory\r\n");
+        }
+        if (launch_result == -(long)BORING_SYSCALL_ENAMETOOLONG) {
+            return shell_write_text(command) &&
+                   shell_write_text(": name too long\r\n");
+        }
+        return shell_write_text(command) &&
+               shell_write_text(": launch failed\r\n");
+    }
+    if (launch_result == 0L) {
+        return false;
+    }
+    wait_result = boring_waitpid((uint64_t)launch_result, &status);
+    if (wait_result != launch_result) {
+        return shell_write_text(command) &&
+               shell_write_text(": wait failed\r\n");
+    }
+    return true;
+}
+
 static bool shell_command_exit(const char *command, const char *argument) {
     if ((argument != NULL) && (argument[0] != '\0')) {
         return shell_write_text(command) &&
@@ -1552,8 +1658,7 @@ static bool shell_execute_line(char *line) {
         return shell_command_boringfetch(argument);
     }
 
-    return shell_write_text("command not found: ") &&
-           shell_write_text(command) && shell_write_text("\r\n");
+    return shell_command_external(command, argument);
 }
 
 int boring_main(void) {

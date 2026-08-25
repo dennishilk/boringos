@@ -32,6 +32,18 @@ if printf '%s\n' "${PROGRAMS}" | grep '^  LOAD' | grep -Eq ' W E '; then
     echo 'boringfetch contains a writable+executable PT_LOAD' >&2
     exit 1
 fi
+
+DATA_LINE=$(printf '%s\n' "${PROGRAMS}" | grep '^  LOAD' | sed -n '3p')
+set -- ${DATA_LINE}
+DATA_VADDR=$3
+DATA_FILESZ=$5
+DATA_MEMSZ=$6
+if [ $((DATA_VADDR)) -ne $((0x40002000)) ] ||
+   [ $((DATA_FILESZ)) -le 0 ] || [ $((DATA_MEMSZ)) -le 0 ]; then
+    echo 'boringfetch writable PT_LOAD is empty or misplaced' >&2
+    exit 1
+fi
+printf '%s\n' "${DATA_LINE}" | grep -Eq ' RW +0x1000$'
 printf '%s\n' "${DYNAMIC}" | grep -Fq 'There is no dynamic section in this file.'
 printf '%s\n' "${RELOCS}" | grep -Fq 'There are no relocations in this file.'
 if [ -n "${UNDEFINED}" ]; then

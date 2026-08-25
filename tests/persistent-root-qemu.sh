@@ -56,8 +56,9 @@ start_vm() {
 }
 send() { printf '%s\n' "$1" >&3; wait_prompt $((PROMPT + 1)); }
 
-make -C "${ROOT}" boringfs-fixture boringfsck
-"${ROOT}/build/boringfs-fixture" "${IMAGE}" valid >/dev/null
+make -C "${ROOT}" boringfs-fixture boringfsck user-boringfetch
+"${ROOT}/build/boringfs-fixture" "${IMAGE}" valid \
+    "${ROOT}/build/user/boringfetch.elf" >/dev/null
 make -C "${ROOT}" TEST_MODE=persistent-root
 
 start_vm first
@@ -65,6 +66,15 @@ for line in 'BoringKernel 0.0.28-dev' '  mount-at-root: PASS' 'BoringFS root mou
     grep -Fqx "${line}" "${LOG}" || fail "missing root boot marker: ${line}"
 done
 grep -Fq 'boring@boringos:/$ ' "${LOG}" || fail 'missing root identity prompt'
+
+send '/bin/boringfetch'
+for line in 'boring-launch: caller pid 2' 'boring-launch: child pid 3' 'boring-launch: independent address space' 'boring-launch: entry executable' 'boring-launch: stack rw-nx' 'boring-launch: higher-half supervisor-only' 'boring-launch: cwd inherited' 'boring-launch: VFS executable source /bin/boringfetch' 'boring-launch: handoff via SYSRETQ' '                     Root FS: BoringFS' '                     Root device: virtio-blk' '                     Processes: 3' '                     PID: 3' 'boring-exit: child pid 3 status 0 is zombie' 'boring-waitpid: reaped child pid 3'; do
+    grep -Fqx "${line}" "${LOG}" || fail "missing first VFS exec marker: ${line}"
+done
+send 'ps'
+grep -Fqx '1 0 WAITING boring-init' "${LOG}" || fail 'PID1 missing after child reap'
+grep -Fqx '2 1 RUNNING boring-shell' "${LOG}" || fail 'shell missing after child reap'
+if grep -Fqx '3 2 ZOMBIE boringfetch' "${LOG}"; then fail 'boringfetch zombie remained after waitpid'; fi
 
 send 'pwd'
 grep -Fqx '/' "${LOG}" || fail 'pwd did not report root'
@@ -109,6 +119,10 @@ EXPECTED_SHA=$(printf 'still-here\n' | sha256sum | awk '{print $1}')
 [ "${PERSISTED_SHA}" = "${EXPECTED_SHA}" ] || fail 'persisted bytes/newline mismatch'
 
 start_vm second
+send '/bin/boringfetch'
+grep -Fqx 'boring-launch: VFS executable source /bin/boringfetch' "${LOG}" || fail 'persisted executable was not VFS-loaded after reboot'
+grep -Fqx '                     PID: 3' "${LOG}" || fail 'rebooted executable did not run as PID 3'
+grep -Fqx 'boring-waitpid: reaped child pid 3' "${LOG}" || fail 'rebooted executable was not reaped'
 send 'cat /persist/a.txt'
 grep -Fqx 'still-here' "${LOG}" || fail 'reboot persistence failed'
 send 'boringfetch'
