@@ -8,8 +8,12 @@
 #include <boring/syscall_abi.h>
 
 #define BORING_SHELL_LINE_MAX 512U
+#define BORING_SHELL_ESCAPE_MAX 8U
 
 static volatile uint64_t shell_state;
+static bool shell_input_pushback_valid;
+static char shell_input_pushback;
+static bool shell_skip_lf_after_cr;
 
 static void shell_idle_forever(void) __attribute__((noreturn));
 static void shell_idle_forever(void) {
@@ -129,28 +133,208 @@ static bool shell_syscall_safety(void) {
             -(long)BORING_SYSCALL_ENOENT);
 }
 
-static bool shell_read_line(char *line, size_t capacity) {
-    size_t length = 0U;
-    bool overflow = false;
+static bool shell_input_read(char *character_out) {
+    long result;
 
-    if ((line == NULL) || (capacity < 2U)) {
+    if (character_out == NULL) {
+        return false;
+    }
+    if (shell_input_pushback_valid) {
+        *character_out = shell_input_pushback;
+        shell_input_pushback_valid = false;
+        return true;
+    }
+    result = boring_console_read(character_out, 1U);
+    return result == 1L;
+}
+
+static void shell_input_unread(char character) {
+    if (!shell_input_pushback_valid) {
+        shell_input_pushback = character;
+        shell_input_pushback_valid = true;
+    }
+}
+
+static bool shell_cursor_left(size_t count) {
+    char digits[21];
+    size_t digits_count = 0U;
+    size_t index;
+
+    if (count == 0U) {
+        return true;
+    }
+    do {
+        digits[digits_count] = (char)('0' + (char)(count % 10U));
+        count /= 10U;
+        ++digits_count;
+    } while (count != 0U);
+    if (!shell_write("\x1b[", 2U)) {
+        return false;
+    }
+    for (index = 0U; index < digits_count; ++index) {
+        const char digit = digits[digits_count - index - 1U];
+        if (!shell_write(&digit, 1U)) {
+            return false;
+        }
+    }
+    return shell_write("D", 1U);
+}
+
+static bool shell_redraw_line(const char *prompt,
+                              const char *line,
+                              size_t length,
+                              size_t cursor) {
+    if ((prompt == NULL) || (line == NULL) || (cursor > length)) {
+        return false;
+    }
+    return shell_write("\r", 1U) &&
+           shell_write_text(prompt) &&
+           shell_write(line, length) &&
+           shell_write("\x1b[K", 3U) &&
+           shell_cursor_left(length - cursor);
+}
+
+static bool shell_escape_equals(const char *sequence,
+                                size_t length,
+                                const char *expected) {
+    size_t index = 0U;
+
+    if ((sequence == NULL) || (expected == NULL)) {
+        return false;
+    }
+    while (expected[index] != '\0') {
+        if ((index >= length) || (sequence[index] != expected[index])) {
+            return false;
+        }
+        ++index;
+    }
+    return index == length;
+}
+
+static bool shell_handle_escape(const char *prompt,
+                                char *line,
+                                size_t length,
+                                size_t *cursor) {
+    char first;
+    char sequence[BORING_SHELL_ESCAPE_MAX];
+    size_t sequence_length = 0U;
+
+    if ((prompt == NULL) || (line == NULL) || (cursor == NULL) ||
+        (*cursor > length) || !shell_input_read(&first)) {
         return false;
     }
 
-    for (;;) {
-        char character = '\0';
-        const long result = boring_console_read(&character, 1U);
-
-        if (result != 1L) {
+    if (first == 'O') {
+        char final;
+        if (!shell_input_read(&final)) {
             return false;
         }
+        if (final == 'H') {
+            *cursor = 0U;
+            return shell_redraw_line(prompt, line, length, *cursor);
+        }
+        if (final == 'F') {
+            *cursor = length;
+            return shell_redraw_line(prompt, line, length, *cursor);
+        }
+        return true;
+    }
+
+    if (first != '[') {
+        shell_input_unread(first);
+        return true;
+    }
+
+    while (sequence_length < (size_t)BORING_SHELL_ESCAPE_MAX) {
+        char character;
+        const unsigned char byte_min = 0x40U;
+        const unsigned char byte_max = 0x7eU;
+        const unsigned char byte =
+            shell_input_read(&character) ? (unsigned char)character : 0U;
+
+        if (byte == 0U) {
+            return false;
+        }
+        sequence[sequence_length] = character;
+        ++sequence_length;
+        if ((byte >= byte_min) && (byte <= byte_max)) {
+            break;
+        }
+    }
+
+    if (shell_escape_equals(sequence, sequence_length, "D")) {
+        if (*cursor != 0U) {
+            --(*cursor);
+            return shell_write("\x1b[D", 3U);
+        }
+        return true;
+    }
+    if (shell_escape_equals(sequence, sequence_length, "C")) {
+        if (*cursor < length) {
+            ++(*cursor);
+            return shell_write("\x1b[C", 3U);
+        }
+        return true;
+    }
+    if (shell_escape_equals(sequence, sequence_length, "H") ||
+        shell_escape_equals(sequence, sequence_length, "1~") ||
+        shell_escape_equals(sequence, sequence_length, "7~")) {
+        *cursor = 0U;
+        return shell_redraw_line(prompt, line, length, *cursor);
+    }
+    if (shell_escape_equals(sequence, sequence_length, "F") ||
+        shell_escape_equals(sequence, sequence_length, "4~") ||
+        shell_escape_equals(sequence, sequence_length, "8~")) {
+        *cursor = length;
+        return shell_redraw_line(prompt, line, length, *cursor);
+    }
+
+    /* Up/Down and Delete are deliberately decoded but ignored in this first
+     * reliability step. They must never leak printable suffix bytes into the
+     * command. History/Delete semantics are added after this corruption gate.
+     */
+    return true;
+}
+
+static bool shell_read_line(const char *prompt, char *line, size_t capacity) {
+    size_t length = 0U;
+    size_t cursor = 0U;
+    bool overflow = false;
+
+    if ((prompt == NULL) || (line == NULL) || (capacity < 2U)) {
+        return false;
+    }
+
+    line[0] = '\0';
+    for (;;) {
+        char character = '\0';
+        size_t index;
+
+        if (!shell_input_read(&character)) {
+            return false;
+        }
+        if (shell_skip_lf_after_cr) {
+            shell_skip_lf_after_cr = false;
+            if (character == '\n') {
+                continue;
+            }
+        }
+        if ((unsigned char)character == 0x1bU) {
+            if (!shell_handle_escape(prompt, line, length, &cursor)) {
+                return false;
+            }
+            continue;
+        }
         if ((character == '\n') || (character == '\r')) {
-            if (!shell_write("\n", 1U)) {
+            if (character == '\r') {
+                shell_skip_lf_after_cr = true;
+            }
+            if (!shell_write("\r\n", 2U)) {
                 return false;
             }
             if (overflow) {
                 line[0] = '\0';
-                if (!shell_write_text("shell: line too long\n")) {
+                if (!shell_write_text("shell: line too long\r\n")) {
                     return false;
                 }
                 return true;
@@ -159,26 +343,39 @@ static bool shell_read_line(char *line, size_t capacity) {
             return true;
         }
         if ((character == '\b') || ((unsigned char)character == 0x7fU)) {
-            if (!overflow && (length != 0U)) {
+            if (!overflow && (cursor != 0U)) {
+                for (index = cursor - 1U; index < length - 1U; ++index) {
+                    line[index] = line[index + 1U];
+                }
+                --cursor;
                 --length;
-                if (!shell_write("\b \b", 3U)) {
+                line[length] = '\0';
+                if (!shell_redraw_line(prompt, line, length, cursor)) {
                     return false;
                 }
             }
             continue;
         }
-        if (((character >= ' ') && (character <= '~')) ||
-            (character == '\t')) {
+        if ((character >= ' ') && (character <= '~')) {
             if (!overflow) {
                 if (length >= capacity - 1U) {
                     overflow = true;
                 } else {
-                    line[length] = character;
+                    for (index = length; index > cursor; --index) {
+                        line[index] = line[index - 1U];
+                    }
+                    line[cursor] = character;
+                    ++cursor;
                     ++length;
+                    line[length] = '\0';
+                    if (cursor == length) {
+                        if (!shell_write(&character, 1U)) {
+                            return false;
+                        }
+                    } else if (!shell_redraw_line(prompt, line, length, cursor)) {
+                        return false;
+                    }
                 }
-            }
-            if (!shell_write(&character, 1U)) {
-                return false;
             }
         }
     }
@@ -280,22 +477,22 @@ static bool shell_print_fs_error(const char *command, long result) {
     }
 
     return shell_write_text(command) && shell_write_text(": ") &&
-           shell_write_text(message) && shell_write_text("\n");
+           shell_write_text(message) && shell_write_text("\r\n");
 }
 
 static bool shell_command_help(const char *argument) {
     if ((argument != NULL) && (argument[0] != '\0')) {
-        return shell_write_text("help: usage: help\n");
+        return shell_write_text("help: usage: help\r\n");
     }
-    return shell_write_text("help\n") &&
-           shell_write_text("ls [path]\n") &&
-           shell_write_text("mkdir <name>\n") &&
-           shell_write_text("rmdir <name>\n") &&
-           shell_write_text("cd <path>\n") &&
-           shell_write_text("cat <path>\n") &&
-           shell_write_text("touch <path>\n") &&
-           shell_write_text("write <path> <text>\n") &&
-           shell_write_text("rm <path>\n");
+    return shell_write_text("help\r\n") &&
+           shell_write_text("ls [path]\r\n") &&
+           shell_write_text("mkdir <name>\r\n") &&
+           shell_write_text("rmdir <name>\r\n") &&
+           shell_write_text("cd <path>\r\n") &&
+           shell_write_text("cat <path>\r\n") &&
+           shell_write_text("touch <path>\r\n") &&
+           shell_write_text("write <path> <text>\r\n") &&
+           shell_write_text("rm <path>\r\n");
 }
 
 static bool shell_command_ls(const char *argument) {
@@ -307,7 +504,7 @@ static bool shell_command_ls(const char *argument) {
     if ((path == NULL) || (path[0] == '\0')) {
         path = dot;
     } else if (!shell_single_argument(path)) {
-        return shell_write_text("ls: usage: ls [path]\n");
+        return shell_write_text("ls: usage: ls [path]\r\n");
     }
     path_length = boring_strlen(path);
     for (;;) {
@@ -326,7 +523,7 @@ static bool shell_command_ls(const char *argument) {
             return false;
         }
         if (!shell_write(entry.name, (size_t)entry.name_length) ||
-            !shell_write("\n", 1U)) {
+            !shell_write("\r\n", 2U)) {
             return false;
         }
         ++index;
@@ -337,7 +534,7 @@ static bool shell_command_mkdir(const char *argument) {
     long result;
 
     if (!shell_single_argument(argument)) {
-        return shell_write_text("mkdir: usage: mkdir <name>\n");
+        return shell_write_text("mkdir: usage: mkdir <name>\r\n");
     }
     result = boring_fs_mkdir(argument, boring_strlen(argument));
     if (result == 0L) {
@@ -350,7 +547,7 @@ static bool shell_command_rmdir(const char *argument) {
     long result;
 
     if (!shell_single_argument(argument)) {
-        return shell_write_text("rmdir: usage: rmdir <name>\n");
+        return shell_write_text("rmdir: usage: rmdir <name>\r\n");
     }
     result = boring_fs_rmdir(argument, boring_strlen(argument));
     if (result == 0L) {
@@ -363,7 +560,7 @@ static bool shell_command_cd(const char *argument) {
     long result;
 
     if (!shell_single_argument(argument)) {
-        return shell_write_text("cd: usage: cd <path>\n");
+        return shell_write_text("cd: usage: cd <path>\r\n");
     }
     result = boring_fs_chdir(argument, boring_strlen(argument));
     if (result == 0L) {
@@ -378,7 +575,7 @@ static bool shell_command_cat(const char *argument) {
     size_t path_length;
 
     if (!shell_single_argument(argument)) {
-        return shell_write_text("cat: usage: cat <path>\n");
+        return shell_write_text("cat: usage: cat <path>\r\n");
     }
     path_length = boring_strlen(argument);
     for (;;) {
@@ -405,7 +602,7 @@ static bool shell_command_touch(const char *argument) {
     long result;
 
     if (!shell_single_argument(argument)) {
-        return shell_write_text("touch: usage: touch <path>\n");
+        return shell_write_text("touch: usage: touch <path>\r\n");
     }
     result = boring_fs_touch(argument, boring_strlen(argument));
     if (result == 0L) {
@@ -422,7 +619,7 @@ static bool shell_command_write(char *argument) {
     long result;
 
     if ((argument == NULL) || (argument[0] == '\0')) {
-        return shell_write_text("write: usage: write <path> <text>\n");
+        return shell_write_text("write: usage: write <path> <text>\r\n");
     }
     path = argument;
     cursor = path;
@@ -430,13 +627,13 @@ static bool shell_command_write(char *argument) {
         ++cursor;
     }
     if (*cursor == '\0') {
-        return shell_write_text("write: usage: write <path> <text>\n");
+        return shell_write_text("write: usage: write <path> <text>\r\n");
     }
     *cursor = '\0';
     ++cursor;
     text = shell_trim(cursor);
     if ((text == NULL) || (text[0] == '\0')) {
-        return shell_write_text("write: usage: write <path> <text>\n");
+        return shell_write_text("write: usage: write <path> <text>\r\n");
     }
     text_length = boring_strlen(text);
     result = boring_fs_write(path, boring_strlen(path), text, text_length);
@@ -450,7 +647,7 @@ static bool shell_command_rm(const char *argument) {
     long result;
 
     if (!shell_single_argument(argument)) {
-        return shell_write_text("rm: usage: rm <path>\n");
+        return shell_write_text("rm: usage: rm <path>\r\n");
     }
     result = boring_fs_unlink(argument, boring_strlen(argument));
     if (result == 0L) {
@@ -463,23 +660,23 @@ static bool shell_command_boringfetch(const char *argument) {
     struct boring_system_info info;
 
     if ((argument == NULL) || (argument[0] != '\0')) {
-        return shell_write_text("boringfetch: no arguments supported\n");
+        return shell_write_text("boringfetch: no arguments supported\r\n");
     }
     if ((boring_system_info(&info) != 0L) ||
         (info.abi_version != BORING_SYSTEM_INFO_ABI_VERSION)) {
-        return shell_write_text("boringfetch: system information unavailable\n");
+        return shell_write_text("boringfetch: system information unavailable\r\n");
     }
-    return shell_write_text("    ____             BoringOS\n") &&
-           shell_write_text("   / __ )____  _____ -------------------------\n") &&
-           shell_write_text("  / __  / __ \\/ ___/ OS: BoringOS\n") &&
-           shell_write_text(" / /_/ / /_/ / /    Kernel: BoringKernel 0.0.27-dev\n") &&
-           shell_write_text("/_____/\\____/_/      Arch: x86_64\n") &&
+    return shell_write_text("    ____             BoringOS\r\n") &&
+           shell_write_text("   / __ )____  _____ -------------------------\r\n") &&
+           shell_write_text("  / __  / __ \\/ ___/ OS: BoringOS\r\n") &&
+           shell_write_text(" / /_/ / /_/ / /    Kernel: BoringKernel 0.0.27-dev\r\n") &&
+           shell_write_text("/_____/\\____/_/      Arch: x86_64\r\n") &&
            shell_write_text("                     Memory usable: ") &&
            shell_write_u64(info.usable_memory_bytes) &&
-           shell_write_text(" bytes\n                     Memory free: ") &&
+           shell_write_text(" bytes\r\n                     Memory free: ") &&
            shell_write_u64(info.free_memory_bytes) &&
-           shell_write_text(" bytes\n                     Root FS: BoringFS\n") &&
-           shell_write_text("                     Shell: boring-shell\n");
+           shell_write_text(" bytes\r\n                     Root FS: BoringFS\r\n") &&
+           shell_write_text("                     Shell: boring-shell\r\n");
 }
 
 static bool shell_execute_line(char *line) {
@@ -524,16 +721,19 @@ static bool shell_execute_line(char *line) {
     }
 
     return shell_write_text("command not found: ") &&
-           shell_write_text(command) && shell_write_text("\n");
+           shell_write_text(command) && shell_write_text("\r\n");
 }
 
 int boring_main(void) {
-    static const char starting[] = "boring-shell: starting\n";
-    static const char pid_ok[] = "boring-shell: pid 2\n";
-    static const char ready[] = "boring-shell ready.\n\n";
-    static const char failed[] = "boring-shell: FAILED\n";
+    static const char starting[] = "boring-shell: starting\r\n";
+    static const char pid_ok[] = "boring-shell: pid 2\r\n";
+    static const char ready[] = "boring-shell ready.\r\n\r\n";
+    static const char failed[] = "boring-shell: FAILED\r\n";
+    static const char prompt[] = "boring> ";
     char line[BORING_SHELL_LINE_MAX + 1U];
 
+    shell_input_pushback_valid = false;
+    shell_skip_lf_after_cr = false;
     if (!shell_write(starting, sizeof(starting) - 1U) ||
         (boring_getpid() != 2ULL) ||
         !shell_write(pid_ok, sizeof(pid_ok) - 1U) ||
@@ -550,8 +750,8 @@ int boring_main(void) {
     }
 
     for (;;) {
-        if (!shell_write_text("boring> ") ||
-            !shell_read_line(line, sizeof(line)) ||
+        if (!shell_write_text(prompt) ||
+            !shell_read_line(prompt, line, sizeof(line)) ||
             !shell_execute_line(line)) {
             (void)shell_write(failed, sizeof(failed) - 1U);
             shell_idle_forever();
