@@ -13,7 +13,7 @@ It is **not a Linux distribution**, **not a BSD distribution**, and **not based 
 
 **Extremely early bootstrap kernel.**
 
-BoringKernel boots under **QEMU x86_64**. Limine remains the external bootloader. BoringKernel currently provides COM1 serial output, memory and address-space management, exceptions and PIT/PIC interrupts, kernel scheduling, real CPL3 ELF userspace, a checked native syscall boundary, VFS/RAMFS, VirtIO-backed writable BoringFS, PID 1 `boring-init`, and an interactive native `boring-shell` with persistent-root acceptance.
+BoringKernel boots under **QEMU x86_64**. Limine remains the external bootloader. BoringKernel currently provides COM1 serial output, memory and address-space management, exceptions and PIT/PIC interrupts, kernel scheduling, real CPL3 ELF userspace, a checked native syscall boundary, VFS/RAMFS, VirtIO-backed writable BoringFS, PID 1 `boring-init`, an interactive native `boring-shell`, and bounded VFS-backed static ELF launching including the standalone `/bin/boringfetch` from persistent BoringFS.
 
 Current serial output begins with:
 
@@ -24,7 +24,7 @@ Arch: x86_64
 Hello from BoringKernel.
 ```
 
-The original VMM still adopts the active Limine-created x86_64 four-level root for PID 0. BoringKernel 0.0.9-dev introduced PMM-backed process roots with an empty private lower half and shared higher-half kernel mappings. BoringKernel 0.0.10-dev added the first real Ring 3 transition, and 0.0.11-dev added the native x86_64 syscall boundary. Later milestones extended that same checked foundation through native ELF programs, filesystems, storage, system identity and the M27 shell lifecycle; the exact current state is tracked in [`docs/roadmap.md`](docs/roadmap.md).
+The original VMM still adopts the active Limine-created x86_64 four-level root for PID 0. BoringKernel 0.0.9-dev introduced PMM-backed process roots with an empty private lower half and shared higher-half kernel mappings. BoringKernel 0.0.10-dev added the first real Ring 3 transition, and 0.0.11-dev added the native x86_64 syscall boundary. Later milestones extended that same checked foundation through native ELF programs, filesystems, storage, system identity, the M27 shell lifecycle and M28 VFS-backed standalone programs; the exact current state is tracked in [`docs/roadmap.md`](docs/roadmap.md).
 
 The current process split is:
 
@@ -113,9 +113,9 @@ The syscall boundary executes real x86_64 `SYSCALL`. BoringKernel enables `IA32_
 
 `DEBUG_WRITE` never passes a raw userspace pointer to the serial layer. Its `copy_from_user` path validates the complete lower-half range, walks the current process page tables with effective Present + U/S checks, resolves physical memory through the trusted HHDM alias, and copies first into a kernel-owned buffer. `SYSRETQ` is attempted only after validating the saved user RIP/RSP, active process/address space, expected selectors, and sanitized return RFLAGS. The test executes seven real syscall dispatches, proves multiple `SYSRETQ` returns to CPL3, then executes `cli`; that final real #GP still enters through TSS.RSP0 rather than the syscall stack.
 
-The syscall ABI is **provisional**, not a stable public userspace contract. There is still **no libc, FD/TTY layer, general `fork`/VFS-backed `exec`, signals, authentication or permission model, concurrent child scheduling, networking, graphical environment, native input stack, SMP, PCID, copy-on-write, demand paging, swap, or FPU/SIMD context switching**.
+The syscall ABI is **provisional**, not a stable public userspace contract. There is still **no libc, FD/TTY layer, POSIX `fork`/`exec`, dynamic linker or shared-library ABI, signals, authentication or permission model, concurrent child scheduling, networking, graphical environment, native input stack, SMP, PCID, copy-on-write, demand paging, swap, or FPU/SIMD context switching**.
 
-See [`docs/syscalls.md`](docs/syscalls.md) for the exact implemented syscall boundary and current limitations.
+See [`docs/syscalls.md`](docs/syscalls.md) for the exact implemented syscall boundary and [`docs/userspace-exec.md`](docs/userspace-exec.md) for the bounded M28 executable-loading and argc/argv contract.
 
 For the current bootstrap proof, QEMU remains:
 
@@ -168,7 +168,7 @@ BoringKernel syscall boundary test passed.
 BoringKernel syscall verification passed.
 ```
 
-See [`docs/architecture.md`](docs/architecture.md), [`docs/interrupts.md`](docs/interrupts.md), [`docs/tasks.md`](docs/tasks.md), [`docs/processes.md`](docs/processes.md), [`docs/syscalls.md`](docs/syscalls.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md), and [`docs/boringfs.md`](docs/boringfs.md).
+See [`docs/architecture.md`](docs/architecture.md), [`docs/interrupts.md`](docs/interrupts.md), [`docs/tasks.md`](docs/tasks.md), [`docs/processes.md`](docs/processes.md), [`docs/syscalls.md`](docs/syscalls.md), [`docs/userspace-exec.md`](docs/userspace-exec.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md), and [`docs/boringfs.md`](docs/boringfs.md).
 
 ## Native desktop direction
 
