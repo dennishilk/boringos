@@ -87,6 +87,9 @@ jobs:
       - name: Modern VirtIO block device
         run: sh ./tests/virtio-block-qemu.sh
 
+      - name: Read-only BoringFS over VirtIO
+        run: sh ./tests/boringfs-ro-qemu.sh
+
       - name: BoringFS v0 codec and structural validator
         run: make boringfs-host-test
 
