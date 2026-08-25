@@ -99,7 +99,7 @@ start_vm() {
     mkfifo "${serial_in}" "${serial_out}"
     exec 3<> "${serial_in}"
     SERIAL_FD_OPEN=1
-    tr -d '\r' < "${serial_out}" > "${LOG}" &
+    stdbuf -o0 tr -d '\r' < "${serial_out}" > "${LOG}" &
     CAT_PID=$!
 
     "${QEMU}" \

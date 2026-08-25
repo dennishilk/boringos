@@ -43,7 +43,7 @@ wait_prompt() {
 start_vm() {
     phase=$1; base="${TMPDIR_PATH}/serial-${phase}"; LOG="${base}.log"; QEMU_LOG="${TMPDIR_PATH}/qemu-${phase}.log"; PROMPT=0
     mkfifo "${base}.in" "${base}.out"; exec 3<> "${base}.in"; FD_OPEN=1
-    tr -d '\r' < "${base}.out" > "${LOG}" & CAT_PID=$!
+    stdbuf -o0 tr -d '\r' < "${base}.out" > "${LOG}" & CAT_PID=$!
     "${QEMU}" -M q35 -cpu "${QEMU_CPU}" -m 128M -cdrom "${ROOT}/build/boringos.iso" -boot d \
         -drive "file=${IMAGE},if=none,format=raw,id=boringdisk" \
         -device "virtio-blk-pci,drive=boringdisk,disable-legacy=on" \

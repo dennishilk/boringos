@@ -63,7 +63,7 @@ make -C "${ROOT}" TEST_MODE=shell
 mkfifo "${SERIAL_BASE}.in" "${SERIAL_BASE}.out"
 exec 3<> "${SERIAL_BASE}.in"
 FD_OPEN=1
-tr -d '\r' < "${SERIAL_BASE}.out" > "${LOG}" &
+stdbuf -o0 tr -d '\r' < "${SERIAL_BASE}.out" > "${LOG}" &
 CAT_PID=$!
 
 "${QEMU}" -M q35 -cpu "${QEMU_CPU}" -m 128M \

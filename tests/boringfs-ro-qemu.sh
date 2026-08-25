@@ -90,7 +90,7 @@ BEFORE_SHA=$(sha256sum "${VALID_IMAGE}" | awk '{print $1}')
 mkfifo "${SERIAL_IN}" "${SERIAL_OUT}"
 exec 3<> "${SERIAL_IN}"
 SERIAL_FD_OPEN=1
-tr -d '\r' < "${SERIAL_OUT}" > "${LOG}" &
+stdbuf -o0 tr -d '\r' < "${SERIAL_OUT}" > "${LOG}" &
 CAT_PID=$!
 
 "${QEMU}" \
