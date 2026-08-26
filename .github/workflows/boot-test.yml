@@ -87,6 +87,9 @@ jobs:
       - name: Native descriptor host tests
         run: make fd-host-test
 
+      - name: Native framebuffer renderer host tests
+        run: make framebuffer-host-test
+
       - name: Build boring-shell test mode
         run: make TEST_MODE=shell
 
@@ -119,6 +122,16 @@ jobs:
 
       - name: Native descriptor and standalone cat verification
         run: sh ./tests/fd-stdio-qemu.sh
+
+      - name: Real Limine framebuffer and BoringOS dashboard
+        run: sh ./tests/framebuffer-qemu.sh
+
+      - name: Upload validated framebuffer reference
+        uses: actions/upload-artifact@v4
+        with:
+          name: boringos-framebuffer-reference
+          path: build/framebuffer-reference.ppm
+          if-no-files-found: error
 
       - name: Writable BoringFS allocation and rollback matrix
         run: make boringfs-vfs-host-test
