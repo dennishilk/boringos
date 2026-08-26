@@ -23,7 +23,8 @@ enum boring_ipc_result {
     BORING_IPC_RESULT_EXISTS = 3,
     BORING_IPC_RESULT_NO_SPACE = 4,
     BORING_IPC_RESULT_PEER_CLOSED = 5,
-    BORING_IPC_RESULT_INTERNAL = 6
+    BORING_IPC_RESULT_WOULD_BLOCK = 6,
+    BORING_IPC_RESULT_INTERNAL = 7
 };
 
 enum boring_ipc_handle_type {
@@ -79,7 +80,7 @@ enum boring_ipc_result boring_ipc_close(struct process *process,
 void boring_ipc_process_cleanup(struct process *process);
 bool boring_ipc_get_stats(struct boring_ipc_stats *stats);
 
-/* Host-test hooks exercise the same bounded registry/queue implementation. */
+/* Host-test hook resets only when no live IPC object remains. */
 bool boring_ipc_host_reset(void);
 
 #endif
