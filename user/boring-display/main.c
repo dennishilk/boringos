@@ -18,6 +18,8 @@ static struct boring_display_core display_core;
 static uint32_t composition_handle;
 static uint8_t *composition_pixels;
 
+int boring_main(void);
+
 static void say(const char *text) {
     (void)boring_debug_write(text, boring_strlen(text));
 }
