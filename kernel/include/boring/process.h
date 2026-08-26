@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include <boring/address_space.h>
+#include <boring/fd.h>
 #include <boring/vfs.h>
 
 #define KERNEL_BOOTSTRAP_PID 0ULL
@@ -29,6 +30,7 @@ struct process {
     uint64_t parent_pid;
     struct address_space address_space;
     struct vfs_path cwd;
+    struct kernel_fd_table fd_table;
     enum process_state state;
     char name[KERNEL_PROCESS_NAME_MAX + 1U];
     char username[KERNEL_PROCESS_USER_MAX + 1U];
