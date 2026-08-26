@@ -14,6 +14,7 @@
 #include <boring/serial.h>
 #include <boring/syscall.h>
 #include <boring/timer.h>
+#include <boring/task.h>
 #include <boring/user_memory.h>
 #include <boring/vfs.h>
 #include <boring/vmm.h>
@@ -245,7 +246,7 @@ static uint64_t syscall_system_info(uint64_t user_info) {
         !syscall_copy_literal(info.kernel_name, sizeof(info.kernel_name),
                               "BoringKernel") ||
         !syscall_copy_literal(info.kernel_version, sizeof(info.kernel_version),
-                              "0.0.33-dev") ||
+                              "0.0.34-dev") ||
         !syscall_copy_literal(info.arch, sizeof(info.arch), "x86_64")) {
         return syscall_error(BORING_SYSCALL_EIO);
     }
@@ -315,7 +316,19 @@ bool syscall_stack_contains(uintptr_t stack_pointer) {
     const uintptr_t base = (uintptr_t)&x86_64_syscall_stack[0];
     const uintptr_t top = base + (uintptr_t)X86_64_SYSCALL_STACK_SIZE;
 
-    return (stack_pointer >= base) && (stack_pointer < top);
+    return ((stack_pointer >= base) && (stack_pointer < top)) ||
+           task_current_stack_contains((const void *)stack_pointer);
+}
+
+static bool syscall_frame_on_trusted_stack(uintptr_t frame_address) {
+    uintptr_t last;
+
+    if (frame_address > UINTPTR_MAX - (uintptr_t)(sizeof(struct x86_64_syscall_frame) - 1U)) {
+        return false;
+    }
+    last = frame_address +
+           (uintptr_t)(sizeof(struct x86_64_syscall_frame) - 1U);
+    return syscall_stack_contains(frame_address) && syscall_stack_contains(last);
 }
 
 static uint64_t sanitize_user_rflags(uint64_t user_rflags) {
@@ -2264,8 +2277,7 @@ void x86_64_syscall_dispatch(struct x86_64_syscall_frame *frame) {
 
     if (!syscall_initialized || (frame == NULL) ||
         !syscall_stack_contains(live_rsp) ||
-        !syscall_stack_contains(frame_address) ||
-        (frame_address > syscall_state.stack_top - (uintptr_t)sizeof(*frame))) {
+        !syscall_frame_on_trusted_stack(frame_address)) {
         syscall_fatal("invalid trusted entry stack");
     }
     syscall_state.last_kernel_rsp = live_rsp;

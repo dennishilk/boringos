@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.33-dev
+BoringKernel 0.0.34-dev
 ```
 
 The current syscall ABI is exactly:
@@ -112,6 +112,12 @@ The current syscall ABI is exactly:
 28 BUFFER_MAP
 29 BUFFER_UNMAP
 30 BUFFER_CLOSE
+31 SERVICE_REGISTER
+32 SERVICE_CONNECT
+33 SERVICE_ACCEPT
+34 IPC_SEND
+35 IPC_RECEIVE
+36 IPC_CLOSE
 ```
 
 VFS-backed executable loading and standalone `/bin/boringfetch` are real
@@ -121,9 +127,11 @@ kernel framebuffer output; Milestone 31 adds bounded native PS/2 keyboard/mouse
 events and exclusive blocking userspace input ownership. Milestone 32 adds
 bounded dynamic anonymous Ring-3 memory, the minimal native userspace heap and
 generic kernel-owned shared byte buffers with process-local capability handles,
-multiple alias mappings and process-exit reclamation. There is still no partition
-layer, networking, cross-process buffer transfer, service registry, cursor, display
-server, terminal graphics stack or GUI/window system.
+multiple alias mappings and process-exit reclamation. Milestone 33 adds the bounded
+native service registry, blocking connection-oriented IPC and transactional grants
+of existing M32 shared-buffer capabilities between processes. There is still no
+partition layer, networking, display/surface protocol, cursor, `boring-display`,
+terminal graphics stack, BoringWM or GUI/window system.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -852,3 +860,69 @@ final version after closeout: BoringKernel 0.0.33-dev
 ```
 
 M32 buffers are generic bytes only. Milestone 32 does **not** add cross-process buffer/capability transfer, IPC, a service registry, display or surface semantics, cursor work, `boring-display`, a compositor, BoringWM or terminal work. Those boundaries remain deferred; Milestone 33 was not started as part of M32.
+
+
+---
+
+# Stage 17 — native IPC and service foundation
+
+## Milestone 33: native IPC and service foundation — COMPLETE
+
+Milestone 33 adds a deliberately bounded, connection-oriented native IPC layer
+above the existing process and scheduler foundations. A fixed global registry
+owns bounded kernel copies of service names; process-local generation-protected
+listener/endpoint handles carry authority, and PIDs do not.
+
+`SERVICE_ACCEPT` and `IPC_RECEIVE` block without busy polling. The existing
+cooperative process-bound 16-KiB task stack becomes that process's trusted
+SYSCALL stack while it runs, allowing a blocked syscall to sleep and a different
+process to enter the kernel safely. Wakeups cover pending connections, queued
+messages and peer-close transitions without weakening the established scheduler
+or introducing timer-preemptive userspace scheduling.
+
+M33 extends the syscall ABI only in the previously free slots 31..36:
+
+```text
+31 SERVICE_REGISTER
+32 SERVICE_CONNECT
+33 SERVICE_ACCEPT
+34 IPC_SEND
+35 IPC_RECEIVE
+36 IPC_CLOSE
+```
+
+Inline control payloads are bounded to 256 bytes. The only transferable
+capability is an existing M32 shared-buffer capability. Transfer is grant/copy,
+not move: the sender retains its local handle, a queued message retains the
+kernel-owned backing object, and a successful receive transaction installs a new
+receiver-local generation-protected handle referring to the same backing pages.
+Failed sends/receives do not partially enqueue, dequeue or duplicate capability
+state.
+
+Process exit closes remaining IPC handles, unregisters owned listeners, wakes
+peers/waiters, releases pending/queued IPC state and retained M32 buffer
+references, then proceeds through the established M32 userspace-memory cleanup.
+The three-process CPL3 acceptance proves three distinct process address spaces,
+service register/connect/accept, blocking wakeups, FIFO/queue-full transaction
+behavior, negative syscall paths, shared-buffer grants and aliases, peer close,
+service removal/re-registration, process-local handle isolation, resource
+reclamation and PMM recovery.
+
+Acceptance record:
+
+```text
+PR: #44
+base: 97abc3849145a66d84e938bc51d0f5c5d4670f41
+Semantic Freeze SHA: 72ba384fa46c23a7115940da47e6197adb11a2cb
+Semantic Freeze tree: 3191d784a65ef067a3469738245a1d16492767e7
+exact-head Semantic Freeze CI: Run #399 / 32976425779 / SUCCESS
+final version after closeout: BoringKernel 0.0.34-dev
+```
+
+The permanent QEMU bundle keeps the historical fixture geometries intact:
+legacy fixtures remain 64 blocks, M32's `/bin/memory-test` fixture remains 80
+blocks, and only the M33 bundle including `/bin/ipc-test` uses 96 blocks.
+
+M33 does **not** add a display/surface protocol, framebuffer ownership transfer,
+cursor, compositor, `boring-display`, terminal graphics stack, BoringWM or GUI
+application. Those remain outside the M33 Semantic Freeze.

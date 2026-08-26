@@ -7,6 +7,7 @@
 #include <boring/exception.h>
 #include <boring/heap.h>
 #include <boring/irq.h>
+#include <boring/ipc_syscall.h>
 #include <boring/process.h>
 #include <boring/task.h>
 
@@ -119,14 +120,14 @@ static bool task_stack_ranges_overlap(uintptr_t first_base,
     return (first_base < second_end) && (second_base < first_end);
 }
 
-static bool task_stack_common_is_valid(const struct kernel_task *task,
-                                       uintptr_t *base_out,
-                                       uintptr_t *end_out) {
+static bool task_stack_storage_is_valid(const struct kernel_task *task,
+                                        uintptr_t *base_out,
+                                        uintptr_t *end_out) {
     volatile const uint64_t *sentinel;
     uintptr_t base;
     uintptr_t end;
 
-    if ((!task->slot_used) || !task_process_is_valid(task) ||
+    if ((task == NULL) || !task->slot_used ||
         (task->stack_base == NULL) ||
         (task->stack_size != (size_t)KERNEL_TASK_STACK_SIZE)) {
         return false;
@@ -155,6 +156,13 @@ static bool task_stack_common_is_valid(const struct kernel_task *task,
         *end_out = end;
     }
     return true;
+}
+
+static bool task_stack_common_is_valid(const struct kernel_task *task,
+                                       uintptr_t *base_out,
+                                       uintptr_t *end_out) {
+    return task_process_is_valid(task) &&
+           task_stack_storage_is_valid(task, base_out, end_out);
 }
 
 static bool task_preempt_frame_is_valid_for(
@@ -219,6 +227,18 @@ static void task_restore_interrupt_state(void) {
         x86_64_interrupts_enable();
     } else {
         x86_64_interrupts_disable();
+    }
+}
+
+static void task_select_syscall_stack(const struct kernel_task *task) {
+    if ((task != NULL) && (task != &bootstrap_task) && task->slot_used &&
+        (task->stack_base != NULL) &&
+        (task->stack_size == (size_t)KERNEL_TASK_STACK_SIZE)) {
+        const uintptr_t base = (uintptr_t)task->stack_base;
+        boring_ipc_syscall_use_task_stack(
+            base + (uintptr_t)task->stack_size);
+    } else {
+        boring_ipc_syscall_use_bootstrap_stack();
     }
 }
 
@@ -508,6 +528,13 @@ bool task_create(void (*entry)(void *), void *arg, uint64_t *task_id) {
                                 KERNEL_TASK_CONTEXT_COOPERATIVE);
 }
 
+bool task_create_for_process(struct process *process,
+                             void (*entry)(void *),
+                             void *arg, uint64_t *task_id) {
+    return task_create_internal(process, entry, arg, task_id,
+                                KERNEL_TASK_CONTEXT_COOPERATIVE);
+}
+
 bool task_create_preemptive(void (*entry)(void *), void *arg,
                             uint64_t *task_id) {
     return task_create_internal(process_bootstrap(), entry, arg, task_id,
@@ -551,7 +578,9 @@ void task_yield(void) {
         return;
     }
 
+    task_select_syscall_stack(next);
     if (!process_activate(next->process)) {
+        task_select_syscall_stack(from);
         from->state = KERNEL_TASK_RUNNING;
         current_task = from;
         task_restore_interrupt_state();
@@ -564,6 +593,100 @@ void task_yield(void) {
     x86_64_context_switch(&from->context, &next->context);
 
     task_restore_interrupt_state();
+}
+
+bool task_block_current(void) {
+    struct kernel_task *from;
+    struct kernel_task *next;
+
+    if ((!task_initialized) || preemption_enabled ||
+        !task_is_regular(current_task) ||
+        (current_task->context_kind != KERNEL_TASK_CONTEXT_COOPERATIVE) ||
+        (current_task->state != KERNEL_TASK_RUNNING)) {
+        return false;
+    }
+    current_task->interrupts_enabled = x86_64_interrupts_enabled();
+    x86_64_interrupts_disable();
+    from = current_task;
+    from->state = KERNEL_TASK_BLOCKED;
+    next = task_select_next_cooperative(from);
+    if (next == NULL) {
+        from->state = KERNEL_TASK_RUNNING;
+        task_restore_interrupt_state();
+        return false;
+    }
+    task_select_syscall_stack(next);
+    if (!process_activate(next->process)) {
+        task_select_syscall_stack(from);
+        from->state = KERNEL_TASK_RUNNING;
+        task_restore_interrupt_state();
+        return false;
+    }
+    next->state = KERNEL_TASK_RUNNING;
+    current_task = next;
+    ++cooperative_context_switch_count;
+    x86_64_context_switch(&from->context, &next->context);
+    task_restore_interrupt_state();
+    return true;
+}
+
+bool task_wake_process(struct process *process) {
+    size_t index;
+    bool woke = false;
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+
+    x86_64_interrupts_disable();
+    if ((!task_initialized) || (process == NULL) || !process_is_alive(process)) {
+        if (interrupts_were_enabled) {
+            x86_64_interrupts_enable();
+        }
+        return false;
+    }
+    for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
+        if (tasks[index].slot_used && (tasks[index].process == process) &&
+            (tasks[index].context_kind == KERNEL_TASK_CONTEXT_COOPERATIVE) &&
+            (tasks[index].state == KERNEL_TASK_BLOCKED)) {
+            tasks[index].state = KERNEL_TASK_READY;
+            woke = true;
+        }
+    }
+    if (interrupts_were_enabled) {
+        x86_64_interrupts_enable();
+    }
+    return woke;
+}
+
+void task_exit_current_process(void) {
+    struct kernel_task *from;
+    struct kernel_task *next;
+    struct process *finished_process;
+
+    if ((!task_initialized) || preemption_enabled ||
+        !task_is_regular(current_task) ||
+        (current_task->context_kind != KERNEL_TASK_CONTEXT_COOPERATIVE) ||
+        (current_task->state != KERNEL_TASK_RUNNING) ||
+        !task_process_is_valid(current_task)) {
+        x86_64_halt_forever();
+    }
+    x86_64_interrupts_disable();
+    from = current_task;
+    finished_process = from->process;
+    from->state = KERNEL_TASK_FINISHED;
+    ++finished_task_count;
+    next = task_select_next_cooperative(from);
+    if (next == NULL) {
+        next = &bootstrap_task;
+    }
+    task_select_syscall_stack(next);
+    if (!task_process_is_valid(next) || !process_activate(next->process) ||
+        !process_mark_finished(finished_process)) {
+        x86_64_halt_forever();
+    }
+    next->state = KERNEL_TASK_RUNNING;
+    current_task = next;
+    ++cooperative_context_switch_count;
+    x86_64_context_switch(&from->context, &next->context);
+    x86_64_halt_forever();
 }
 
 uint64_t task_current_id(void) {
@@ -677,7 +800,7 @@ bool task_finished_stacks_valid(void) {
         for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
             if (tasks[index].slot_used &&
                 ((tasks[index].state != KERNEL_TASK_FINISHED) ||
-                 !task_stack_is_valid(&tasks[index]))) {
+                 !task_stack_storage_is_valid(&tasks[index], NULL, NULL))) {
                 valid = false;
                 break;
             }
@@ -710,7 +833,7 @@ bool task_cleanup_finished(uint64_t *freed_stacks) {
     for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
         if (tasks[index].slot_used &&
             ((tasks[index].state != KERNEL_TASK_FINISHED) ||
-             !task_stack_is_valid(&tasks[index]))) {
+             !task_stack_storage_is_valid(&tasks[index], NULL, NULL))) {
             if (interrupts_were_enabled) {
                 x86_64_interrupts_enable();
             }
@@ -953,6 +1076,7 @@ static void task_finish_current(void) {
         next = &bootstrap_task;
     }
 
+    task_select_syscall_stack(next);
     if (!task_process_is_valid(next) || !process_activate(next->process)) {
         x86_64_halt_forever();
     }

@@ -33,6 +33,9 @@ jobs:
       - name: Standalone memory-test ELF audit
         run: sh ./tests/memory-test-build-audit.sh
 
+      - name: Standalone ipc-test ELF audit
+        run: sh ./tests/ipc-test-build-audit.sh
+
       - name: Audit generated native C runtime artifact
         run: sh ./tests/runtime-build-audit.sh
 
@@ -102,6 +105,9 @@ jobs:
       - name: M32 userspace memory shared-buffer and runtime heap host tests
         run: make memory-host-test
 
+      - name: M33 bounded service registry IPC and grant host tests
+        run: make ipc-host-test
+
       - name: Build boring-shell test mode
         run: make TEST_MODE=shell
 
@@ -140,6 +146,18 @@ jobs:
 
       - name: Real userspace memory allocation and shared buffers
         run: sh ./tests/memory-qemu.sh
+
+      - name: Real three-process native IPC service and M32 capability grants
+        id: m33_ipc_qemu
+        run: sh ./tests/ipc-qemu.sh
+
+      - name: Upload M33 IPC failure diagnostics
+        if: ${{ failure() && steps.m33_ipc_qemu.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: m33-ipc-failure-diagnostics
+          path: build/m33-ipc-diagnostics/
+          if-no-files-found: error
 
       - name: Real Limine framebuffer and BoringOS dashboard
         run: sh ./tests/framebuffer-qemu.sh
