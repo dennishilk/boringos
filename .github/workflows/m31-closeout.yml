@@ -24,14 +24,27 @@ jobs:
         run: |
           set -euo pipefail
           git merge-base --is-ancestor 065fa085ee7534012037e9eab9b3cfbdcacec39e HEAD
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/m31-closeout.py')
+          text = path.read_text()
+          old = '    return [line for line in proc.stdout.splitlines() if line]\n'
+          new = ('    return [line for line in proc.stdout.splitlines() if line '
+                 'and not line.startswith("tests/m31-closeout.py:") '
+                 'and not line.startswith(".github/workflows/m31-closeout.yml:")]\n')
+          if text.count(old) != 1:
+              raise SystemExit('closeout grep filter anchor mismatch')
+          path.write_text(text.replace(old, new, 1))
+          PY
           python3 tests/m31-closeout.py
+          git checkout -- tests/m31-closeout.py
           git diff --check
           echo '--- closeout diff stat ---'
           git diff --stat
           echo '--- remaining historical 0.0.31-dev ---'
-          git grep -n '0.0.31-dev' || true
+          git grep -n '0.0.31-dev' -- . ':(exclude)tests/m31-closeout.py' ':(exclude).github/workflows/m31-closeout.yml' || true
           echo '--- active 0.0.32-dev contracts ---'
-          git grep -n '0.0.32-dev'
+          git grep -n '0.0.32-dev' -- . ':(exclude)tests/m31-closeout.py' ':(exclude).github/workflows/m31-closeout.yml'
 
       - name: Commit closeout only
         shell: bash
