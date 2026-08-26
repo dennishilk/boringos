@@ -1,0 +1,319 @@
+name: M32 closeout helper
+
+on:
+  push:
+    branches: [agent/userspace-memory-shared-buffers]
+
+permissions:
+  contents: write
+
+jobs:
+  closeout:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out M32 branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/userspace-memory-shared-buffers
+          fetch-depth: 0
+
+      - name: Apply input-neutral M32 closeout
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          OLD = "0.0.32-dev"
+          NEW = "0.0.33-dev"
+
+          def read(path):
+              return Path(path).read_text(encoding="utf-8")
+
+          def write(path, text):
+              Path(path).write_text(text, encoding="utf-8")
+
+          # Active code/test version references only. This does not alter behavior.
+          for root in (Path("kernel"), Path("user"), Path("tests")):
+              for path in root.rglob("*"):
+                  if not path.is_file():
+                      continue
+                  try:
+                      text = path.read_text(encoding="utf-8")
+                  except UnicodeDecodeError:
+                      continue
+                  if OLD in text:
+                      path.write_text(text.replace(OLD, NEW), encoding="utf-8")
+
+          # Active README version/status references.
+          for path in ("README.md", "README.de.md"):
+              text = read(path)
+              text = text.replace("BoringKernel 0.0.32-dev", "BoringKernel 0.0.33-dev")
+              write(path, text)
+
+          text = read("README.md")
+          marker = "and standalone `/bin/input-test`.\n\nCurrent serial output begins with:"
+          replacement = (
+              "and standalone `/bin/input-test`, plus M32 dynamic anonymous Ring-3 memory, "
+              "a minimal userspace heap, and generic kernel-owned shared byte buffers with "
+              "process-local capability handles and `/bin/memory-test`.\n\nCurrent serial output begins with:"
+          )
+          if marker not in text:
+              raise SystemExit("README.md status marker not found")
+          text = text.replace(marker, replacement, 1)
+          marker = "the M30 framebuffer foundation and the M31 native PS/2 input foundation;"
+          replacement = (
+              "the M30 framebuffer foundation, the M31 native PS/2 input foundation, and "
+              "the M32 userspace-memory/shared-buffer foundation;"
+          )
+          if marker not in text:
+              raise SystemExit("README.md milestone marker not found")
+          text = text.replace(marker, replacement, 1)
+          write("README.md", text)
+
+          text = read("README.de.md")
+          marker = "und dem eigenständigen `/bin/input-test`.\n\nDie aktuelle serielle Ausgabe beginnt mit:"
+          replacement = (
+              "und dem eigenständigen `/bin/input-test` sowie die dynamische anonyme Ring-3-"
+              "Speicherverwaltung aus M32, einen minimalen Userspace-Heap und generische "
+              "kernel-eigene Shared-Byte-Buffer mit prozesslokalen Capability-Handles und "
+              "`/bin/memory-test`.\n\nDie aktuelle serielle Ausgabe beginnt mit:"
+          )
+          if marker not in text:
+              raise SystemExit("README.de.md status marker not found")
+          text = text.replace(marker, replacement, 1)
+          marker = "die M30-Framebuffer-Grundlage und die native M31-PS/2-Input-Grundlage;"
+          replacement = (
+              "die M30-Framebuffer-Grundlage, die native M31-PS/2-Input-Grundlage und die "
+              "M32-Userspace-Memory-/Shared-Buffer-Grundlage;"
+          )
+          if marker not in text:
+              raise SystemExit("README.de.md milestone marker not found")
+          text = text.replace(marker, replacement, 1)
+          write("README.de.md", text)
+
+          # Canonical M32 closeout document.
+          write("docs/userspace-memory.md", """# BoringOS userspace memory and shared buffers
+
+Milestone 32 is complete. It adds a bounded dynamic data-memory foundation for real BoringOS Ring-3 processes without changing ELF code-page permissions, BoringFS semantics, or the existing syscall entry mechanism.
+
+## Dynamic anonymous Ring-3 memory
+
+`MEMORY_ALLOC` reserves page-rounded virtual space from the per-process user-memory arena, allocates PMM-owned frames, explicitly zero-fills every new 4-KiB frame, and maps the pages user-accessible, writable and non-executable through the existing Ring-3 mapper. `MEMORY_FREE` accepts only the exact base of a live anonymous allocation, removes the mappings and returns the owned frames.
+
+The implementation is deliberately bounded: each process has 32 anonymous-allocation metadata slots and an individual allocation is limited to 16 MiB. Allocation failure rolls back partial mappings and frames rather than publishing partial state.
+
+## Minimal native userspace heap
+
+The freestanding BoringOS runtime now provides `boring_malloc`, `boring_calloc` and `boring_free` on top of `MEMORY_ALLOC`. The heap uses 16-byte payload alignment, first-fit reuse, block splitting and same-arena coalescing. It grows in page-rounded arenas with a 16-KiB minimum arena size. This is intentionally a small native runtime allocator, not a libc or POSIX allocator contract.
+
+## Generic kernel-owned shared buffers
+
+M32 also adds generic kernel-owned shared byte-buffer objects. Buffer backing frames are allocated by the kernel, zero-filled, and remain plain bytes: there is no width, height, stride, pixel format, framebuffer, surface, cursor, display-client, compositor, window or BoringWM meaning attached to them.
+
+A creating process receives a process-local capability handle. Handles contain a bounded slot identity plus generation state and are decoded only against that process's handle table. Each process has 32 handle slots and 32 mapping slots; the kernel has a fixed 64-object buffer table. A single buffer is limited to 64 MiB.
+
+`BUFFER_MAP` may be called multiple times for the same live handle. Each call maps the same backing frames at a distinct process-local virtual range, so the mappings are real aliases of the same bytes. The mappings are writable and non-executable.
+
+Handle lifetime and mapping lifetime are intentionally separate. Closing a handle invalidates that capability and advances its generation, but existing mappings continue to keep the backing object alive. Unmapping drops a mapping reference. Backing storage is released only when no handle or mapping reference remains.
+
+There is **no cross-process handle or buffer transfer in M32**. M32 provides the kernel-owned object and process-local capability/mapping foundation only; cross-process capability transfer belongs to Milestone 33.
+
+## Process-exit reclamation
+
+Process teardown releases all live anonymous allocations, then all live shared-buffer mappings, then all remaining buffer handles. The cleanup path verifies the process-local memory state is empty and allows unreferenced kernel buffer objects to release their backing frames. This makes forgotten M32 resources reclaimable at process exit.
+
+## ABI
+
+The provisional syscall ABI extends the frozen 0-24 surface with exactly:
+
+```text
+25 MEMORY_ALLOC
+26 MEMORY_FREE
+27 BUFFER_CREATE
+28 BUFFER_MAP
+29 BUFFER_UNMAP
+30 BUFFER_CLOSE
+```
+
+The ABI remains provisional and BoringOS-specific.
+
+## Acceptance and compatibility
+
+The standalone static `/bin/memory-test` exercises the real Ring-3 wrappers and proves anonymous allocation/zero-fill, write/read behavior, buffer creation, multiple mappings with alias visibility, handle-vs-mapping lifetime, negative cases, explicit cleanup and process-exit reclamation. Host coverage also exercises the bounded kernel memory model and the native runtime heap.
+
+Permanent CI includes the memory-test ELF audit, M32 host tests and the real userspace-memory/shared-buffer QEMU acceptance while retaining the complete historical suite. The historical 64-block BoringFS fixture geometry remains compatible; the larger fixture is selected only when `/bin/memory-test` must be seeded, so older fixture-dependent acceptance paths remain unchanged.
+
+Semantic Freeze evidence:
+
+```text
+implementation SHA: a494a800818f14bb375bee5674dcd27d8bfb82ee
+implementation tree: 4dd1b01c40d49a8447fd7fc52a047b7a40383d9e
+exact-head Semantic Freeze CI: Run #338 / 32959154779 / SUCCESS
+final version after closeout: BoringKernel 0.0.33-dev
+```
+
+Milestone 32 does not add IPC, cross-process capability transfer, a service registry, display/surface semantics, cursor work, `boring-display`, a compositor, BoringWM or terminal work. Milestone 33 is not part of M32.
+""")
+
+          # Current roadmap references + append an immutable M32 closeout section.
+          text = read("docs/roadmap.md")
+          current_banner = """The accepted development banner is now:\n\n```text\nBoringKernel 0.0.32-dev\n```"""
+          if text.count(current_banner) != 1:
+              raise SystemExit("roadmap current banner marker changed")
+          text = text.replace(current_banner, current_banner.replace(OLD, NEW), 1)
+
+          syscall_marker = """22 INPUT_CLAIM\n23 INPUT_READ\n24 INPUT_RELEASE\n```\n\nVFS-backed executable loading"""
+          syscall_replacement = """22 INPUT_CLAIM\n23 INPUT_READ\n24 INPUT_RELEASE\n25 MEMORY_ALLOC\n26 MEMORY_FREE\n27 BUFFER_CREATE\n28 BUFFER_MAP\n29 BUFFER_UNMAP\n30 BUFFER_CLOSE\n```\n\nVFS-backed executable loading"""
+          if syscall_marker not in text:
+              raise SystemExit("roadmap syscall marker changed")
+          text = text.replace(syscall_marker, syscall_replacement, 1)
+
+          narrative = """events and exclusive blocking userspace input ownership. There is still no\npartition layer, networking, cursor, display server, terminal graphics stack or\nGUI/window system."""
+          narrative_replacement = """events and exclusive blocking userspace input ownership. Milestone 32 adds\nbounded dynamic anonymous Ring-3 memory, the minimal native userspace heap and\ngeneric kernel-owned shared byte buffers with process-local capability handles,\nmultiple alias mappings and process-exit reclamation. There is still no partition\nlayer, networking, cross-process buffer transfer, service registry, cursor, display\nserver, terminal graphics stack or GUI/window system."""
+          if narrative not in text:
+              raise SystemExit("roadmap current-state narrative marker changed")
+          text = text.replace(narrative, narrative_replacement, 1)
+
+          if "## Milestone 32: dynamic userspace memory and shared buffers — COMPLETE" in text:
+              raise SystemExit("M32 roadmap section already exists")
+          text += """
+
+---
+
+# Stage 16 — dynamic userspace memory foundation
+
+## Milestone 32: dynamic userspace memory and shared buffers — COMPLETE
+
+Milestone 32 adds real bounded anonymous data memory to ordinary Ring-3 processes. New PMM frames are explicitly zero-filled before they become user-accessible and are mapped writable + NX through the existing checked Ring-3 mapper. Per-process allocation state is fixed at 32 metadata slots, individual anonymous allocations are bounded to 16 MiB, and partial failures roll back rather than publishing incomplete state.
+
+The freestanding runtime now has a minimal native heap (`boring_malloc`, `boring_calloc`, `boring_free`) backed by the new anonymous-memory ABI. It uses 16-byte alignment, first-fit reuse, splitting and same-arena coalescing without introducing libc or a POSIX memory contract.
+
+M32 also adds generic kernel-owned shared byte-buffer objects. A process receives a generation-bearing process-local capability handle; the same handle can be mapped multiple times to create real aliases of the same backing frames. Handle references and mapping references have independent lifetimes: closing the handle does not invalidate existing mappings, and storage is reclaimed only after the final handle/mapping reference disappears. Process exit explicitly reclaims forgotten anonymous allocations, mappings and handles.
+
+The new provisional ABI slots are exactly:
+
+```text
+25 MEMORY_ALLOC
+26 MEMORY_FREE
+27 BUFFER_CREATE
+28 BUFFER_MAP
+29 BUFFER_UNMAP
+30 BUFFER_CLOSE
+```
+
+The standalone static `/bin/memory-test` proves the real Ring-3 path, including zero-fill, allocation/read-write, shared-buffer aliasing, handle-vs-mapping lifetime, negative cases and exit reclamation. Permanent CI contains the memory-test build audit, the M32 kernel/runtime host tests and real QEMU memory acceptance while preserving the full historical fixture and regression suite. The historical 64-block BoringFS fixture geometry remains unchanged unless `/bin/memory-test` is deliberately seeded into the enlarged fixture.
+
+Semantic Freeze acceptance record:
+
+```text
+implementation SHA: a494a800818f14bb375bee5674dcd27d8bfb82ee
+implementation tree: 4dd1b01c40d49a8447fd7fc52a047b7a40383d9e
+exact-head Semantic Freeze CI: Run #338 / 32959154779 / SUCCESS
+final version after closeout: BoringKernel 0.0.33-dev
+```
+
+M32 buffers are generic bytes only. Milestone 32 does **not** add cross-process buffer/capability transfer, IPC, a service registry, display or surface semantics, cursor work, `boring-display`, a compositor, BoringWM or terminal work. Those boundaries remain deferred; Milestone 33 was not started as part of M32.
+"""
+          write("docs/roadmap.md", text)
+
+          # Current syscall documentation only; historical 0.0.11-dev sections stay intact.
+          text = read("docs/syscalls.md")
+          text = text.replace(
+              "this section records the current M31\nextensions",
+              "this section records the current M32\nextensions",
+              1,
+          )
+          text = text.replace("## Current M31 syscall surface", "## Current M32 syscall surface", 1)
+          start = text.find("```text\n 0 GETPID")
+          end_marker = "\n```\n\nAll pointer-bearing calls"
+          end = text.find(end_marker, start)
+          if start < 0 or end < 0:
+              raise SystemExit("syscalls current-surface block not found")
+          table = """```text
+ 0 GETPID
+ 1 DEBUG_WRITE
+ 2 CONSOLE_WRITE
+ 3 CONSOLE_READ
+ 4 LAUNCH
+ 5 FS_READDIR
+ 6 FS_MKDIR
+ 7 FS_RMDIR
+ 8 FS_CHDIR
+ 9 FS_READ
+10 FS_TOUCH
+11 FS_WRITE
+12 FS_UNLINK
+13 INFO
+14 GETCWD
+15 PROCESS_SNAPSHOT
+16 EXIT
+17 WAITPID
+18 FD_OPEN
+19 FD_READ
+20 FD_WRITE
+21 FD_CLOSE
+22 INPUT_CLAIM
+23 INPUT_READ
+24 INPUT_RELEASE
+25 MEMORY_ALLOC
+26 MEMORY_FREE
+27 BUFFER_CREATE
+28 BUFFER_MAP
+29 BUFFER_UNMAP
+30 BUFFER_CLOSE"""
+          text = text[:start] + table + text[end:]
+
+          marker = "## Milestone 31 input calls"
+          if marker not in text:
+              raise SystemExit("M31 syscall section marker not found")
+          m32 = """## Milestone 32 memory calls
+
+`MEMORY_ALLOC(size)` accepts a nonzero size up to 16 MiB, rounds it to 4-KiB pages, allocates and explicitly zero-fills PMM frames, then maps them writable + NX into the current ordinary process. The process has 32 bounded anonymous-allocation metadata slots. `MEMORY_FREE(base)` requires the exact base returned by a live allocation and releases its mappings and frames.
+
+`BUFFER_CREATE(size)` accepts a nonzero size up to 64 MiB, allocates zero-filled kernel-owned backing frames and returns a generation-bearing capability handle from the current process's fixed 32-slot handle table. Handles are process-local; M32 has no syscall that transfers or installs one in another process.
+
+`BUFFER_MAP(handle)` maps the same backing frames at a newly selected writable + NX user range and records one of 32 bounded per-process mapping entries. Repeated mapping of one handle is allowed and produces true aliases: writes through one mapping are visible through the others. `BUFFER_UNMAP(base)` removes exactly one recorded mapping.
+
+`BUFFER_CLOSE(handle)` invalidates the process-local capability and advances its generation. Handle and mapping lifetimes are independent, so existing mappings remain valid after close and keep the generic byte-buffer object alive. Backing storage is reclaimed after the final handle/mapping reference is released. Process teardown releases every remaining anonymous allocation, mapping and handle.
+
+The standalone `/bin/memory-test` and permanent host/QEMU coverage exercise the real ABI, zero-fill, aliasing, lifetime and exit-reclamation behavior. M32 shared buffers have no display, surface, cursor, compositor or BoringWM semantics, and M32 does not implement cross-process transfer or general IPC.
+
+"""
+          text = text.replace(marker, m32 + marker, 1)
+          write("docs/syscalls.md", text)
+
+          # Preserve the historical M31 version record exactly.
+          roadmap = read("docs/roadmap.md")
+          historical = "final version after closeout: BoringKernel 0.0.32-dev"
+          if roadmap.count(historical) != 1:
+              raise SystemExit("historical M31 0.0.32-dev record was not preserved exactly once")
+
+          # The active source/test tree must contain only the new current version.
+          for root in ("kernel", "user", "tests"):
+              for path in Path(root).rglob("*"):
+                  if path.is_file():
+                      try:
+                          content = path.read_text(encoding="utf-8")
+                      except UnicodeDecodeError:
+                          continue
+                      if OLD in content:
+                          raise SystemExit(f"stale active version remains in {path}")
+
+          helper = Path(".github/workflows/m32-closeout-helper.yml")
+          if helper.exists():
+              helper.unlink()
+          PY
+
+          git diff --check
+          git status --short
+
+      - name: Commit M32 closeout
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Close out Milestone 32"
+          git push origin HEAD:agent/userspace-memory-shared-buffers
