@@ -185,8 +185,10 @@ BOOT_USER_ELF := $(IPC_TEST_ELF)
 BOOT_USER_NAME := ipc-test.elf
 BOOT_LIMINE_CONF := limine-ipc.conf
 else ifeq ($(TEST_MODE),m34-display)
-TEST_MODE_VALUE := 17
-TEST_HARNESS_C := kernel/core/display_test.c
+# Reuse the established special-test entry seam (value 5); the adapter below
+# routes it to the dedicated three-process display_test_run() harness.
+TEST_MODE_VALUE := 5
+TEST_HARNESS_C := kernel/core/display_test.c kernel/core/display_test_adapter.c
 BOOT_USER_ELF := $(BORING_DISPLAY_ELF)
 BOOT_USER_NAME := boring-display.elf
 BOOT_EXTRA_USER_ELF := $(DISPLAY_CLIENT_A_ELF)
@@ -258,6 +260,7 @@ KERNEL_C_SOURCES := \
 	kernel/core/ipc.c \
 	kernel/core/ipc_syscall.c \
 	kernel/core/display_syscall.c \
+	kernel/core/display_test_stub.c \
 	kernel/core/ipc_test.c \
 	kernel/core/vfs.c \
 	kernel/core/ramfs.c \
