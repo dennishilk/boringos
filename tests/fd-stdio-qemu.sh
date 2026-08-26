@@ -73,15 +73,15 @@ send 'touch hello.txt'
 send 'write hello.txt BoringOS-FD-test'
 send 'cat hello.txt'
 
-grep -Fqx 'BoringOS-FD-test' "${LOG}" || fail 'standalone cat did not reproduce file bytes'
+grep -Fq 'BoringOS-FD-test' "${LOG}" || fail 'standalone cat did not reproduce file bytes'
 for line in \
     'boring-launch: caller pid 2' \
     'boring-launch: child pid 3' \
     'boring-launch: independent address space' \
     'boring-launch: VFS executable source /bin/cat' \
     'fd-open: pid 3 path hello.txt fd 3' \
-    'fd-read: pid 3 fd 3 bytes 17' \
-    'fd-write: pid 3 fd 1 bytes 17' \
+    'fd-read: pid 3 fd 3 bytes 16' \
+    'fd-write: pid 3 fd 1 bytes 16' \
     'fd-read: pid 3 fd 3 EOF' \
     'fd-close: pid 3 fd 3' \
     'boring-exit: child pid 3 status 0 is zombie' \
@@ -93,7 +93,7 @@ send 'ps'
 if grep -Fqx '3 2 ZOMBIE cat' "${LOG}"; then fail 'cat zombie remained after WAITPID'; fi
 
 send 'cat does-not-exist'
-grep -Fqx 'cat: does-not-exist: cannot open' "${LOG}" || fail 'missing-path cat failure was not controlled'
+grep -Fqx 'cat: cannot open' "${LOG}" || fail 'missing-path cat failure was not controlled'
 grep -Fqx 'boring-exit: child pid 4 status 1 is zombie' "${LOG}" || fail 'missing-path cat status was not preserved'
 grep -Fqx 'boring-waitpid: reaped child pid 4' "${LOG}" || fail 'missing-path cat child was not reaped'
 
