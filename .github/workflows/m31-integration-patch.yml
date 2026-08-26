@@ -31,6 +31,6 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add Makefile .github/workflows/boot-test.yml kernel user tests/boringfs-fixture.c tests/input-host-test.c
+          git add Makefile kernel user tests/boringfs-fixture.c tests/input-host-test.c
           git commit -m 'Integrate native input through IRQ and Ring 3'
           git push origin HEAD:agent/native-input-foundation
