@@ -6,6 +6,7 @@
 #include <boring/descriptor.h>
 #include <boring/elf_loader.h>
 #include <boring/elf_vfs.h>
+#include <boring/fd.h>
 #include <boring/process.h>
 #include <boring/pmm.h>
 #include <boring/ring3_memory.h>
@@ -107,6 +108,18 @@ _Static_assert((KERNEL_PROCESS_NAME_MAX + 1U) == BORING_PROCESS_NAME_CAPACITY,
                "process name capacity must match userspace ABI");
 _Static_assert(VFS_PATH_MAX == BORING_SYSCALL_CWD_MAX,
                "cwd ABI path bound must match VFS");
+_Static_assert(KERNEL_FD_MAX == 16U,
+               "M29 descriptor table bound changed");
+_Static_assert(KERNEL_FD_STDIN == BORING_FD_STDIN,
+               "stdin descriptor ABI mismatch");
+_Static_assert(KERNEL_FD_STDOUT == BORING_FD_STDOUT,
+               "stdout descriptor ABI mismatch");
+_Static_assert(KERNEL_FD_STDERR == BORING_FD_STDERR,
+               "stderr descriptor ABI mismatch");
+_Static_assert(VFS_ACCESS_READ == BORING_FD_OPEN_READ,
+               "descriptor read flag ABI mismatch");
+_Static_assert(VFS_ACCESS_WRITE == BORING_FD_OPEN_WRITE,
+               "descriptor write flag ABI mismatch");
 
 extern void x86_64_syscall_entry(void);
 
@@ -216,7 +229,7 @@ static uint64_t syscall_system_info(uint64_t user_info) {
         !syscall_copy_literal(info.kernel_name, sizeof(info.kernel_name),
                               "BoringKernel") ||
         !syscall_copy_literal(info.kernel_version, sizeof(info.kernel_version),
-                              "0.0.29-dev") ||
+                              "0.0.30-dev") ||
         !syscall_copy_literal(info.arch, sizeof(info.arch), "x86_64")) {
         return syscall_error(BORING_SYSCALL_EIO);
     }
@@ -1526,6 +1539,211 @@ static uint64_t syscall_fs_unlink(uint64_t user_path,
         0ULL : syscall_error(syscall_vfs_error(result));
 }
 
+static uint64_t syscall_fd_open(uint64_t user_path,
+                                uint64_t path_length,
+                                uint64_t raw_flags) {
+    char path[VFS_PATH_MAX + 1U];
+    struct process *const process = process_current();
+    struct vfs_path resolved = { NULL, NULL };
+    uint32_t flags;
+    uint32_t access = 0U;
+    uint32_t fd = 0U;
+    enum vfs_result result;
+    int copy_error;
+
+    if ((raw_flags == 0ULL) ||
+        (raw_flags > (uint64_t)UINT32_MAX) ||
+        ((raw_flags & ~(uint64_t)BORING_FD_OPEN_MASK) != 0ULL)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    flags = (uint32_t)raw_flags;
+    if ((flags & BORING_FD_OPEN_READ) != 0U) {
+        access |= VFS_ACCESS_READ;
+    }
+    if ((flags & BORING_FD_OPEN_WRITE) != 0U) {
+        access |= VFS_ACCESS_WRITE;
+    }
+    copy_error = syscall_copy_explicit_string(
+        user_path, path_length, (size_t)VFS_PATH_MAX, path);
+    if (copy_error != 0) {
+        return syscall_error(copy_error);
+    }
+    if ((process == NULL) || !process_is_alive(process)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    result = vfs_resolve_process(process, path, &resolved);
+    if (result != VFS_RESULT_OK) {
+        return syscall_error(syscall_vfs_error(result));
+    }
+    result = kernel_fd_open_regular(&process->fd_table, &resolved, access, &fd);
+    if (result != VFS_RESULT_OK) {
+        (void)vfs_path_release(&resolved);
+        return syscall_error(syscall_vfs_error(result));
+    }
+    if (vfs_path_release(&resolved) != VFS_RESULT_OK) {
+        (void)kernel_fd_close(&process->fd_table, fd);
+        return syscall_error(BORING_SYSCALL_EIO);
+    }
+    serial_write_string("fd-open: pid ");
+    serial_write_u64(process->pid);
+    serial_write_string(" path ");
+    serial_write_string(path);
+    serial_write_string(" fd ");
+    serial_write_u64((uint64_t)fd);
+    serial_write_string("\n");
+    return (uint64_t)fd;
+}
+
+static uint64_t syscall_fd_read(uint64_t raw_fd,
+                                uint64_t user_buffer,
+                                uint64_t capacity) {
+    uint8_t buffer[BORING_SYSCALL_FD_IO_MAX];
+    struct process *const process = process_current();
+    enum kernel_fd_kind kind;
+    uint32_t access;
+    uint32_t fd;
+    size_t safe_capacity;
+    size_t transferred = 0U;
+    size_t index;
+    enum vfs_result result;
+
+    if ((raw_fd > (uint64_t)UINT32_MAX) ||
+        (capacity > (uint64_t)BORING_SYSCALL_FD_IO_MAX) ||
+        (capacity > (uint64_t)SIZE_MAX) || (process == NULL) ||
+        !process_is_alive(process)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    fd = (uint32_t)raw_fd;
+    if (!kernel_fd_describe(&process->fd_table, fd, &kind, &access)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    if ((access & VFS_ACCESS_READ) == 0U) {
+        return syscall_error(BORING_SYSCALL_EACCES);
+    }
+    safe_capacity = (size_t)capacity;
+    if (safe_capacity == 0U) {
+        return 0ULL;
+    }
+    if (!syscall_user_range_accessible((uintptr_t)user_buffer,
+                                       safe_capacity, true)) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+    if (kind == KERNEL_FD_CONSOLE_INPUT) {
+        for (index = 0U; index < safe_capacity; ++index) {
+            buffer[index] = (uint8_t)serial_read_char_blocking();
+        }
+        transferred = safe_capacity;
+    } else if (kind == KERNEL_FD_REGULAR) {
+        result = kernel_fd_read_regular(&process->fd_table, fd, buffer,
+                                        safe_capacity, &transferred);
+        if (result != VFS_RESULT_OK) {
+            return syscall_error(syscall_vfs_error(result));
+        }
+    } else {
+        return syscall_error(BORING_SYSCALL_EACCES);
+    }
+    if ((transferred != 0U) &&
+        !syscall_copy_to_user((uintptr_t)user_buffer, buffer, transferred)) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+    serial_write_string("fd-read: pid ");
+    serial_write_u64(process->pid);
+    serial_write_string(" fd ");
+    serial_write_u64((uint64_t)fd);
+    if ((kind == KERNEL_FD_REGULAR) && (transferred == 0U)) {
+        serial_write_string(" EOF\n");
+    } else {
+        serial_write_string(" bytes ");
+        serial_write_u64((uint64_t)transferred);
+        serial_write_string("\n");
+    }
+    return (uint64_t)transferred;
+}
+
+static uint64_t syscall_fd_write(uint64_t raw_fd,
+                                 uint64_t user_buffer,
+                                 uint64_t length) {
+    uint8_t buffer[BORING_SYSCALL_FD_IO_MAX];
+    struct process *const process = process_current();
+    enum kernel_fd_kind kind;
+    uint32_t access;
+    uint32_t fd;
+    size_t safe_length;
+    size_t transferred = 0U;
+    enum vfs_result result;
+
+    if ((raw_fd > (uint64_t)UINT32_MAX) ||
+        (length > (uint64_t)BORING_SYSCALL_FD_IO_MAX) ||
+        (length > (uint64_t)SIZE_MAX) || (process == NULL) ||
+        !process_is_alive(process)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    fd = (uint32_t)raw_fd;
+    if (!kernel_fd_describe(&process->fd_table, fd, &kind, &access)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    if ((access & VFS_ACCESS_WRITE) == 0U) {
+        return syscall_error(BORING_SYSCALL_EACCES);
+    }
+    safe_length = (size_t)length;
+    if (safe_length == 0U) {
+        return 0ULL;
+    }
+    if (!syscall_copy_from_user(buffer, (uintptr_t)user_buffer, safe_length)) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+    if (kind == KERNEL_FD_CONSOLE_OUTPUT) {
+        transferred = safe_length;
+        serial_write_string("fd-write: pid ");
+        serial_write_u64(process->pid);
+        serial_write_string(" fd ");
+        serial_write_u64((uint64_t)fd);
+        serial_write_string(" bytes ");
+        serial_write_u64((uint64_t)transferred);
+        serial_write_string("\n");
+        serial_write_bytes((const char *)buffer, transferred);
+        return (uint64_t)transferred;
+    }
+    if (kind != KERNEL_FD_REGULAR) {
+        return syscall_error(BORING_SYSCALL_EACCES);
+    }
+    result = kernel_fd_write_regular(&process->fd_table, fd, buffer,
+                                     safe_length, &transferred);
+    if (result != VFS_RESULT_OK) {
+        return syscall_error(syscall_vfs_error(result));
+    }
+    serial_write_string("fd-write: pid ");
+    serial_write_u64(process->pid);
+    serial_write_string(" fd ");
+    serial_write_u64((uint64_t)fd);
+    serial_write_string(" bytes ");
+    serial_write_u64((uint64_t)transferred);
+    serial_write_string("\n");
+    return (uint64_t)transferred;
+}
+
+static uint64_t syscall_fd_close(uint64_t raw_fd) {
+    struct process *const process = process_current();
+    uint32_t fd;
+    enum vfs_result result;
+
+    if ((raw_fd > (uint64_t)UINT32_MAX) || (process == NULL) ||
+        !process_is_alive(process)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    fd = (uint32_t)raw_fd;
+    result = kernel_fd_close(&process->fd_table, fd);
+    if (result != VFS_RESULT_OK) {
+        return syscall_error(syscall_vfs_error(result));
+    }
+    serial_write_string("fd-close: pid ");
+    serial_write_u64(process->pid);
+    serial_write_string(" fd ");
+    serial_write_u64((uint64_t)fd);
+    serial_write_string("\n");
+    return 0ULL;
+}
+
 static uint64_t syscall_getcwd(uint64_t user_buffer, uint64_t capacity) {
     char cwd[VFS_PATH_MAX + 1U];
     struct process *const process = process_current();
@@ -1864,6 +2082,18 @@ void x86_64_syscall_dispatch(struct x86_64_syscall_frame *frame) {
             break;
         case BORING_SYS_WAITPID:
             result = syscall_waitpid(frame->rdi, frame->rsi);
+            break;
+        case BORING_SYS_FD_OPEN:
+            result = syscall_fd_open(frame->rdi, frame->rsi, frame->rdx);
+            break;
+        case BORING_SYS_FD_READ:
+            result = syscall_fd_read(frame->rdi, frame->rsi, frame->rdx);
+            break;
+        case BORING_SYS_FD_WRITE:
+            result = syscall_fd_write(frame->rdi, frame->rsi, frame->rdx);
+            break;
+        case BORING_SYS_FD_CLOSE:
+            result = syscall_fd_close(frame->rdi);
             break;
         default:
             result = syscall_error(BORING_SYSCALL_ENOSYS);

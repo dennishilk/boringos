@@ -13,18 +13,18 @@ It is **not a Linux distribution**, **not a BSD distribution**, and **not based 
 
 **Extremely early bootstrap kernel.**
 
-BoringKernel boots under **QEMU x86_64**. Limine remains the external bootloader. BoringKernel currently provides COM1 serial output, memory and address-space management, exceptions and PIT/PIC interrupts, kernel scheduling, real CPL3 ELF userspace, a checked native syscall boundary, VFS/RAMFS, VirtIO-backed writable BoringFS, PID 1 `boring-init`, an interactive native `boring-shell`, and bounded VFS-backed static ELF launching including the standalone `/bin/boringfetch` from persistent BoringFS.
+BoringKernel boots under **QEMU x86_64**. Limine remains the external bootloader. BoringKernel currently provides COM1 serial output, memory and address-space management, exceptions and PIT/PIC interrupts, kernel scheduling, real CPL3 ELF userspace, a checked native syscall boundary, VFS/RAMFS, VirtIO-backed writable BoringFS, PID 1 `boring-init`, an interactive native `boring-shell`, bounded VFS-backed static ELF launching, and a 16-slot per-process native descriptor/stdio foundation used by standalone `/bin/boringfetch` and `/bin/cat` from persistent BoringFS.
 
 Current serial output begins with:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.29-dev
+BoringKernel 0.0.30-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```
 
-The original VMM still adopts the active Limine-created x86_64 four-level root for PID 0. BoringKernel 0.0.9-dev introduced PMM-backed process roots with an empty private lower half and shared higher-half kernel mappings. BoringKernel 0.0.10-dev added the first real Ring 3 transition, and 0.0.11-dev added the native x86_64 syscall boundary. Later milestones extended that same checked foundation through native ELF programs, filesystems, storage, system identity, the M27 shell lifecycle and M28 VFS-backed standalone programs; the exact current state is tracked in [`docs/roadmap.md`](docs/roadmap.md).
+The original VMM still adopts the active Limine-created x86_64 four-level root for PID 0. BoringKernel 0.0.9-dev introduced PMM-backed process roots with an empty private lower half and shared higher-half kernel mappings. BoringKernel 0.0.10-dev added the first real Ring 3 transition, and 0.0.11-dev added the native x86_64 syscall boundary. Later milestones extended that same checked foundation through native ELF programs, filesystems, storage, system identity, the M27 shell lifecycle, M28 VFS-backed standalone programs and the M29 native descriptor/stdio layer; the exact current state is tracked in [`docs/roadmap.md`](docs/roadmap.md).
 
 The current process split is:
 

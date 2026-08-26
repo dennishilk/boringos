@@ -42,6 +42,11 @@ struct syscall_user_result {
     uint64_t unknown_result;
     uint64_t callee_saved_ok;
     uint64_t final_marker;
+    uint64_t fd_invalid_result;
+    uint64_t fd_read_stdout_result;
+    uint64_t fd_write_stdin_result;
+    uint64_t fd_invalid_pointer_result;
+    uint64_t fd_oversized_result;
 };
 
 struct syscall_test_state {
@@ -53,7 +58,7 @@ struct syscall_test_state {
     bool armed;
 };
 
-_Static_assert(sizeof(struct syscall_user_result) == 112U,
+_Static_assert(sizeof(struct syscall_user_result) == 152U,
                "syscall result layout must match acceptance assembly");
 _Static_assert(offsetof(struct syscall_user_result, initial_cs) == 0U,
                "syscall result initial CS offset mismatch");
@@ -63,6 +68,10 @@ _Static_assert(offsetof(struct syscall_user_result, debug_write_result) == 48U,
                "syscall result DEBUG_WRITE offset mismatch");
 _Static_assert(offsetof(struct syscall_user_result, callee_saved_ok) == 96U,
                "syscall result callee-saved offset mismatch");
+_Static_assert(offsetof(struct syscall_user_result, fd_invalid_result) == 112U,
+               "syscall result FD negative offset mismatch");
+_Static_assert(offsetof(struct syscall_user_result, fd_oversized_result) == 144U,
+               "syscall result FD oversized offset mismatch");
 
 extern const uint8_t x86_64_syscall_test_payload_start[];
 extern const uint8_t x86_64_syscall_test_payload_cli[];
@@ -317,7 +326,7 @@ void syscall_test_handle_exception(const struct x86_64_trap_frame *frame) {
     serial_write_string("  entered-cpl3: PASS\n");
 
     if (!syscall_get_stats(&syscall_stats) ||
-        (syscall_stats.dispatch_count != 7ULL)) {
+        (syscall_stats.dispatch_count != 12ULL)) {
         syscall_test_fail("syscall-entered-cpl0");
     }
     serial_write_string("  syscall-entered-cpl0: PASS\n");
@@ -364,6 +373,31 @@ void syscall_test_handle_exception(const struct x86_64_trap_frame *frame) {
         syscall_test_fail("unknown-syscall");
     }
     serial_write_string("  unknown-syscall: PASS\n");
+
+    if (result->fd_invalid_result != expected_error(BORING_SYSCALL_EINVAL)) {
+        syscall_test_fail("fd-invalid-rejected");
+    }
+    serial_write_string("  fd-invalid-rejected: PASS\n");
+
+    if (result->fd_read_stdout_result != expected_error(BORING_SYSCALL_EACCES)) {
+        syscall_test_fail("fd-read-stdout-rejected");
+    }
+    serial_write_string("  fd-read-stdout-rejected: PASS\n");
+
+    if (result->fd_write_stdin_result != expected_error(BORING_SYSCALL_EACCES)) {
+        syscall_test_fail("fd-write-stdin-rejected");
+    }
+    serial_write_string("  fd-write-stdin-rejected: PASS\n");
+
+    if (result->fd_invalid_pointer_result != expected_error(BORING_SYSCALL_EFAULT)) {
+        syscall_test_fail("fd-invalid-pointer-rejected");
+    }
+    serial_write_string("  fd-invalid-pointer-rejected: PASS\n");
+
+    if (result->fd_oversized_result != expected_error(BORING_SYSCALL_EINVAL)) {
+        syscall_test_fail("fd-oversized-transfer-rejected");
+    }
+    serial_write_string("  fd-oversized-transfer-rejected: PASS\n");
 
     if ((result->after_getpid_marker != SYSCALL_USER_AFTER_MARKER) ||
         (result->post_sysret_cs !=

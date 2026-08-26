@@ -25,6 +25,10 @@
 #define BORING_SYS_PROCESS_SNAPSHOT 15
 #define BORING_SYS_EXIT 16
 #define BORING_SYS_WAITPID 17
+#define BORING_SYS_FD_OPEN 18
+#define BORING_SYS_FD_READ 19
+#define BORING_SYS_FD_WRITE 20
+#define BORING_SYS_FD_CLOSE 21
 
 #define BORING_SYSCALL_DEBUG_WRITE_MAX 64
 #define BORING_SYSCALL_CONSOLE_IO_MAX 64
@@ -33,7 +37,15 @@
 #define BORING_SYSCALL_ARG_MAX 16
 #define BORING_SYSCALL_ARG_BYTES_MAX 1024
 #define BORING_SYSCALL_FS_IO_MAX 4096
+#define BORING_SYSCALL_FD_IO_MAX 4096
 #define BORING_SYSCALL_CWD_MAX 1024
+
+#define BORING_FD_STDIN 0U
+#define BORING_FD_STDOUT 1U
+#define BORING_FD_STDERR 2U
+#define BORING_FD_OPEN_READ (1U << 0)
+#define BORING_FD_OPEN_WRITE (1U << 1)
+#define BORING_FD_OPEN_MASK (BORING_FD_OPEN_READ | BORING_FD_OPEN_WRITE)
 
 #define BORING_DIRENT_TYPE_DIRECTORY 1U
 #define BORING_DIRENT_TYPE_REGULAR 2U
@@ -109,6 +121,16 @@ struct boring_system_info {
     char root_device[BORING_SYSTEM_DEVICE_CAPACITY];
 };
 
+_Static_assert(BORING_SYS_WAITPID == 17,
+               "existing syscall numbering must remain stable");
+_Static_assert(BORING_SYS_FD_OPEN == 18,
+               "FD_OPEN syscall number contract changed");
+_Static_assert(BORING_SYS_FD_READ == 19,
+               "FD_READ syscall number contract changed");
+_Static_assert(BORING_SYS_FD_WRITE == 20,
+               "FD_WRITE syscall number contract changed");
+_Static_assert(BORING_SYS_FD_CLOSE == 21,
+               "FD_CLOSE syscall number contract changed");
 _Static_assert(sizeof(struct boring_system_info) == 256U,
                "BoringOS system-info ABI size must remain fixed");
 _Static_assert(sizeof(struct boring_process_info) == 56U,

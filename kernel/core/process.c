@@ -49,6 +49,9 @@ static void process_clear(struct process *process) {
         return;
     }
 
+    if (process->fd_table.initialized) {
+        (void)kernel_fd_table_destroy(&process->fd_table);
+    }
     if (process->cwd_valid) {
         (void)vfs_path_release(&process->cwd);
     }
@@ -176,6 +179,12 @@ bool process_create(struct process **process_out) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
+    if (!kernel_fd_table_init(&process->fd_table)) {
+        (void)address_space_destroy(&process->address_space);
+        process_clear(process);
+        process_restore_interrupts(interrupts_were_enabled);
+        return false;
+    }
 
     process->pid = next_pid;
     process->parent_pid =
@@ -248,7 +257,8 @@ bool process_mark_finished(struct process *process) {
 
     x86_64_interrupts_disable();
     if ((!process_initialized) || !process_is_regular(process) ||
-        (process->state != PROCESS_ALIVE) || (current_process == process)) {
+        (process->state != PROCESS_ALIVE) || (current_process == process) ||
+        !kernel_fd_table_destroy(&process->fd_table)) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }

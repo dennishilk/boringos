@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.29-dev
+BoringKernel 0.0.30-dev
 ```
 
 The current syscall ABI is exactly:
@@ -99,9 +99,16 @@ The current syscall ABI is exactly:
 15 PROCESS_SNAPSHOT
 16 EXIT
 17 WAITPID
+18 FD_OPEN
+19 FD_READ
+20 FD_WRITE
+21 FD_CLOSE
 ```
 
-There is still no numeric file-descriptor table, no stdin/stdout/stderr abstraction, no executable loading from VFS/BoringFS, no partition layer, no networking, no display/input stack, no BoringWM integration, no APIC migration and no SMP.
+VFS-backed executable loading and standalone `/bin/boringfetch` are real
+since Milestone 28. Milestone 29 adds the bounded per-process descriptor and
+standard-I/O foundation plus standalone `/bin/cat`. There is still no partition
+layer, networking or GUI.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -165,7 +172,8 @@ Native x86_64 `SYSCALL` / `SYSRETQ` is the sole userspace call boundary. The boo
 
 A deliberately constrained ELF64 little-endian x86_64 `ET_EXEC` loader validates Limine boot-module images, copies `PT_LOAD` bytes into PMM-owned process pages, enforces W^X/NX and supervisor-only higher-half mappings, zeros BSS and enters the validated ELF entry at CPL3.
 
-Executable loading from VFS/RAMFS does **not** exist yet.
+At the completion of Milestone 11, executable loading from VFS/RAMFS did
+**not** exist yet.
 
 ## Milestone 12: minimal native userspace runtime — COMPLETE
 
@@ -640,3 +648,59 @@ Pre-closeout semantic freeze:
 feature head: 9664d5ae8118308f68a75faa95998d7b244aa216
 exact-head verification: Run 32887074825 / SUCCESS
 ```
+
+
+---
+
+# Stage 13 — native descriptor I/O
+
+## Milestone 29: native file descriptors and stdio foundation — COMPLETE
+
+Milestone 29 adds a deliberately bounded BoringOS-native per-process descriptor
+layer without turning the userspace into POSIX. Every normal userspace process
+owns exactly 16 descriptor slots. `fd 0` is readable console input, `fd 1` is
+writable console output and `fd 2` is writable console error; regular files use
+slots 3 through 15 and retain existing VFS handles with independent offsets.
+New `LAUNCH` children receive a fresh standard-descriptor set and do not inherit
+arbitrary regular-file descriptors from their parent.
+
+The syscall ABI extends the existing 0-17 surface without renumbering it:
+
+```text
+18 FD_OPEN
+19 FD_READ
+20 FD_WRITE
+21 FD_CLOSE
+```
+
+One `FD_READ` or `FD_WRITE` transfers at most 4096 bytes. `FD_SEEK`, descriptor
+duplication, pipes, redirection, TTY semantics, asynchronous I/O and POSIX
+`fork`/`execve` remain deliberately outside M29.
+
+The former shell-integrated `cat` command is now a real freestanding static
+`/bin/cat` ELF64 `ET_EXEC` stored beside `/bin/boringfetch` in persistent
+BoringFS. Its data path uses only `FD_OPEN`, `FD_READ`, `FD_WRITE(1, ...)` and
+`FD_CLOSE`, followed by explicit `EXIT`; the ELF audit rejects legacy
+`FS_READ`/`CONSOLE_WRITE` call edges. The QEMU acceptance proves regular-file
+fd allocation, sequential read/write, EOF, close, child exit/zombie/wait/reap,
+controlled missing-file failure, explicit `/bin/cat`, preserved
+`/bin/boringfetch`, and no leaked child zombie.
+
+Dedicated CPL3 syscall acceptance also proves invalid-fd rejection, READ on
+stdout rejection, WRITE on stdin rejection, invalid userspace pointer
+rejection and the 4096-byte transfer bound. Descriptor host tests cover the
+standard slots, table-full behavior, slot reuse, independent offsets, access
+modes, child isolation and teardown of retained handles.
+
+Semantic freeze acceptance record:
+
+```text
+feature head: 950da2d9e0b373f29c0bf8817720e9f29b1b3d20
+exact-head verification: Run 32916196094 / SUCCESS
+final version after closeout: BoringKernel 0.0.30-dev
+```
+
+M29 does not add `FD_SEEK`, `dup`/`dup2`, pipes, shell redirection, job control,
+signals, sockets, networking, permissions, authentication, a dynamic linker,
+shared libraries, `mmap`, nonblocking/asynchronous I/O, poll/select/epoll, TTY
+line discipline, PTYs, framebuffer/input work, BoringWM or Milestone 30 work.

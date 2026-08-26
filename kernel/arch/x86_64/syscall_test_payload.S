@@ -79,6 +79,46 @@ x86_64_syscall_test_payload_start:
     syscall
     movq %rax, -0xa8(%rsp)
 
+    /* BORING_SYS_FD_READ = 19: invalid descriptor. */
+    movq $99, %rdi
+    leaq -0xe00(%rsp), %rsi
+    movq $1, %rdx
+    movq $19, %rax
+    syscall
+    movq %rax, -0x90(%rsp)
+
+    /* BORING_SYS_FD_READ = 19: stdout is write-only. */
+    movq $1, %rdi
+    leaq -0xe00(%rsp), %rsi
+    movq $1, %rdx
+    movq $19, %rax
+    syscall
+    movq %rax, -0x88(%rsp)
+
+    /* BORING_SYS_FD_WRITE = 20: stdin is read-only. */
+    xorl %edi, %edi
+    leaq -0xe00(%rsp), %rsi
+    movq $1, %rdx
+    movq $20, %rax
+    syscall
+    movq %rax, -0x80(%rsp)
+
+    /* FD_READ on stdin must reject an unmapped destination before blocking. */
+    xorl %edi, %edi
+    movabsq $0x0000000040020000, %rsi
+    movq $1, %rdx
+    movq $19, %rax
+    syscall
+    movq %rax, -0x78(%rsp)
+
+    /* FD_WRITE must reject a transfer larger than the 4096-byte ABI bound. */
+    movq $1, %rdi
+    leaq -0xe00(%rsp), %rsi
+    movq $4097, %rdx
+    movq $20, %rax
+    syscall
+    movq %rax, -0x70(%rsp)
+
     movq $1, %rax
     movabsq $0x1111111122222222, %rcx
     cmpq %rcx, %rbx

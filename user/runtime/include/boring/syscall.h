@@ -36,5 +36,9 @@ long boring_getcwd(char *buffer, size_t capacity);
 long boring_process_snapshot(uint64_t index, struct boring_process_info *info);
 void boring_exit(int status) __attribute__((noreturn));
 long boring_waitpid(uint64_t pid, int *status);
+long boring_fd_open(const char *path, size_t path_length, uint32_t flags);
+long boring_fd_read(uint32_t fd, void *buffer, size_t capacity);
+long boring_fd_write(uint32_t fd, const void *buffer, size_t length);
+long boring_fd_close(uint32_t fd);
 
 #endif

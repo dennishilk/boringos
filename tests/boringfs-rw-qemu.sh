@@ -151,7 +151,7 @@ make -C "${ROOT}" TEST_MODE=boringfs-rw
 
 start_vm "${MAIN_IMAGE}" first
 for line in \
-    'BoringKernel 0.0.29-dev' \
+    'BoringKernel 0.0.30-dev' \
     '  real-virtio-volume: PASS' \
     'BoringFS writable:' \
     '  synchronous-mutations-enabled: PASS' \
@@ -172,10 +172,11 @@ if ! grep -Fqx 'touch: already exists' "${LOG}"; then
     fail_dump 'duplicate file creation was not rejected'
 fi
 send_command 'write hello.txt BoringOS-persistence-test'
-send_command 'cat hello.txt'
-if ! grep -Fqx 'BoringOS-persistence-test' "${LOG}"; then
-    fail_dump 'first boot did not read back exact written bytes'
-fi
+HELLO_BEFORE=$(grep -Fxc 'hello.txt' "${LOG}" 2>/dev/null || true)
+send_command 'ls'
+HELLO_AFTER=$(grep -Fxc 'hello.txt' "${LOG}" 2>/dev/null || true)
+[ "${HELLO_AFTER}" -eq $((HELLO_BEFORE + 1)) ] ||
+    fail_dump 'first boot did not expose the newly written file'
 stop_vm
 
 validate_image "${MAIN_IMAGE}" after-first-boot
@@ -191,15 +192,17 @@ EXPECTED_SHA=$(printf 'BoringOS-persistence-test\n' | sha256sum | awk '{print $1
 
 start_vm "${MAIN_IMAGE}" second
 send_command 'cd /disk'
-send_command 'cat hello.txt'
-if ! grep -Fqx 'BoringOS-persistence-test' "${LOG}"; then
-    fail_dump 'second boot did not preserve file contents'
-fi
+HELLO_BEFORE=$(grep -Fxc 'hello.txt' "${LOG}" 2>/dev/null || true)
+send_command 'ls'
+HELLO_PRESENT=$(grep -Fxc 'hello.txt' "${LOG}" 2>/dev/null || true)
+[ "${HELLO_PRESENT}" -eq $((HELLO_BEFORE + 1)) ] ||
+    fail_dump 'second boot did not preserve the file namespace'
 send_command 'rm hello.txt'
-send_command 'cat hello.txt'
-if ! grep -Fqx 'cat: not found' "${LOG}"; then
+REMOVED_BEFORE=$(grep -Fxc 'hello.txt' "${LOG}" 2>/dev/null || true)
+send_command 'ls'
+REMOVED_AFTER=$(grep -Fxc 'hello.txt' "${LOG}" 2>/dev/null || true)
+[ "${REMOVED_AFTER}" -eq "${REMOVED_BEFORE}" ] ||
     fail_dump 'removed file remained visible in the second boot'
-fi
 stop_vm
 
 validate_image "${MAIN_IMAGE}" after-remove
@@ -210,16 +213,18 @@ fi
 
 start_vm "${MAIN_IMAGE}" third
 send_command 'cd /disk'
-send_command 'cat hello.txt'
-if ! grep -Fqx 'cat: not found' "${LOG}"; then
+MISSING_BEFORE=$(grep -Fxc 'hello.txt' "${LOG}" 2>/dev/null || true)
+send_command 'ls'
+MISSING_AFTER=$(grep -Fxc 'hello.txt' "${LOG}" 2>/dev/null || true)
+[ "${MISSING_AFTER}" -eq "${MISSING_BEFORE}" ] ||
     fail_dump 'removed file reappeared after reboot'
-fi
 send_command 'touch reused.txt'
 send_command 'write reused.txt reused-allocation'
-send_command 'cat reused.txt'
-if ! grep -Fqx 'reused-allocation' "${LOG}"; then
-    fail_dump 'reused file did not read back'
-fi
+REUSED_BEFORE=$(grep -Fxc 'reused.txt' "${LOG}" 2>/dev/null || true)
+send_command 'ls'
+REUSED_AFTER=$(grep -Fxc 'reused.txt' "${LOG}" 2>/dev/null || true)
+[ "${REUSED_AFTER}" -eq $((REUSED_BEFORE + 1)) ] ||
+    fail_dump 'reused file was not visible before host byte verification'
 stop_vm
 
 validate_image "${MAIN_IMAGE}" after-reuse

@@ -31,12 +31,16 @@ SHELL_ELF := $(USER_BUILD_DIR)/boring-shell.elf
 BORINGFETCH_MAIN_OBJECT := $(USER_BUILD_DIR)/boringfetch/main.o
 BORINGFETCH_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(BORINGFETCH_MAIN_OBJECT)
 BORINGFETCH_ELF := $(USER_BUILD_DIR)/boringfetch.elf
+CAT_MAIN_OBJECT := $(USER_BUILD_DIR)/cat/main.o
+CAT_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(CAT_MAIN_OBJECT)
+CAT_ELF := $(USER_BUILD_DIR)/cat.elf
 ISO := $(BUILD_DIR)/boringos.iso
 MKBORINGFS := $(BUILD_DIR)/mkboringfs
 BORINGFSCK := $(BUILD_DIR)/boringfsck
 BORINGFS_FIXTURE := $(BUILD_DIR)/boringfs-fixture
 BORINGFS_VFS_HOST_TEST := $(BUILD_DIR)/boringfs-vfs-host-test
 SHELL_HOST_TEST := $(BUILD_DIR)/shell-host-test
+FD_HOST_TEST := $(BUILD_DIR)/fd-host-test
 MKBORINGFS_VERIFY := $(BUILD_DIR)/mkboringfs-test/mkboringfs-verify
 BORINGFS_HEADER := libs/boringfs/include/boring/boringfs.h
 BORINGFS_CODEC := libs/boringfs/codec.c
@@ -181,12 +185,15 @@ SHELL_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 	-T user/boring-shell/linker.ld
 BORINGFETCH_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 	-T user/boringfetch/linker.ld
+CAT_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
+	-T user/cat/linker.ld
 
 KERNEL_C_SOURCES := \
 	kernel/core/entry.c \
 	kernel/core/pmm.c \
 	kernel/core/heap.c \
 	kernel/core/process.c \
+	kernel/core/fd.c \
 	kernel/core/vfs.c \
 	kernel/core/ramfs.c \
 	kernel/core/block_device.c \
@@ -227,7 +234,7 @@ KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCE
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
 
-.PHONY: all kernel user-elf user-runtime user-console user-init user-shell user-boringfetch elf-audit runtime-audit console-audit init-audit shell-audit boringfetch-audit shell-host-test boringfs-host-test boringfs-vfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test boringfs-fixture qemu-bundle run run-headless test clean distclean
+.PHONY: all kernel user-elf user-runtime user-console user-init user-shell user-boringfetch user-cat elf-audit runtime-audit console-audit init-audit shell-audit boringfetch-audit cat-audit shell-host-test fd-host-test boringfs-host-test boringfs-vfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test boringfs-fixture qemu-bundle run run-headless test clean distclean
 
 all: $(ISO)
 
@@ -244,6 +251,8 @@ user-init: $(INIT_ELF)
 user-shell: $(SHELL_INIT_ELF) $(SHELL_ELF)
 
 user-boringfetch: $(BORINGFETCH_ELF)
+
+user-cat: $(CAT_ELF)
 
 elf-audit: $(ELF_SMOKE)
 	sh ./tests/elf-build-audit.sh
@@ -263,8 +272,14 @@ shell-audit: $(SHELL_ELF)
 boringfetch-audit: $(BORINGFETCH_ELF)
 	sh ./tests/boringfetch-build-audit.sh
 
+cat-audit: $(CAT_ELF)
+	sh ./tests/cat-build-audit.sh
+
 shell-host-test: $(SHELL_HOST_TEST)
 	$(SHELL_HOST_TEST)
+
+fd-host-test: $(FD_HOST_TEST)
+	$(FD_HOST_TEST)
 
 boringfs-host-test:
 	sh ./tests/boringfs-host-test.sh
@@ -286,9 +301,10 @@ qemu-bundle:
 	$(MAKE) TEST_MODE=persistent-root
 	$(MAKE) boringfs-fixture
 	$(MAKE) user-boringfetch
+	$(MAKE) user-cat
 	mkdir -p $(BUILD_DIR)/boringos-qemu-x86_64
 	cp $(ISO) $(BUILD_DIR)/boringos-qemu-x86_64/boringos.iso
-	$(BORINGFS_FIXTURE) $(BUILD_DIR)/boringos-qemu-x86_64/boringos-root.img valid $(BORINGFETCH_ELF)
+	$(BORINGFS_FIXTURE) $(BUILD_DIR)/boringos-qemu-x86_64/boringos-root.img valid $(BORINGFETCH_ELF) $(CAT_ELF)
 	cp scripts/run-boringos.sh $(BUILD_DIR)/boringos-qemu-x86_64/run-boringos.sh
 	cp docs/RUNNING.md $(BUILD_DIR)/boringos-qemu-x86_64/README.md
 	cd $(BUILD_DIR)/boringos-qemu-x86_64 && sha256sum boringos.iso boringos-root.img > SHA256SUMS
@@ -329,6 +345,12 @@ $(SHELL_HOST_TEST): tests/shell-host-test.c user/boring-shell/main.c \
 	@mkdir -p $(dir $@)
 	$(HOST_CC) -Iuser/runtime/include -Ikernel/include $(HOST_CFLAGS) \
 		tests/shell-host-test.c -o $@
+
+$(FD_HOST_TEST): tests/fd-host-test.c kernel/core/fd.c \
+		kernel/include/boring/fd.h kernel/include/boring/vfs.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) \
+		tests/fd-host-test.c kernel/core/fd.c -o $@
 
 $(MKBORINGFS_VERIFY): tests/mkboringfs-verify.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) $(BORINGFS_HEADER)
 	@mkdir -p $(dir $@)
@@ -445,6 +467,14 @@ $(BORINGFETCH_ELF): $(BORINGFETCH_OBJECTS) user/boringfetch/linker.ld
 	@mkdir -p $(dir $@)
 	$(LD) $(BORINGFETCH_LDFLAGS) $(BORINGFETCH_OBJECTS) -o $@
 
+$(CAT_MAIN_OBJECT): user/cat/main.c user/runtime/include/boring/syscall.h user/runtime/include/boring/string.h kernel/include/boring/syscall_abi.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(CAT_ELF): $(CAT_OBJECTS) user/cat/linker.ld
+	@mkdir -p $(dir $@)
+	$(LD) $(CAT_LDFLAGS) $(CAT_OBJECTS) -o $@
+
 $(LIMINE_ARCHIVE):
 	@mkdir -p $(dir $@)
 	$(CURL) --fail --location --retry 3 --output $@ $(LIMINE_URL)
@@ -501,7 +531,10 @@ test:
 	sh ./tests/ramfs-qemu.sh
 	sh ./tests/init-qemu.sh
 	sh ./tests/shell-build-audit.sh
+	sh ./tests/boringfetch-build-audit.sh
+	sh ./tests/cat-build-audit.sh
 	$(MAKE) shell-host-test
+	$(MAKE) fd-host-test
 	sh ./tests/shell-qemu.sh
 	sh ./tests/shell-editing-qemu.sh
 	sh ./tests/shell-lifecycle-qemu.sh
@@ -511,6 +544,7 @@ test:
 	sh ./tests/boringfs-ro-qemu.sh
 	sh ./tests/boringfs-rw-qemu.sh
 	sh ./tests/persistent-root-qemu.sh
+	sh ./tests/fd-stdio-qemu.sh
 	sh ./tests/boringfs-host-test.sh
 	$(MAKE) boringfs-vfs-host-test
 	$(MAKE) mkboringfs-test
