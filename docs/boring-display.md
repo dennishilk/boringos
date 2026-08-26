@@ -51,7 +51,7 @@ Protocol messages are fixed-size, versioned and bounded. M34 defines:
 - `DESTROY_SURFACE`: release one client-owned surface;
 - bounded replies containing status and the service-issued surface token.
 
-The only M34 pixel format is XRGB8888. Dimensions must be non-zero and fit inside the current scanout. Stride must be at least `width * 4`, must satisfy the fixed alignment contract, and `stride * height` must not overflow. The declared byte count must equal the validated layout and must not exceed the authoritative `BUFFER_INFO` size of the granted M32 object.
+The only M34 pixel format is XRGB8888. Dimensions must be non-zero and fit inside the current scanout. Stride must equal `width * 4`; `stride * height` must not overflow. The declared byte count must equal that exact layout and the authoritative `BUFFER_INFO` size of the granted M32 object.
 
 A surface token is service-issued and generation protected. Every operation is checked against the accepting IPC connection that owns that token; guessing another client's token is not authority.
 
