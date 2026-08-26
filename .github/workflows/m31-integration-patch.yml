@@ -6,6 +6,9 @@ on:
       - agent/native-input-foundation
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   focused:
     runs-on: ubuntu-24.04
@@ -13,6 +16,70 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: agent/native-input-foundation
+          fetch-depth: 0
+      - name: Integrate CPL3 M31 syscall negatives once
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          c = Path('kernel/core/syscall_test.c')
+          text = c.read_text()
+          if 'input_non_owner_read_result' not in text:
+              text = text.replace('#include <boring/fd.h>\n', '#include <boring/fd.h>\n#include <boring/input.h>\n', 1)
+              text = text.replace(
+                  '    uint64_t fd_oversized_result;\n};',
+                  '    uint64_t fd_oversized_result;\n'
+                  '    uint64_t input_non_owner_read_result;\n'
+                  '    uint64_t input_non_owner_release_result;\n'
+                  '    uint64_t input_claim_result;\n'
+                  '    uint64_t input_double_claim_result;\n'
+                  '    uint64_t input_invalid_pointer_result;\n'
+                  '    uint64_t input_zero_count_result;\n'
+                  '    uint64_t input_oversized_count_result;\n'
+                  '    uint64_t input_release_result;\n};', 1)
+              text = text.replace(
+                  '_Static_assert(sizeof(struct syscall_user_result) == 152U,',
+                  '_Static_assert(sizeof(struct syscall_user_result) == 216U,', 1)
+              text = text.replace(
+                  '_Static_assert(offsetof(struct syscall_user_result, fd_oversized_result) == 144U,\n'
+                  '               "syscall result FD oversized offset mismatch");',
+                  '_Static_assert(offsetof(struct syscall_user_result, fd_oversized_result) == 144U,\n'
+                  '               "syscall result FD oversized offset mismatch");\n'
+                  '_Static_assert(offsetof(struct syscall_user_result, input_non_owner_read_result) == 152U,\n'
+                  '               "syscall result input negative offset mismatch");\n'
+                  '_Static_assert(offsetof(struct syscall_user_result, input_release_result) == 208U,\n'
+                  '               "syscall result input release offset mismatch");', 1)
+              text = text.replace(
+                  '    if (!syscall_init() || !syscall_get_stats(&syscall_stats) ||',
+                  '    if (!syscall_init() || !boring_input_init() ||\n'
+                  '        !syscall_get_stats(&syscall_stats) ||', 1)
+              text = text.replace(
+                  '(syscall_stats.dispatch_count != 12ULL)',
+                  '(syscall_stats.dispatch_count != 20ULL)', 1)
+              anchor = '''    if (result->fd_oversized_result != expected_error(BORING_SYSCALL_EINVAL)) {\n        syscall_test_fail("fd-oversized-transfer-rejected");\n    }\n    serial_write_string("  fd-oversized-transfer-rejected: PASS\\n");\n'''
+              addition = anchor + '''\n    if (result->input_non_owner_read_result != expected_error(BORING_SYSCALL_EACCES)) {\n        syscall_test_fail("input-non-owner-read-rejected");\n    }\n    serial_write_string("  input-non-owner-read-rejected: PASS\\n");\n\n    if (result->input_non_owner_release_result != expected_error(BORING_SYSCALL_EACCES)) {\n        syscall_test_fail("input-non-owner-release-rejected");\n    }\n    serial_write_string("  input-non-owner-release-rejected: PASS\\n");\n\n    if (result->input_claim_result != 0ULL) {\n        syscall_test_fail("input-claim");\n    }\n    serial_write_string("  input-claim: PASS\\n");\n\n    if (result->input_double_claim_result != 0ULL) {\n        syscall_test_fail("input-double-claim");\n    }\n    serial_write_string("  input-double-claim: PASS\\n");\n\n    if (result->input_invalid_pointer_result != expected_error(BORING_SYSCALL_EFAULT)) {\n        syscall_test_fail("input-invalid-pointer-rejected");\n    }\n    serial_write_string("  input-invalid-pointer-rejected: PASS\\n");\n\n    if (result->input_zero_count_result != expected_error(BORING_SYSCALL_EINVAL)) {\n        syscall_test_fail("input-zero-count-rejected");\n    }\n    serial_write_string("  input-zero-count-rejected: PASS\\n");\n\n    if (result->input_oversized_count_result != expected_error(BORING_SYSCALL_EINVAL)) {\n        syscall_test_fail("input-oversized-count-rejected");\n    }\n    serial_write_string("  input-oversized-count-rejected: PASS\\n");\n\n    if (result->input_release_result != 0ULL) {\n        syscall_test_fail("input-release");\n    }\n    serial_write_string("  input-release: PASS\\n");\n'''
+              if anchor not in text:
+                  raise SystemExit('syscall_test.c acceptance anchor not found')
+              text = text.replace(anchor, addition, 1)
+              c.write_text(text)
+
+          asm = Path('kernel/arch/x86_64/syscall_test_payload.S')
+          text = asm.read_text()
+          if 'BORING_SYS_INPUT_CLAIM = 22' not in text:
+              anchor = '''    /* FD_WRITE must reject a transfer larger than the 4096-byte ABI bound. */\n    movq $1, %rdi\n    leaq -0xe00(%rsp), %rsi\n    movq $4097, %rdx\n    movq $20, %rax\n    syscall\n    movq %rax, -0x70(%rsp)\n'''
+              addition = anchor + '''\n    /* BORING_SYS_INPUT_READ = 23: no owner must be rejected before wait. */\n    leaq -0xe00(%rsp), %rdi\n    movq $1, %rsi\n    movq $23, %rax\n    syscall\n    movq %rax, -0x68(%rsp)\n\n    /* BORING_SYS_INPUT_RELEASE = 24: no owner must be rejected. */\n    movq $24, %rax\n    syscall\n    movq %rax, -0x60(%rsp)\n\n    /* BORING_SYS_INPUT_CLAIM = 22: first and same-owner second claim succeed. */\n    movq $22, %rax\n    syscall\n    movq %rax, -0x58(%rsp)\n    movq $22, %rax\n    syscall\n    movq %rax, -0x50(%rsp)\n\n    /* INPUT_READ validates destination before consuming or blocking. */\n    movabsq $0x0000000040020000, %rdi\n    movq $1, %rsi\n    movq $23, %rax\n    syscall\n    movq %rax, -0x48(%rsp)\n\n    /* INPUT_READ count bounds are 1..16 events. */\n    leaq -0xe00(%rsp), %rdi\n    xorl %esi, %esi\n    movq $23, %rax\n    syscall\n    movq %rax, -0x40(%rsp)\n    leaq -0xe00(%rsp), %rdi\n    movq $17, %rsi\n    movq $23, %rax\n    syscall\n    movq %rax, -0x38(%rsp)\n\n    /* Owner release succeeds after deterministic same-owner claim. */\n    movq $24, %rax\n    syscall\n    movq %rax, -0x30(%rsp)\n'''
+              if anchor not in text:
+                  raise SystemExit('syscall payload anchor not found')
+              asm.write_text(text.replace(anchor, addition, 1))
+          PY
+          git diff --check
+          if ! git diff --quiet -- kernel/core/syscall_test.c kernel/arch/x86_64/syscall_test_payload.S; then
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add kernel/core/syscall_test.c kernel/arch/x86_64/syscall_test_payload.S
+            git commit -m 'Add M31 input syscall negative acceptance'
+            git push origin HEAD:agent/native-input-foundation
+          fi
       - name: Install focused build and QEMU dependencies
         run: |
           sudo apt-get update
@@ -23,7 +90,7 @@ jobs:
         run: make input-host-test
       - name: Standalone input-test ELF audit
         run: sh ./tests/input-test-build-audit.sh
-      - name: Existing CPL3 syscall acceptance
+      - name: Existing CPL3 syscall acceptance plus M31 negatives
         run: sh ./tests/syscall-qemu.sh
       - name: Real PS/2 keyboard and mouse userspace input
         run: sh ./tests/input-qemu.sh
