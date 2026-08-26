@@ -1,6 +1,7 @@
 #ifndef BORING_IPC_SYSCALL_H
 #define BORING_IPC_SYSCALL_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
