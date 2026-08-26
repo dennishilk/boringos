@@ -4,6 +4,7 @@
 
 #include <boring/ipc.h>
 #include <boring/process.h>
+#include <boring/syscall_abi.h>
 #include <boring/task.h>
 
 #define IPC_HANDLE_SLOT_BITS 5U
