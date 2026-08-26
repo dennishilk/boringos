@@ -855,6 +855,90 @@ enum user_memory_result user_buffer_close(struct process *process,
                                         USER_MEMORY_RESULT_INTERNAL;
 }
 
+enum user_memory_result user_buffer_size(struct process *process,
+                                          uint32_t encoded_handle,
+                                          uint64_t *size_out) {
+    struct user_memory_buffer_handle *handle;
+    struct user_memory_buffer_object *object;
+
+    if (!process_ready(process)) {
+        return USER_MEMORY_RESULT_NOT_INITIALIZED;
+    }
+    if (size_out == NULL) {
+        return USER_MEMORY_RESULT_INVALID;
+    }
+    handle = decode_handle(&process->user_memory, encoded_handle, NULL);
+    if (handle == NULL) {
+        return USER_MEMORY_RESULT_INVALID;
+    }
+    object = object_at(handle->object_index);
+    if ((object == NULL) || (object->size_bytes == 0ULL) ||
+        (object->size_bytes > USER_MEMORY_BUFFER_MAX_BYTES)) {
+        return USER_MEMORY_RESULT_INTERNAL;
+    }
+    *size_out = object->size_bytes;
+    return USER_MEMORY_RESULT_OK;
+}
+
+enum user_memory_result user_buffer_copy_out(struct process *process,
+                                              uint32_t encoded_handle,
+                                              uint64_t offset,
+                                              void *destination,
+                                              size_t length) {
+    struct user_memory_buffer_handle *handle;
+    struct user_memory_buffer_object *object;
+    uint8_t *output = (uint8_t *)destination;
+    uint64_t current = offset;
+    size_t remaining = length;
+
+    if (!process_ready(process)) {
+        return USER_MEMORY_RESULT_NOT_INITIALIZED;
+    }
+    handle = decode_handle(&process->user_memory, encoded_handle, NULL);
+    if (handle == NULL) {
+        return USER_MEMORY_RESULT_INVALID;
+    }
+    object = object_at(handle->object_index);
+    if (object == NULL) {
+        return USER_MEMORY_RESULT_INTERNAL;
+    }
+    if ((offset > object->size_bytes) ||
+        ((uint64_t)length > object->size_bytes - offset)) {
+        return USER_MEMORY_RESULT_INVALID;
+    }
+    if (length == 0U) {
+        return USER_MEMORY_RESULT_OK;
+    }
+    if (destination == NULL) {
+        return USER_MEMORY_RESULT_INVALID;
+    }
+
+    while (remaining != 0U) {
+        const uint64_t raw_page_index = current / USER_MEMORY_PAGE_SIZE;
+        const size_t page_offset =
+            (size_t)(current & (USER_MEMORY_PAGE_SIZE - 1ULL));
+        size_t chunk = (size_t)USER_MEMORY_PAGE_SIZE - page_offset;
+        uint8_t *frame_bytes;
+        size_t index;
+
+        if ((raw_page_index >= (uint64_t)object->page_count) ||
+            !vmm_pmm_frame_to_hhdm(object->frames[raw_page_index],
+                                   (void **)&frame_bytes)) {
+            return USER_MEMORY_RESULT_INTERNAL;
+        }
+        if (chunk > remaining) {
+            chunk = remaining;
+        }
+        for (index = 0U; index < chunk; ++index) {
+            output[index] = frame_bytes[page_offset + index];
+        }
+        output += chunk;
+        current += (uint64_t)chunk;
+        remaining -= chunk;
+    }
+    return USER_MEMORY_RESULT_OK;
+}
+
 void user_buffer_retained_ref_clear(struct user_buffer_retained_ref *reference) {
     if (reference == NULL) {
         return;

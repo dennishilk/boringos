@@ -3,7 +3,7 @@
 
 .extern x86_64_syscall_stack
 .extern x86_64_syscall_user_rsp_scratch
-.extern x86_64_syscall_dispatch_m33
+.extern x86_64_syscall_dispatch_m34
 .extern x86_64_syscall_active_stack_top
 
 .globl x86_64_syscall_entry
@@ -23,9 +23,9 @@ x86_64_syscall_entry:
     movq %rsp, x86_64_syscall_user_rsp_scratch(%rip)
     movq x86_64_syscall_active_stack_top(%rip), %rsp
     testq %rsp, %rsp
-    jnz .Lm33_stack_ready
+    jnz .Lm34_stack_ready
     leaq x86_64_syscall_stack+16384(%rip), %rsp
-.Lm33_stack_ready:
+.Lm34_stack_ready:
 
     /*
      * x86_64_syscall_frame is 144 bytes, keeping the trusted stack
@@ -57,7 +57,7 @@ x86_64_syscall_entry:
     /* FMASK clears DF, but CLD is deliberate defense at the C boundary. */
     cld
     movq %rsp, %rdi
-    call x86_64_syscall_dispatch_m33
+    call x86_64_syscall_dispatch_m34
 
     /*
      * The C dispatcher has validated/sanitized user RIP/RSP/RFLAGS and set

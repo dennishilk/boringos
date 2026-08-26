@@ -108,6 +108,14 @@ enum user_memory_result user_buffer_unmap(struct process *process,
                                            uintptr_t base);
 enum user_memory_result user_buffer_close(struct process *process,
                                            uint32_t handle);
+enum user_memory_result user_buffer_size(struct process *process,
+                                          uint32_t handle,
+                                          uint64_t *size_out);
+enum user_memory_result user_buffer_copy_out(struct process *process,
+                                              uint32_t handle,
+                                              uint64_t offset,
+                                              void *destination,
+                                              size_t length);
 
 void user_buffer_retained_ref_clear(struct user_buffer_retained_ref *reference);
 bool user_buffer_retained_ref_active(

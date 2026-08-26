@@ -44,6 +44,10 @@
 #define BORING_SYS_IPC_SEND 34
 #define BORING_SYS_IPC_RECEIVE 35
 #define BORING_SYS_IPC_CLOSE 36
+#define BORING_SYS_BUFFER_INFO 37
+#define BORING_SYS_FRAMEBUFFER_CLAIM 38
+#define BORING_SYS_FRAMEBUFFER_PRESENT 39
+#define BORING_SYS_FRAMEBUFFER_RELEASE 40
 
 #define BORING_SYSCALL_DEBUG_WRITE_MAX 64
 #define BORING_SYSCALL_CONSOLE_IO_MAX 64
@@ -161,8 +165,42 @@ struct boring_system_info {
     char root_device[BORING_SYSTEM_DEVICE_CAPACITY];
 };
 
+_Static_assert(BORING_SYS_GETPID == 0,
+               "GETPID syscall number contract changed");
+_Static_assert(BORING_SYS_DEBUG_WRITE == 1,
+               "DEBUG_WRITE syscall number contract changed");
+_Static_assert(BORING_SYS_CONSOLE_WRITE == 2,
+               "CONSOLE_WRITE syscall number contract changed");
+_Static_assert(BORING_SYS_CONSOLE_READ == 3,
+               "CONSOLE_READ syscall number contract changed");
+_Static_assert(BORING_SYS_LAUNCH == 4,
+               "LAUNCH syscall number contract changed");
+_Static_assert(BORING_SYS_FS_READDIR == 5,
+               "FS_READDIR syscall number contract changed");
+_Static_assert(BORING_SYS_FS_MKDIR == 6,
+               "FS_MKDIR syscall number contract changed");
+_Static_assert(BORING_SYS_FS_RMDIR == 7,
+               "FS_RMDIR syscall number contract changed");
+_Static_assert(BORING_SYS_FS_CHDIR == 8,
+               "FS_CHDIR syscall number contract changed");
+_Static_assert(BORING_SYS_FS_READ == 9,
+               "FS_READ syscall number contract changed");
+_Static_assert(BORING_SYS_FS_TOUCH == 10,
+               "FS_TOUCH syscall number contract changed");
+_Static_assert(BORING_SYS_FS_WRITE == 11,
+               "FS_WRITE syscall number contract changed");
+_Static_assert(BORING_SYS_FS_UNLINK == 12,
+               "FS_UNLINK syscall number contract changed");
+_Static_assert(BORING_SYS_INFO == 13,
+               "INFO syscall number contract changed");
+_Static_assert(BORING_SYS_GETCWD == 14,
+               "GETCWD syscall number contract changed");
+_Static_assert(BORING_SYS_PROCESS_SNAPSHOT == 15,
+               "PROCESS_SNAPSHOT syscall number contract changed");
+_Static_assert(BORING_SYS_EXIT == 16,
+               "EXIT syscall number contract changed");
 _Static_assert(BORING_SYS_WAITPID == 17,
-               "existing syscall numbering must remain stable");
+               "WAITPID syscall number contract changed");
 _Static_assert(BORING_SYS_FD_OPEN == 18,
                "FD_OPEN syscall number contract changed");
 _Static_assert(BORING_SYS_FD_READ == 19,
@@ -201,6 +239,14 @@ _Static_assert(BORING_SYS_IPC_RECEIVE == 35,
                "IPC_RECEIVE syscall number contract changed");
 _Static_assert(BORING_SYS_IPC_CLOSE == 36,
                "IPC_CLOSE syscall number contract changed");
+_Static_assert(BORING_SYS_BUFFER_INFO == 37,
+               "BUFFER_INFO syscall number contract changed");
+_Static_assert(BORING_SYS_FRAMEBUFFER_CLAIM == 38,
+               "FRAMEBUFFER_CLAIM syscall number contract changed");
+_Static_assert(BORING_SYS_FRAMEBUFFER_PRESENT == 39,
+               "FRAMEBUFFER_PRESENT syscall number contract changed");
+_Static_assert(BORING_SYS_FRAMEBUFFER_RELEASE == 40,
+               "FRAMEBUFFER_RELEASE syscall number contract changed");
 _Static_assert(sizeof(struct boring_ipc_receive_result) == 16U,
                "M33 IPC receive ABI size must remain fixed");
 _Static_assert(sizeof(struct boring_system_info) == 256U,

@@ -36,6 +36,9 @@ jobs:
       - name: Standalone ipc-test ELF audit
         run: sh ./tests/ipc-test-build-audit.sh
 
+      - name: Standalone M34 display service and client ELF audits
+        run: sh ./tests/display-build-audit.sh
+
       - name: Audit generated native C runtime artifact
         run: sh ./tests/runtime-build-audit.sh
 
@@ -108,6 +111,9 @@ jobs:
       - name: M33 bounded service registry IPC and grant host tests
         run: make ipc-host-test
 
+      - name: M34 bounded display protocol and compositor host tests
+        run: make display-host-test
+
       - name: Build boring-shell test mode
         run: make TEST_MODE=shell
 
@@ -169,6 +175,25 @@ jobs:
           path: build/framebuffer-reference.ppm
           if-no-files-found: error
 
+      - name: Real three-process native boring-display with QMP mouse
+        id: m34_display_qemu
+        run: sh ./tests/display-qemu.sh
+
+      - name: Upload M34 display failure diagnostics
+        if: ${{ failure() && steps.m34_display_qemu.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: m34-display-failure-diagnostics
+          path: build/m34-display-diagnostics/
+          if-no-files-found: error
+
+      - name: Upload validated M34 display reference
+        uses: actions/upload-artifact@v4
+        with:
+          name: boringos-m34-display-reference
+          path: build/m34-display-reference.ppm
+          if-no-files-found: error
+
       - name: Writable BoringFS allocation and rollback matrix
         run: make boringfs-vfs-host-test
 
@@ -181,8 +206,11 @@ jobs:
       - name: Read-only boringfsck inspector
         run: make boringfsck-test
 
-      - name: Build human-runnable QEMU bundle
-        run: make qemu-bundle
+      - name: M34 BoringFS bundle geometry and exact contents
+        run: sh ./tests/m34-bundle-test.sh
+
+      - name: Build human-runnable M34 QEMU bundle
+        run: sh ./tests/build-m34-qemu-bundle.sh
 
       - name: Upload human-runnable QEMU bundle
         uses: actions/upload-artifact@v4
