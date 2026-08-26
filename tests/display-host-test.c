@@ -177,19 +177,47 @@ static void authority_and_generation_tests(void) {
           BORING_DISPLAY_STATUS_OK, "other client survives cleanup");
 }
 
+static void capacity_tests(void) {
+    struct boring_display_core core;
+    struct boring_display_scanout_info info = scanout(64U, 64U);
+    struct boring_display_request request = create_request(1U, 1U);
+    uint8_t pixels[BORING_DISPLAY_SURFACE_MAX][4U];
+    uint32_t tokens[BORING_DISPLAY_SURFACE_MAX];
+    uint32_t index;
+    uint32_t extra_token = 0U;
+
+    check(boring_display_core_init(&core, &info), "capacity init");
+    for (index = 0U; index < BORING_DISPLAY_SURFACE_MAX; ++index) {
+        check(boring_display_surface_add(&core, index + 1U, &request,
+                                         100U + index, pixels[index],
+                                         &tokens[index]) ==
+              BORING_DISPLAY_STATUS_OK, "bounded surface fill");
+    }
+    check(core.live_surfaces == BORING_DISPLAY_SURFACE_MAX,
+          "bounded surface count");
+    check(boring_display_surface_add(&core, 99U, &request, 999U, pixels[0],
+                                     &extra_token) ==
+          BORING_DISPLAY_STATUS_NO_SPACE, "bounded surface no-space status");
+}
+
 static void composition_tests(void) {
     struct boring_display_core core;
     struct boring_display_scanout_info info = scanout(256U, 180U);
     struct boring_display_request request = create_request(160U, 100U);
     uint8_t first[160U * 100U * 4U];
     uint8_t second[160U * 100U * 4U];
+    uint8_t third[160U * 100U * 4U];
     uint8_t guarded[(256U * 180U * 4U) + 2U];
     uint8_t *output = &guarded[1];
     uint32_t token_a = 0U;
     uint32_t token_b = 0U;
+    uint32_t token_c = 0U;
+    uint32_t released_handle = 0U;
+    uint8_t *released_pixels = NULL;
 
     fill(first, sizeof(first), 30U, 80U, 220U);
     fill(second, sizeof(second), 230U, 120U, 30U);
+    fill(third, sizeof(third), 60U, 200U, 90U);
     (void)memset(guarded, 0xa5, sizeof(guarded));
     check(boring_display_core_init(&core, &info), "composition init");
     check(boring_display_surface_add(&core, 11U, &request, 101U,
@@ -211,6 +239,21 @@ static void composition_tests(void) {
     check(pixel_is(output, info.stride, 255U, 179U, 230U, 120U, 30U),
           "right bottom clipping");
 
+    check(boring_display_surface_destroy(&core, 11U, token_a,
+                                         &released_handle,
+                                         &released_pixels) ==
+          BORING_DISPLAY_STATUS_OK, "stacking destroy old surface");
+    check((released_handle == 101U) && (released_pixels == first),
+          "stacking destroy resources");
+    check(boring_display_surface_add(&core, 33U, &request, 301U,
+                                     third, &token_c) ==
+          BORING_DISPLAY_STATUS_OK, "stacking slot reuse surface");
+    check(token_c != token_a, "stacking slot reuse generation");
+    check(boring_display_compose(&core, output, (size_t)info.byte_size),
+          "compose after slot reuse");
+    check(pixel_is(output, info.stride, 200U, 150U, 60U, 200U, 90U),
+          "creation-order stacking survives slot reuse");
+
     boring_display_cursor_move(&core, INT32_MIN, INT32_MIN);
     check((core.cursor_x == 0U) && (core.cursor_y == 0U),
           "cursor left top clipping");
@@ -226,6 +269,7 @@ int main(void) {
     check(BORING_DISPLAY_SURFACE_MAX == 16U, "bounded surface constant");
     validation_tests();
     authority_and_generation_tests();
+    capacity_tests();
     composition_tests();
 
     if (failures != 0) {
