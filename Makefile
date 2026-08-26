@@ -12,6 +12,7 @@ RUNTIME_SYSCALL_OBJECT := $(USER_BUILD_DIR)/runtime/syscall.o
 RUNTIME_MEMORY_OBJECT := $(USER_BUILD_DIR)/runtime/memory.o
 RUNTIME_STRING_OBJECT := $(USER_BUILD_DIR)/runtime/string.o
 IPC_RUNTIME_OBJECT := $(USER_BUILD_DIR)/runtime/ipc.o
+DISPLAY_RUNTIME_OBJECT := $(USER_BUILD_DIR)/runtime/display.o
 RUNTIME_COMMON_OBJECTS := $(RUNTIME_ENTRY_OBJECT) $(RUNTIME_SYSCALL_OBJECT) \
 	$(RUNTIME_MEMORY_OBJECT) $(RUNTIME_STRING_OBJECT)
 RUNTIME_MAIN_OBJECT := $(USER_BUILD_DIR)/runtime-smoke/main.o
@@ -44,6 +45,17 @@ MEMORY_TEST_ELF := $(USER_BUILD_DIR)/memory-test.elf
 IPC_TEST_MAIN_OBJECT := $(USER_BUILD_DIR)/ipc-test/main.o
 IPC_TEST_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(IPC_RUNTIME_OBJECT) $(IPC_TEST_MAIN_OBJECT)
 IPC_TEST_ELF := $(USER_BUILD_DIR)/ipc-test.elf
+BORING_DISPLAY_CORE_OBJECT := $(USER_BUILD_DIR)/boring-display/core.o
+BORING_DISPLAY_MAIN_OBJECT := $(USER_BUILD_DIR)/boring-display/main.o
+BORING_DISPLAY_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(IPC_RUNTIME_OBJECT) \
+	$(DISPLAY_RUNTIME_OBJECT) $(BORING_DISPLAY_CORE_OBJECT) $(BORING_DISPLAY_MAIN_OBJECT)
+BORING_DISPLAY_ELF := $(USER_BUILD_DIR)/boring-display.elf
+DISPLAY_CLIENT_A_OBJECT := $(USER_BUILD_DIR)/display-client-a/main.o
+DISPLAY_CLIENT_A_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(IPC_RUNTIME_OBJECT) $(DISPLAY_CLIENT_A_OBJECT)
+DISPLAY_CLIENT_A_ELF := $(USER_BUILD_DIR)/display-client-a.elf
+DISPLAY_CLIENT_B_OBJECT := $(USER_BUILD_DIR)/display-client-b/main.o
+DISPLAY_CLIENT_B_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(IPC_RUNTIME_OBJECT) $(DISPLAY_CLIENT_B_OBJECT)
+DISPLAY_CLIENT_B_ELF := $(USER_BUILD_DIR)/display-client-b.elf
 ISO := $(BUILD_DIR)/boringos.iso
 MKBORINGFS := $(BUILD_DIR)/mkboringfs
 BORINGFSCK := $(BUILD_DIR)/boringfsck
@@ -56,6 +68,7 @@ INPUT_HOST_TEST := $(BUILD_DIR)/input-host-test
 MEMORY_HOST_TEST := $(BUILD_DIR)/memory-host-test
 RUNTIME_HEAP_HOST_TEST := $(BUILD_DIR)/runtime-heap-host-test
 IPC_HOST_TEST := $(BUILD_DIR)/ipc-host-test
+DISPLAY_HOST_TEST := $(BUILD_DIR)/display-host-test
 MKBORINGFS_VERIFY := $(BUILD_DIR)/mkboringfs-test/mkboringfs-verify
 BORINGFS_HEADER := libs/boringfs/include/boring/boringfs.h
 BORINGFS_CODEC := libs/boringfs/codec.c
@@ -78,6 +91,8 @@ BOOT_USER_ELF := $(ELF_SMOKE)
 BOOT_USER_NAME := elf-smoke.elf
 BOOT_EXTRA_USER_ELF :=
 BOOT_EXTRA_USER_NAME :=
+BOOT_EXTRA2_USER_ELF :=
+BOOT_EXTRA2_USER_NAME :=
 BOOT_LIMINE_CONF := limine.conf
 
 TEST_MODE ?= normal
@@ -169,8 +184,18 @@ TEST_HARNESS_C := kernel/core/syscall_test.c
 BOOT_USER_ELF := $(IPC_TEST_ELF)
 BOOT_USER_NAME := ipc-test.elf
 BOOT_LIMINE_CONF := limine-ipc.conf
+else ifeq ($(TEST_MODE),m34-display)
+TEST_MODE_VALUE := 17
+TEST_HARNESS_C := kernel/core/display_test.c
+BOOT_USER_ELF := $(BORING_DISPLAY_ELF)
+BOOT_USER_NAME := boring-display.elf
+BOOT_EXTRA_USER_ELF := $(DISPLAY_CLIENT_A_ELF)
+BOOT_EXTRA_USER_NAME := display-client-a.elf
+BOOT_EXTRA2_USER_ELF := $(DISPLAY_CLIENT_B_ELF)
+BOOT_EXTRA2_USER_NAME := display-client-b.elf
+BOOT_LIMINE_CONF := limine-display.conf
 else
-$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, block, virtio-block, boringfs-ro, boringfs-rw, or persistent-root, or m33-ipc)
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, block, virtio-block, boringfs-ro, boringfs-rw, persistent-root, m33-ipc, or m34-display)
 endif
 
 LIMINE_VERSION := 12.5.2
@@ -214,10 +239,13 @@ MEMORY_TEST_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000
 	-T user/memory-test/linker.ld
 IPC_TEST_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 	-T user/memory-test/linker.ld
+DISPLAY_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
+	-T user/memory-test/linker.ld
 
 KERNEL_C_SOURCES := \
 	kernel/core/entry.c \
 	kernel/core/framebuffer.c \
+	kernel/core/framebuffer_user.c \
 	kernel/core/graphics.c \
 	kernel/core/pixel_font.c \
 	kernel/core/boot_dashboard.c \
@@ -229,6 +257,7 @@ KERNEL_C_SOURCES := \
 	kernel/core/user_memory.c \
 	kernel/core/ipc.c \
 	kernel/core/ipc_syscall.c \
+	kernel/core/display_syscall.c \
 	kernel/core/ipc_test.c \
 	kernel/core/vfs.c \
 	kernel/core/ramfs.c \
@@ -273,7 +302,7 @@ KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCE
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
 
-.PHONY: all kernel user-elf user-runtime user-console user-init user-shell user-boringfetch user-cat user-input-test user-memory-test user-ipc-test elf-audit runtime-audit console-audit init-audit shell-audit boringfetch-audit cat-audit input-test-audit memory-test-audit ipc-test-audit shell-host-test fd-host-test framebuffer-host-test input-host-test memory-host-test ipc-host-test boringfs-host-test boringfs-vfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test boringfs-fixture qemu-bundle run run-headless test clean distclean
+.PHONY: all kernel user-elf user-runtime user-console user-init user-shell user-boringfetch user-cat user-input-test user-memory-test user-ipc-test user-boring-display user-display-clients elf-audit runtime-audit console-audit init-audit shell-audit boringfetch-audit cat-audit input-test-audit memory-test-audit ipc-test-audit display-audit shell-host-test fd-host-test framebuffer-host-test input-host-test memory-host-test ipc-host-test display-host-test boringfs-host-test boringfs-vfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test boringfs-fixture qemu-bundle run run-headless test clean distclean
 
 all: $(ISO)
 
@@ -298,6 +327,10 @@ user-input-test: $(INPUT_TEST_ELF)
 user-memory-test: $(MEMORY_TEST_ELF)
 
 user-ipc-test: $(IPC_TEST_ELF)
+
+user-boring-display: $(BORING_DISPLAY_ELF)
+
+user-display-clients: $(DISPLAY_CLIENT_A_ELF) $(DISPLAY_CLIENT_B_ELF)
 
 elf-audit: $(ELF_SMOKE)
 	sh ./tests/elf-build-audit.sh
@@ -329,6 +362,9 @@ memory-test-audit: $(MEMORY_TEST_ELF)
 ipc-test-audit: $(IPC_TEST_ELF)
 	sh ./tests/ipc-test-build-audit.sh
 
+display-audit: $(BORING_DISPLAY_ELF) $(DISPLAY_CLIENT_A_ELF) $(DISPLAY_CLIENT_B_ELF)
+	sh ./tests/display-build-audit.sh
+
 shell-host-test: $(SHELL_HOST_TEST)
 	$(SHELL_HOST_TEST)
 
@@ -347,6 +383,9 @@ memory-host-test: $(MEMORY_HOST_TEST) $(RUNTIME_HEAP_HOST_TEST)
 
 ipc-host-test: $(IPC_HOST_TEST)
 	$(IPC_HOST_TEST)
+
+display-host-test: $(DISPLAY_HOST_TEST)
+	$(DISPLAY_HOST_TEST)
 
 boringfs-host-test:
 	sh ./tests/boringfs-host-test.sh
@@ -454,6 +493,12 @@ $(IPC_HOST_TEST): tests/ipc-host-test.c kernel/core/ipc.c \
 	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) \
 		tests/ipc-host-test.c kernel/core/ipc.c -o $@
 
+$(DISPLAY_HOST_TEST): tests/display-host-test.c user/boring-display/core.c \
+		user/boring-display/core.h kernel/include/boring/display_abi.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) \
+		tests/display-host-test.c user/boring-display/core.c -o $@
+
 $(RUNTIME_HEAP_HOST_TEST): tests/runtime-heap-host-test.c user/runtime/memory.c \
 		user/runtime/include/boring/memory.h user/runtime/include/boring/syscall.h \
 		kernel/include/boring/syscall_abi.h
@@ -508,6 +553,10 @@ $(RUNTIME_STRING_OBJECT): user/runtime/string.c user/runtime/include/boring/stri
 	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
 
 $(IPC_RUNTIME_OBJECT): user/runtime/ipc.c user/runtime/include/boring/ipc.h kernel/include/boring/syscall_abi.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(DISPLAY_RUNTIME_OBJECT): user/runtime/display.c user/runtime/include/boring/display.h kernel/include/boring/display_abi.h kernel/include/boring/syscall_abi.h
 	@mkdir -p $(dir $@)
 	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
 
@@ -612,6 +661,41 @@ $(IPC_TEST_ELF): $(IPC_TEST_OBJECTS) user/memory-test/linker.ld
 	@mkdir -p $(dir $@)
 	$(LD) $(IPC_TEST_LDFLAGS) $(IPC_TEST_OBJECTS) -o $@
 
+$(BORING_DISPLAY_CORE_OBJECT): user/boring-display/core.c user/boring-display/core.h kernel/include/boring/display_abi.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(BORING_DISPLAY_MAIN_OBJECT): user/boring-display/main.c user/boring-display/core.h \
+		user/runtime/include/boring/display.h user/runtime/include/boring/ipc.h \
+		user/runtime/include/boring/syscall.h kernel/include/boring/display_abi.h \
+		kernel/include/boring/input_abi.h kernel/include/boring/syscall_abi.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(BORING_DISPLAY_ELF): $(BORING_DISPLAY_OBJECTS) user/memory-test/linker.ld
+	@mkdir -p $(dir $@)
+	$(LD) $(DISPLAY_LDFLAGS) $(BORING_DISPLAY_OBJECTS) -o $@
+
+$(DISPLAY_CLIENT_A_OBJECT): user/display-client-a/main.c \
+		user/runtime/include/boring/ipc.h user/runtime/include/boring/syscall.h \
+		kernel/include/boring/display_abi.h kernel/include/boring/syscall_abi.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(DISPLAY_CLIENT_A_ELF): $(DISPLAY_CLIENT_A_OBJECTS) user/memory-test/linker.ld
+	@mkdir -p $(dir $@)
+	$(LD) $(DISPLAY_LDFLAGS) $(DISPLAY_CLIENT_A_OBJECTS) -o $@
+
+$(DISPLAY_CLIENT_B_OBJECT): user/display-client-b/main.c \
+		user/runtime/include/boring/ipc.h user/runtime/include/boring/syscall.h \
+		kernel/include/boring/display_abi.h kernel/include/boring/syscall_abi.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(DISPLAY_CLIENT_B_ELF): $(DISPLAY_CLIENT_B_OBJECTS) user/memory-test/linker.ld
+	@mkdir -p $(dir $@)
+	$(LD) $(DISPLAY_LDFLAGS) $(DISPLAY_CLIENT_B_OBJECTS) -o $@
+
 $(LIMINE_ARCHIVE):
 	@mkdir -p $(dir $@)
 	$(CURL) --fail --location --retry 3 --output $@ $(LIMINE_URL)
@@ -622,13 +706,16 @@ $(LIMINE_DIR)/limine: $(LIMINE_ARCHIVE)
 	tar -xzf $(LIMINE_ARCHIVE) -C $(BUILD_DIR)/deps
 	$(MAKE) -C $(LIMINE_DIR) CC="$(HOST_CC)"
 
-$(ISO): $(KERNEL_ELF) $(BOOT_USER_ELF) $(BOOT_EXTRA_USER_ELF) $(LIMINE_DIR)/limine $(BOOT_LIMINE_CONF)
+$(ISO): $(KERNEL_ELF) $(BOOT_USER_ELF) $(BOOT_EXTRA_USER_ELF) $(BOOT_EXTRA2_USER_ELF) $(LIMINE_DIR)/limine $(BOOT_LIMINE_CONF)
 	rm -rf $(ISO_ROOT)
 	mkdir -p $(ISO_ROOT)/boot/limine $(ISO_ROOT)/boot/user $(ISO_ROOT)/EFI/BOOT
 	cp $(KERNEL_ELF) $(ISO_ROOT)/boot/kernel.elf
 	cp $(BOOT_USER_ELF) $(ISO_ROOT)/boot/user/$(BOOT_USER_NAME)
 	@if [ -n "$(BOOT_EXTRA_USER_ELF)" ]; then \
 		cp $(BOOT_EXTRA_USER_ELF) $(ISO_ROOT)/boot/user/$(BOOT_EXTRA_USER_NAME); \
+	fi
+	@if [ -n "$(BOOT_EXTRA2_USER_ELF)" ]; then \
+		cp $(BOOT_EXTRA2_USER_ELF) $(ISO_ROOT)/boot/user/$(BOOT_EXTRA2_USER_NAME); \
 	fi
 	cp $(BOOT_LIMINE_CONF) $(ISO_ROOT)/boot/limine/limine.conf
 	cp $(LIMINE_DIR)/limine-bios.sys $(ISO_ROOT)/boot/limine/
@@ -672,11 +759,15 @@ test:
 	sh ./tests/cat-build-audit.sh
 	sh ./tests/input-test-build-audit.sh
 	sh ./tests/memory-test-build-audit.sh
+	sh ./tests/ipc-test-build-audit.sh
+	sh ./tests/display-build-audit.sh
 	$(MAKE) shell-host-test
 	$(MAKE) fd-host-test
 	$(MAKE) framebuffer-host-test
 	$(MAKE) input-host-test
 	$(MAKE) memory-host-test
+	$(MAKE) ipc-host-test
+	$(MAKE) display-host-test
 	sh ./tests/shell-qemu.sh
 	sh ./tests/shell-editing-qemu.sh
 	sh ./tests/shell-lifecycle-qemu.sh
@@ -691,6 +782,7 @@ test:
 	sh ./tests/memory-qemu.sh
 	sh ./tests/ipc-qemu.sh
 	sh ./tests/framebuffer-qemu.sh
+	sh ./tests/display-qemu.sh
 	sh ./tests/boringfs-host-test.sh
 	$(MAKE) boringfs-vfs-host-test
 	$(MAKE) mkboringfs-test
