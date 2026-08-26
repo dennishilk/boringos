@@ -189,7 +189,6 @@ wait_for 'boring-display: client B connected via M33'
 wait_for 'display-client-b: shared surface granted'
 wait_for 'display-client-b: foreign token rejected'
 wait_for 'boring-display: cross-client authority isolation passed'
-wait_for 'display-client-b: own COMMIT acknowledged'
 wait_for 'boring-display: deterministic stacking passed'
 
 # Stay within a single signed PS/2 packet delta. Sixteen 127-pixel steps span
@@ -232,6 +231,7 @@ python3 "${ROOT}/tests/validate-display-screenshot.py" "${SCREENSHOT}" "${LOG}" 
 # second real mouse event through the same QMP -> PS/2 -> M31 path.
 qmp_input move 1 0
 wait_for 'boring-display: visual witness capture released by real input'
+wait_for 'display-client-b: own COMMIT acknowledged'
 wait_for 'display-client-a: exiting without destroy'
 wait_for 'boring-display: client A death cleanup passed'
 wait_for 'display-client-b: destroy acknowledged'
