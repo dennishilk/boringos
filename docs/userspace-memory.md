@@ -1,6 +1,6 @@
 # BoringOS userspace memory and shared buffers
 
-Milestone 32 is complete. It adds a bounded dynamic data-memory foundation for real BoringOS Ring-3 processes without changing ELF code-page permissions, BoringFS semantics, or the existing syscall entry mechanism.
+Milestone 32 is complete. It adds a bounded dynamic data-memory foundation for real BoringOS Ring-3 processes without changing ELF code-page permissions, BoringFS semantics, or the existing syscall entry mechanism. The closeout changes only active version/documentation state; the frozen M32 implementation semantics remain those of the accepted Semantic Freeze.
 
 ## Dynamic anonymous Ring-3 memory
 
