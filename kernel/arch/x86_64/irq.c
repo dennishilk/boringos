@@ -4,6 +4,7 @@
 
 #include <boring/cpu.h>
 #include <boring/exception.h>
+#include <boring/i8042.h>
 #include <boring/io.h>
 #include <boring/irq.h>
 #include <boring/task.h>
@@ -32,6 +33,8 @@ static bool timer_unmasked;
 static uint8_t master_mask = (uint8_t)PIC_ALL_MASKED;
 static uint8_t slave_mask = (uint8_t)PIC_ALL_MASKED;
 static volatile uint64_t timer_irq_count;
+static volatile uint64_t keyboard_irq_count;
+static volatile uint64_t mouse_irq_count;
 static volatile uint64_t unexpected_irq_count;
 static volatile uint64_t spurious_irq7_count;
 static volatile uint64_t spurious_irq15_count;
@@ -50,6 +53,23 @@ static void pic_send_eoi(uint8_t irq_number) {
         x86_64_out8((uint16_t)PIC_SLAVE_COMMAND, (uint8_t)PIC_EOI);
     }
     x86_64_out8((uint16_t)PIC_MASTER_COMMAND, (uint8_t)PIC_EOI);
+}
+
+static bool pic_masks_write(uint8_t new_master, uint8_t new_slave) {
+    const uint8_t old_master = master_mask;
+    const uint8_t old_slave = slave_mask;
+
+    x86_64_out8((uint16_t)PIC_MASTER_DATA, new_master);
+    x86_64_out8((uint16_t)PIC_SLAVE_DATA, new_slave);
+    if ((x86_64_in8((uint16_t)PIC_MASTER_DATA) != new_master) ||
+        (x86_64_in8((uint16_t)PIC_SLAVE_DATA) != new_slave)) {
+        x86_64_out8((uint16_t)PIC_MASTER_DATA, old_master);
+        x86_64_out8((uint16_t)PIC_SLAVE_DATA, old_slave);
+        return false;
+    }
+    master_mask = new_master;
+    slave_mask = new_slave;
+    return true;
 }
 
 static bool pic_initialize(void) {
@@ -104,6 +124,8 @@ bool irq_init(void) {
     master_mask = (uint8_t)PIC_ALL_MASKED;
     slave_mask = (uint8_t)PIC_ALL_MASKED;
     timer_irq_count = 0ULL;
+    keyboard_irq_count = 0ULL;
+    mouse_irq_count = 0ULL;
     unexpected_irq_count = 0ULL;
     spurious_irq7_count = 0ULL;
     spurious_irq15_count = 0ULL;
@@ -131,23 +153,33 @@ bool irq_unmask_timer(void) {
     if ((!irq_initialized) || x86_64_interrupts_enabled()) {
         return false;
     }
-
-    master_mask = (uint8_t)PIC_TIMER_ONLY_MASK;
-    slave_mask = (uint8_t)PIC_ALL_MASKED;
-    x86_64_out8((uint16_t)PIC_MASTER_DATA, master_mask);
-    x86_64_out8((uint16_t)PIC_SLAVE_DATA, slave_mask);
-
-    if ((x86_64_in8((uint16_t)PIC_MASTER_DATA) != master_mask) ||
-        (x86_64_in8((uint16_t)PIC_SLAVE_DATA) != slave_mask)) {
-        master_mask = (uint8_t)PIC_ALL_MASKED;
-        slave_mask = (uint8_t)PIC_ALL_MASKED;
-        x86_64_out8((uint16_t)PIC_MASTER_DATA, master_mask);
-        x86_64_out8((uint16_t)PIC_SLAVE_DATA, slave_mask);
+    if (!pic_masks_write((uint8_t)PIC_TIMER_ONLY_MASK,
+                         (uint8_t)PIC_ALL_MASKED)) {
         return false;
     }
-
     timer_unmasked = true;
     return true;
+}
+
+bool irq_unmask_input(bool keyboard_online, bool mouse_online) {
+    uint8_t new_master;
+    uint8_t new_slave;
+
+    if ((!irq_initialized) || x86_64_interrupts_enabled() ||
+        ((!keyboard_online) && (!mouse_online))) {
+        return false;
+    }
+    new_master = master_mask;
+    new_slave = slave_mask;
+    if (keyboard_online) {
+        new_master = (uint8_t)(new_master & (uint8_t)~(1U << X86_64_KEYBOARD_IRQ));
+    }
+    if (mouse_online) {
+        new_master = (uint8_t)(new_master & (uint8_t)~(1U << 2U));
+        new_slave = (uint8_t)(new_slave &
+                    (uint8_t)~(1U << (X86_64_MOUSE_IRQ - 8U)));
+    }
+    return pic_masks_write(new_master, new_slave);
 }
 
 bool irq_enable(void) {
@@ -169,6 +201,8 @@ bool irq_get_stats(struct irq_stats *stats) {
     stats->master_mask = master_mask;
     stats->slave_mask = slave_mask;
     stats->timer_irq_count = timer_irq_count;
+    stats->keyboard_irq_count = keyboard_irq_count;
+    stats->mouse_irq_count = mouse_irq_count;
     stats->unexpected_irq_count = unexpected_irq_count;
     stats->spurious_irq7_count = spurious_irq7_count;
     stats->spurious_irq15_count = spurious_irq15_count;
@@ -221,6 +255,12 @@ struct x86_64_trap_frame *x86_64_irq_dispatch(
             ++unexpected_irq_count;
             restore_frame = frame;
         }
+    } else if ((irq_number == (uint8_t)X86_64_KEYBOARD_IRQ) && expected &&
+               i8042_handle_irq(irq_number)) {
+        ++keyboard_irq_count;
+    } else if ((irq_number == (uint8_t)X86_64_MOUSE_IRQ) && expected &&
+               i8042_handle_irq(irq_number)) {
+        ++mouse_irq_count;
     } else {
         ++unexpected_irq_count;
     }

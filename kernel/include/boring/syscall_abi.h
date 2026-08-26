@@ -29,6 +29,9 @@
 #define BORING_SYS_FD_READ 19
 #define BORING_SYS_FD_WRITE 20
 #define BORING_SYS_FD_CLOSE 21
+#define BORING_SYS_INPUT_CLAIM 22
+#define BORING_SYS_INPUT_READ 23
+#define BORING_SYS_INPUT_RELEASE 24
 
 #define BORING_SYSCALL_DEBUG_WRITE_MAX 64
 #define BORING_SYSCALL_CONSOLE_IO_MAX 64
@@ -85,6 +88,8 @@
 
 #include <stdint.h>
 
+#include <boring/input_abi.h>
+
 struct boring_dirent {
     uint64_t node_id;
     uint32_t type;
@@ -131,6 +136,12 @@ _Static_assert(BORING_SYS_FD_WRITE == 20,
                "FD_WRITE syscall number contract changed");
 _Static_assert(BORING_SYS_FD_CLOSE == 21,
                "FD_CLOSE syscall number contract changed");
+_Static_assert(BORING_SYS_INPUT_CLAIM == 22,
+               "INPUT_CLAIM syscall number contract changed");
+_Static_assert(BORING_SYS_INPUT_READ == 23,
+               "INPUT_READ syscall number contract changed");
+_Static_assert(BORING_SYS_INPUT_RELEASE == 24,
+               "INPUT_RELEASE syscall number contract changed");
 _Static_assert(sizeof(struct boring_system_info) == 256U,
                "BoringOS system-info ABI size must remain fixed");
 _Static_assert(sizeof(struct boring_process_info) == 56U,

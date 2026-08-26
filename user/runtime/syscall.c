@@ -278,3 +278,36 @@ long boring_fd_close(uint32_t fd) {
         : "rcx", "r11", "cc", "memory");
     return result;
 }
+
+long boring_input_claim(void) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_INPUT_CLAIM)
+        : "rcx", "r11", "cc", "memory");
+    return result;
+}
+
+long boring_input_read(struct boring_input_event *events, size_t max_events) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_INPUT_READ), "D"(events), "S"(max_events)
+        : "rcx", "r11", "cc", "memory");
+    return result;
+}
+
+long boring_input_release(void) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_INPUT_RELEASE)
+        : "rcx", "r11", "cc", "memory");
+    return result;
+}

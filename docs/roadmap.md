@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.31-dev
+BoringKernel 0.0.32-dev
 ```
 
 The current syscall ABI is exactly:
@@ -103,12 +103,18 @@ The current syscall ABI is exactly:
 19 FD_READ
 20 FD_WRITE
 21 FD_CLOSE
+22 INPUT_CLAIM
+23 INPUT_READ
+24 INPUT_RELEASE
 ```
 
 VFS-backed executable loading and standalone `/bin/boringfetch` are real
 since Milestone 28. Milestone 29 adds the bounded per-process descriptor and
-standard-I/O foundation plus standalone `/bin/cat`. There is still no partition
-layer, networking or GUI.
+standard-I/O foundation plus standalone `/bin/cat`; Milestone 30 adds optional
+kernel framebuffer output; Milestone 31 adds bounded native PS/2 keyboard/mouse
+events and exclusive blocking userspace input ownership. There is still no
+partition layer, networking, cursor, display server, terminal graphics stack or
+GUI/window system.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -739,3 +745,64 @@ M30 graphics remain kernel-only. Input is intentionally deferred; Milestone 30
 does not implement keyboard, mouse, an input subsystem, graphics syscalls,
 userspace framebuffer mapping, `boring-display`, a terminal graphics stack, GUI
 clients, BoringWM or Milestone 31 work.
+
+
+---
+
+# Stage 15 — native input foundation
+
+## Milestone 31: native keyboard and mouse input foundation — COMPLETE
+
+Milestone 31 adds a bounded BoringOS-owned native input path for the current
+QEMU x86_64 reference machine. The i8042 controller initializes translated PS/2
+Set-1 keyboard input and three-byte PS/2 mouse packets with bounded waits,
+explicit ACK/RESEND handling and non-fatal unavailable-device fallback. IRQ1 and
+IRQ12 are routed through the existing legacy PIC/IDT path without changing the
+historical timer-only acceptance contract.
+
+Hardware bytes are normalized into the fixed 24-byte BoringOS input-event ABI.
+Keyboard events use project-owned keycodes, make/break state, Shift/Ctrl/Alt/Super
+modifier bits and an explicit repeat flag. Mouse events expose relative X/Y and
+left/middle/right button transitions. The kernel owns one fixed 128-event FIFO;
+overflow drops the newest event and increments a saturating dropped-event
+counter.
+
+Userspace access is deliberately exclusive and narrow:
+
+```text
+22 INPUT_CLAIM
+23 INPUT_READ
+24 INPUT_RELEASE
+```
+
+One PID owns the input stream at a time. Same-owner claim is idempotent, another
+PID receives busy/access errors, explicit release clears queue/key state, and
+process exit releases stale ownership before the parent resumes. `INPUT_READ`
+accepts 1..16 events, validates the complete writable destination before any
+dequeue, and blocks in the kernel when the queue is empty. On the current
+single-CPU trusted-SYSCALL-stack design the wait arm and empty check run with
+interrupts disabled and `sti; hlt` closes the empty-to-sleep race; wakeup always
+rechecks the queue. Userspace does not busy-poll.
+
+The standalone static `/bin/input-test` exercises the real Ring-3 wrappers and
+prints normalized keyboard/mouse events. Host tests cover keyboard decoding,
+E0/malformed recovery, modifiers/repeat, mouse sign/button/overflow/resync,
+queue FIFO/wrap/overflow/ownership/cleanup, and real CPL3 negative syscall
+cases. The permanent QEMU acceptance injects actual QMP keyboard and mouse
+input, proves Super+Q, Super+Enter, relative movement, left-button down/up,
+blocking wakeup and owner teardown/reclaim while preserving the complete
+historical BoringOS suite and M30 framebuffer acceptance.
+
+Semantic freeze acceptance record:
+
+```text
+feature head: 065fa085ee7534012037e9eab9b3cfbdcacec39e
+feature tree: b9687ac96c097fba2e262206ffee25d64946b88c
+exact-head permanent CI: Run 32946932189 / SUCCESS
+final version after closeout: BoringKernel 0.0.32-dev
+```
+
+M31 does not add a cursor, framebuffer mapping for userspace, `boring-display`,
+a terminal graphics stack, GUI clients, BoringWM, USB input, general HID, SMP
+input routing or Milestone 32 implementation. The next roadmap target is the
+native display/compositor/window-system foundation; it is not part of M31.

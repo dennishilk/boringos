@@ -12,6 +12,9 @@
 #include <boring/descriptor.h>
 #include <boring/elf_boot.h>
 #include <boring/elf_loader.h>
+#include <boring/i8042.h>
+#include <boring/input.h>
+#include <boring/irq.h>
 #include <boring/process.h>
 #include <boring/pmm.h>
 #include <boring/ramfs.h>
@@ -51,6 +54,45 @@
 #endif
 
 static uint8_t boringfs_read_buffer[VFS_IO_MAX];
+
+#if BORING_TEST_MODE == 15
+static void persistent_input_init(void) {
+    struct i8042_state state = { false, false, false };
+    bool core_online;
+    bool pic_online;
+
+    x86_64_interrupts_disable();
+    core_online = boring_input_init();
+    pic_online = irq_init();
+    if ((!core_online) || (!pic_online)) {
+        serial_write_string("boring-input: unavailable\n");
+        return;
+    }
+    (void)i8042_init(&state);
+    if (state.controller_available) {
+        serial_write_string("boring-input: i8042 detected\n");
+    }
+    serial_write_string("boring-input: queue 128 events\n");
+    if ((state.keyboard_online || state.mouse_online) &&
+        !irq_unmask_input(state.keyboard_online, state.mouse_online)) {
+        serial_write_string("boring-input: unavailable\n");
+        return;
+    }
+    if (state.keyboard_online) {
+        serial_write_string("boring-input: keyboard irq1 online\n");
+    } else {
+        serial_write_string("boring-input: keyboard unavailable\n");
+    }
+    if (state.mouse_online) {
+        serial_write_string("boring-input: mouse irq12 online\n");
+    } else {
+        serial_write_string("boring-input: mouse unavailable\n");
+    }
+    if ((!state.keyboard_online) && (!state.mouse_online)) {
+        serial_write_string("boring-input: unavailable\n");
+    }
+}
+#endif
 
 struct shell_boot_modules {
     const uint8_t *init_bytes;
@@ -442,7 +484,7 @@ void boringfs_ro_test_run(void) {
         if ((surface != NULL) && pmm_get_stats(&memory_stats)) {
             const struct boring_boot_dashboard_info dashboard_info = {
                 .kernel_name = "BoringKernel",
-                .kernel_version = "0.0.31-dev",
+                .kernel_version = "0.0.32-dev",
                 .arch = "x86_64",
                 .memory_bytes = memory_stats.usable_bytes,
                 .root_fs = "BoringFS",
@@ -461,6 +503,10 @@ void boringfs_ro_test_run(void) {
             }
         }
     }
+#endif
+
+#if BORING_TEST_MODE == 15
+    persistent_input_init();
 #endif
 
     if (!process_create(&init_process) || (init_process == NULL) ||

@@ -6,6 +6,7 @@
 #include <boring/cpu.h>
 #include <boring/descriptor.h>
 #include <boring/exception.h>
+#include <boring/input.h>
 #include <boring/pmm.h>
 #include <boring/process.h>
 #include <boring/ring3_memory.h>
@@ -47,6 +48,14 @@ struct syscall_user_result {
     uint64_t fd_write_stdin_result;
     uint64_t fd_invalid_pointer_result;
     uint64_t fd_oversized_result;
+    uint64_t input_non_owner_read_result;
+    uint64_t input_non_owner_release_result;
+    uint64_t input_claim_result;
+    uint64_t input_double_claim_result;
+    uint64_t input_invalid_pointer_result;
+    uint64_t input_zero_count_result;
+    uint64_t input_oversized_count_result;
+    uint64_t input_release_result;
 };
 
 struct syscall_test_state {
@@ -58,7 +67,7 @@ struct syscall_test_state {
     bool armed;
 };
 
-_Static_assert(sizeof(struct syscall_user_result) == 152U,
+_Static_assert(sizeof(struct syscall_user_result) == 216U,
                "syscall result layout must match acceptance assembly");
 _Static_assert(offsetof(struct syscall_user_result, initial_cs) == 0U,
                "syscall result initial CS offset mismatch");
@@ -72,6 +81,10 @@ _Static_assert(offsetof(struct syscall_user_result, fd_invalid_result) == 112U,
                "syscall result FD negative offset mismatch");
 _Static_assert(offsetof(struct syscall_user_result, fd_oversized_result) == 144U,
                "syscall result FD oversized offset mismatch");
+_Static_assert(offsetof(struct syscall_user_result, input_non_owner_read_result) == 152U,
+               "syscall result input negative offset mismatch");
+_Static_assert(offsetof(struct syscall_user_result, input_release_result) == 208U,
+               "syscall result input release offset mismatch");
 
 extern const uint8_t x86_64_syscall_test_payload_start[];
 extern const uint8_t x86_64_syscall_test_payload_cli[];
@@ -194,7 +207,8 @@ void syscall_test_run(void) {
 
     serial_write_string("Syscall test:\n");
 
-    if (!syscall_init() || !syscall_get_stats(&syscall_stats) ||
+    if (!syscall_init() || !boring_input_init() ||
+        !syscall_get_stats(&syscall_stats) ||
         !syscall_stats.supported || !syscall_stats.initialized) {
         syscall_test_fail("msr-config");
     }
@@ -326,7 +340,7 @@ void syscall_test_handle_exception(const struct x86_64_trap_frame *frame) {
     serial_write_string("  entered-cpl3: PASS\n");
 
     if (!syscall_get_stats(&syscall_stats) ||
-        (syscall_stats.dispatch_count != 12ULL)) {
+        (syscall_stats.dispatch_count != 20ULL)) {
         syscall_test_fail("syscall-entered-cpl0");
     }
     serial_write_string("  syscall-entered-cpl0: PASS\n");
@@ -398,6 +412,46 @@ void syscall_test_handle_exception(const struct x86_64_trap_frame *frame) {
         syscall_test_fail("fd-oversized-transfer-rejected");
     }
     serial_write_string("  fd-oversized-transfer-rejected: PASS\n");
+
+    if (result->input_non_owner_read_result != expected_error(BORING_SYSCALL_EACCES)) {
+        syscall_test_fail("input-non-owner-read-rejected");
+    }
+    serial_write_string("  input-non-owner-read-rejected: PASS\n");
+
+    if (result->input_non_owner_release_result != expected_error(BORING_SYSCALL_EACCES)) {
+        syscall_test_fail("input-non-owner-release-rejected");
+    }
+    serial_write_string("  input-non-owner-release-rejected: PASS\n");
+
+    if (result->input_claim_result != 0ULL) {
+        syscall_test_fail("input-claim");
+    }
+    serial_write_string("  input-claim: PASS\n");
+
+    if (result->input_double_claim_result != 0ULL) {
+        syscall_test_fail("input-double-claim");
+    }
+    serial_write_string("  input-double-claim: PASS\n");
+
+    if (result->input_invalid_pointer_result != expected_error(BORING_SYSCALL_EFAULT)) {
+        syscall_test_fail("input-invalid-pointer-rejected");
+    }
+    serial_write_string("  input-invalid-pointer-rejected: PASS\n");
+
+    if (result->input_zero_count_result != expected_error(BORING_SYSCALL_EINVAL)) {
+        syscall_test_fail("input-zero-count-rejected");
+    }
+    serial_write_string("  input-zero-count-rejected: PASS\n");
+
+    if (result->input_oversized_count_result != expected_error(BORING_SYSCALL_EINVAL)) {
+        syscall_test_fail("input-oversized-count-rejected");
+    }
+    serial_write_string("  input-oversized-count-rejected: PASS\n");
+
+    if (result->input_release_result != 0ULL) {
+        syscall_test_fail("input-release");
+    }
+    serial_write_string("  input-release: PASS\n");
 
     if ((result->after_getpid_marker != SYSCALL_USER_AFTER_MARKER) ||
         (result->post_sysret_cs !=
