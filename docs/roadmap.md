@@ -101,7 +101,10 @@ The current syscall ABI is exactly:
 17 WAITPID
 ```
 
-There is still no numeric file-descriptor table, no stdin/stdout/stderr abstraction, no executable loading from VFS/BoringFS, no partition layer, no networking, no display/input stack, no BoringWM integration, no APIC migration and no SMP.
+VFS-backed executable loading and standalone `/bin/boringfetch` are real
+since Milestone 28. Milestone 29 is introducing the bounded native descriptor
+and standard-I/O foundation. There is still no partition layer, networking or
+GUI.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -165,7 +168,8 @@ Native x86_64 `SYSCALL` / `SYSRETQ` is the sole userspace call boundary. The boo
 
 A deliberately constrained ELF64 little-endian x86_64 `ET_EXEC` loader validates Limine boot-module images, copies `PT_LOAD` bytes into PMM-owned process pages, enforces W^X/NX and supervisor-only higher-half mappings, zeros BSS and enters the validated ELF entry at CPL3.
 
-Executable loading from VFS/RAMFS does **not** exist yet.
+At the completion of Milestone 11, executable loading from VFS/RAMFS did
+**not** exist yet.
 
 ## Milestone 12: minimal native userspace runtime — COMPLETE
 

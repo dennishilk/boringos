@@ -11,7 +11,7 @@
 #define BORING_SHELL_ESCAPE_MAX 8U
 #define BORING_SHELL_HISTORY_CAPACITY 16U
 #define BORING_SHELL_COMMAND_NAME_CAPACITY 16U
-#define BORING_SHELL_COMMAND_COUNT 19U
+#define BORING_SHELL_COMMAND_COUNT 18U
 #define BORING_SHELL_PROMPT_CAPACITY \
     (BORING_SYSTEM_USERNAME_CAPACITY + BORING_SYSTEM_HOSTNAME_CAPACITY + \
      BORING_SYSCALL_CWD_MAX + 8U)
@@ -39,8 +39,8 @@ static char shell_write_buffer[BORING_SHELL_LINE_MAX + 1U];
 static char shell_exec_path[BORING_SYSCALL_EXEC_PATH_MAX + 1U];
 static const char shell_command_names[BORING_SHELL_COMMAND_COUNT]
                                      [BORING_SHELL_COMMAND_NAME_CAPACITY] = {
-    "help", "ls", "mkdir", "rmdir", "cd", "cat", "touch", "write",
-    "rm", "clear", "pwd", "echo", "hostname", "uname", "whoami",
+    "help", "ls", "mkdir", "rmdir", "cd", "touch", "write", "rm",
+    "clear", "pwd", "echo", "hostname", "uname", "whoami",
     "ps", "history", "exit", "logout"
 };
 
@@ -1142,13 +1142,13 @@ static bool shell_command_help(const char *argument) {
         return shell_write_text("help: usage: help\r\n");
     }
     return shell_write_text("Filesystem:\r\n") &&
-           shell_write_text("  ls cd pwd mkdir rmdir touch cat write rm\r\n") &&
+           shell_write_text("  ls cd pwd mkdir rmdir touch write rm\r\n") &&
            shell_write_text("\r\nShell:\r\n") &&
            shell_write_text("  clear echo history help exit logout\r\n") &&
            shell_write_text("\r\nSystem:\r\n") &&
            shell_write_text("  uname hostname whoami ps\r\n") &&
            shell_write_text("\r\nPrograms (/bin):\r\n") &&
-           shell_write_text("  boringfetch\r\n");
+           shell_write_text("  boringfetch cat\r\n");
 }
 
 static bool shell_command_ls(const char *argument) {
@@ -1223,35 +1223,6 @@ static bool shell_command_cd(const char *argument) {
         return true;
     }
     return shell_print_fs_error("cd", result);
-}
-
-static bool shell_command_cat(const char *argument) {
-    char buffer[BORING_SYSCALL_CONSOLE_IO_MAX];
-    uint64_t offset = 0ULL;
-    size_t path_length;
-
-    if (!shell_single_argument(argument)) {
-        return shell_write_text("cat: usage: cat <path>\r\n");
-    }
-    path_length = boring_strlen(argument);
-    for (;;) {
-        const long result = boring_fs_read(
-            argument, path_length, offset, buffer, sizeof(buffer));
-
-        if (result < 0L) {
-            return shell_print_fs_error("cat", result);
-        }
-        if (result == 0L) {
-            return true;
-        }
-        if ((size_t)result > sizeof(buffer)) {
-            return false;
-        }
-        if (!shell_write(buffer, (size_t)result)) {
-            return false;
-        }
-        offset += (uint64_t)result;
-    }
 }
 
 static bool shell_command_touch(const char *argument) {
@@ -1606,9 +1577,6 @@ static bool shell_execute_line(char *line) {
     }
     if (shell_text_equals(command, "cd")) {
         return shell_command_cd(argument);
-    }
-    if (shell_text_equals(command, "cat")) {
-        return shell_command_cat(argument);
     }
     if (shell_text_equals(command, "touch")) {
         return shell_command_touch(argument);

@@ -138,15 +138,19 @@ grep -Fq 'boring@boringos:/TEST$ ' "${LOG}" ||
     fail 'directory TAB completion did not change real CWD'
 send 'cd ..'
 
-printf 'cat REA\t\n' >&3
+README_BEFORE=$(grep -Fxc 'README.txt' "${LOG}" 2>/dev/null || true)
+printf 'rm REA\t\n' >&3
 wait_prompt $((PROMPT + 1))
-grep -Fqx 'completion-file' "${LOG}" ||
-    fail 'regular-file TAB completion failed'
+send 'ls'
+README_AFTER=$(grep -Fxc 'README.txt' "${LOG}" 2>/dev/null || true)
+[ "${README_AFTER}" -eq "${README_BEFORE}" ] ||
+    fail 'regular-file TAB completion did not target README.txt'
 
-printf 'cat a\tone\n' >&3
+printf 'rm a\tone\n' >&3
 wait_prompt $((PROMPT + 1))
-grep -Fqx 'common-prefix-file' "${LOG}" ||
-    fail 'multiple-match common-prefix completion failed'
+send 'ls'
+grep -Fqx 'alpha-two' "${LOG}" ||
+    fail 'multiple-match completion damaged the wrong file'
 
 printf 'echo zero-match\t\n' >&3
 wait_prompt $((PROMPT + 1))

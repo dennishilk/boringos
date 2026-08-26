@@ -19,7 +19,8 @@ static const struct mock_dirent mock_dirents[] = {
     { ".", "README.txt", BORING_DIRENT_TYPE_REGULAR },
     { ".", "alpha-one", BORING_DIRENT_TYPE_REGULAR },
     { ".", "alpha-two", BORING_DIRENT_TYPE_REGULAR },
-    { "/bin", "boringfetch", BORING_DIRENT_TYPE_REGULAR }
+    { "/bin", "boringfetch", BORING_DIRENT_TYPE_REGULAR },
+    { "/bin", "cat", BORING_DIRENT_TYPE_REGULAR }
 };
 
 static const char *mock_input;
@@ -278,6 +279,7 @@ int main(void) {
     char write_no_newline[] = "write -n raw.txt exact-bytes";
     char external_fetch[] = "boringfetch";
     char external_fetch_arg[] = "boringfetch extra";
+    char external_cat[] = "cat README.txt";
 
     shell_history_reset();
     expect_line("plain text\n", sizeof(shell_history_draft), "plain text",
@@ -395,6 +397,20 @@ int main(void) {
                  "external argv content");
     test_require(mock_wait_pid == 3ULL,
                  "external argv waitpid");
+
+    mock_launch_path[0] = '\0';
+    mock_launch_argc = 0U;
+    mock_wait_pid = 0ULL;
+    test_require(shell_execute_line(external_cat),
+                 "external cat execution");
+    test_require(strcmp(mock_launch_path, "/bin/cat") == 0,
+                 "cat resolves fixed /bin path");
+    test_require(mock_launch_argc == 2U &&
+                 strcmp(mock_launch_argv[0], "cat") == 0 &&
+                 strcmp(mock_launch_argv[1], "README.txt") == 0,
+                 "cat argv is forwarded to the standalone program");
+    test_require(mock_wait_pid == 3ULL,
+                 "external cat waitpid");
 
     (void)puts("BoringOS shell host editor/completion tests passed.");
     return 0;

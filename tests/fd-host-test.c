@@ -116,10 +116,8 @@ static bool standard_descriptors_ok(const struct kernel_fd_table *table) {
 }
 
 int main(void) {
-    struct kernel_fd_table parent = { { { { NULL, NULL }, 0ULL, 0U, false },
-                                        KERNEL_FD_UNUSED, 0U, false } }, false };
-    struct kernel_fd_table child = { { { { NULL, NULL }, 0ULL, 0U, false },
-                                       KERNEL_FD_UNUSED, 0U, false } }, false };
+    struct kernel_fd_table parent = { 0 };
+    struct kernel_fd_table child = { 0 };
     uint32_t fd_a;
     uint32_t fd_b;
     uint32_t fd_reused;

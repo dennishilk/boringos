@@ -2,17 +2,17 @@
 
 This remains a deliberately narrow, QEMU-verified bootstrap interface, **not
 a stable public ABI and not a general userspace runtime**. The original
-0.0.11-dev boundary is retained below; this section records the current M27
+0.0.11-dev boundary is retained below; this section records the current M29
 extensions that supersede its two-call inventory and process-lifecycle
 non-goals.
 
-## Current M27 syscall surface
+## Current M29 syscall surface
 
 ```text
- 0 GETPID             9 FS_READ
- 1 DEBUG_WRITE       10 FS_TOUCH
- 2 CONSOLE_WRITE     11 FS_WRITE
- 3 CONSOLE_READ      12 FS_UNLINK
+ 0 GETPID             9 FS_READ            18 FD_OPEN
+ 1 DEBUG_WRITE       10 FS_TOUCH           19 FD_READ
+ 2 CONSOLE_WRITE     11 FS_WRITE           20 FD_WRITE
+ 3 CONSOLE_READ      12 FS_UNLINK          21 FD_CLOSE
  4 LAUNCH            13 INFO
  5 FS_READDIR        14 GETCWD
  6 FS_MKDIR          15 PROCESS_SNAPSHOT

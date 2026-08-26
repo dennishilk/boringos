@@ -56,9 +56,10 @@ start_vm() {
 }
 send() { printf '%s\n' "$1" >&3; wait_prompt $((PROMPT + 1)); }
 
-make -C "${ROOT}" boringfs-fixture boringfsck user-boringfetch
+make -C "${ROOT}" boringfs-fixture boringfsck user-boringfetch user-cat
 "${ROOT}/build/boringfs-fixture" "${IMAGE}" valid \
-    "${ROOT}/build/user/boringfetch.elf" >/dev/null
+    "${ROOT}/build/user/boringfetch.elf" \
+    "${ROOT}/build/user/cat.elf" >/dev/null
 make -C "${ROOT}" TEST_MODE=persistent-root
 
 start_vm first
@@ -98,18 +99,18 @@ grep -Fqx 'boringos' "${LOG}" || fail 'hostname identity mismatch'
 send 'uname'
 grep -Fqx 'BoringOS BoringKernel 0.0.29-dev x86_64' "${LOG}" || fail 'uname identity mismatch'
 send '/bin/boringfetch'
-grep -Fqx 'boring-launch: child pid 4' "${LOG}" || fail 'explicit VFS path did not allocate PID 4'
-grep -Fqx '                     PID: 4' "${LOG}" || fail 'explicit VFS path did not run as PID 4'
-grep -Fqx 'boring-waitpid: reaped child pid 4' "${LOG}" || fail 'explicit VFS child was not reaped'
+grep -Fqx 'boring-launch: child pid 5' "${LOG}" || fail 'explicit VFS path did not allocate PID 5'
+grep -Fqx '                     PID: 5' "${LOG}" || fail 'explicit VFS path did not run as PID 5'
+grep -Fqx 'boring-waitpid: reaped child pid 5' "${LOG}" || fail 'explicit VFS child was not reaped'
 printf 'boringf\t\n' >&3
 wait_prompt $((PROMPT + 1))
-grep -Fqx 'boring-launch: child pid 5' "${LOG}" || fail 'external command TAB did not launch PID 5'
-grep -Fqx '                     PID: 5' "${LOG}" || fail 'external command TAB did not execute boringfetch'
-grep -Fqx 'boring-waitpid: reaped child pid 5' "${LOG}" || fail 'TAB-launched child was not reaped'
+grep -Fqx 'boring-launch: child pid 6' "${LOG}" || fail 'external command TAB did not launch PID 6'
+grep -Fqx '                     PID: 6' "${LOG}" || fail 'external command TAB did not execute boringfetch'
+grep -Fqx 'boring-waitpid: reaped child pid 6' "${LOG}" || fail 'TAB-launched child was not reaped'
 send 'boringfetch extra'
 grep -Fqx 'boringfetch: no arguments supported' "${LOG}" || fail 'argc/argv did not reach standalone program'
-grep -Fqx 'boring-exit: child pid 6 status 2 is zombie' "${LOG}" || fail 'argv child exit status was not preserved'
-grep -Fqx 'boring-waitpid: reaped child pid 6' "${LOG}" || fail 'argv child was not reaped'
+grep -Fqx 'boring-exit: child pid 7 status 2 is zombie' "${LOG}" || fail 'argv child exit status was not preserved'
+grep -Fqx 'boring-waitpid: reaped child pid 7' "${LOG}" || fail 'argv child was not reaped'
 send 'touch /bin/not-elf'
 send 'write -n /bin/not-elf bad'
 send '/bin/not-elf'
@@ -144,7 +145,7 @@ grep -Fqx 'boring-waitpid: reaped child pid 3' "${LOG}" || fail 'rebooted execut
 send 'cat /persist/a.txt'
 grep -Fqx 'still-here' "${LOG}" || fail 'reboot persistence failed'
 send 'boringfetch'
-for line in '    ____             BoringOS' '  / __  / __ \/ ___/ OS: BoringOS' ' / /_/ / /_/ / /    Kernel: BoringKernel 0.0.29-dev' '/_____/\____/_/      Arch: x86_64' '                     Hostname: boringos' '                     User: boring' '                     Shell: boring-shell' '                     Root FS: BoringFS' '                     Root device: virtio-blk' '                     Processes: 3' '                     PID: 4'; do
+for line in '    ____             BoringOS' '  / __  / __ \/ ___/ OS: BoringOS' ' / /_/ / /_/ / /    Kernel: BoringKernel 0.0.29-dev' '/_____/\____/_/      Arch: x86_64' '                     Hostname: boringos' '                     User: boring' '                     Shell: boring-shell' '                     Root FS: BoringFS' '                     Root device: virtio-blk' '                     Processes: 3' '                     PID: 5'; do
     grep -Fqx "${line}" "${LOG}" || fail "missing boringfetch line: ${line}"
 done
 grep -Eq '^                     Memory: [0-9]+ MiB / [1-9][0-9]* MiB$' "${LOG}" || fail 'memory is not real'
