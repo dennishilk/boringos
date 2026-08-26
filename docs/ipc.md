@@ -37,7 +37,7 @@ Closing one endpoint marks that side closed. Messages already queued for the pee
 
 `SERVICE_ACCEPT` and `IPC_RECEIVE` block without busy polling. M33 reuses the existing single-CPU scheduler/interrupt model and adds only the minimum wait/wake state needed to sleep a task and wake it when a pending connection, message, or peer-close event changes the condition. Condition checks and the transition into the wait state are protected against lost wakeups; user-memory copies are performed outside long interrupt-disabled sections.
 
-The pre-M33 syscall entry path uses one trusted syscall stack and explicitly assumes a non-preemptible bootstrap user path. Real two-process blocking IPC therefore also requires the narrow syscall-stack ownership change needed to keep one trusted kernel syscall stack per live Ring-3 process. This is an M33 safety prerequisite, not a scheduler-policy redesign.
+The pre-M33 syscall entry path uses one trusted syscall stack and explicitly assumes a non-preemptible bootstrap user path. Real multi-process blocking IPC therefore uses each existing process-bound cooperative task's bounded 16 KiB kernel stack as that process's trusted syscall stack while it runs. The historical global syscall stack remains the bootstrap/fallback path. This is an M33 safety prerequisite, not a timer-preemption or scheduler-policy redesign.
 
 ## Syscall ABI
 
