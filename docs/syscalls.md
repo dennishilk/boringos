@@ -2,22 +2,44 @@
 
 This remains a deliberately narrow, QEMU-verified bootstrap interface, **not
 a stable public ABI and not a general userspace runtime**. The original
-0.0.11-dev boundary is retained below; this section records the current M31
+0.0.11-dev boundary is retained below; this section records the current M32
 extensions that supersede its two-call inventory and process-lifecycle
 non-goals.
 
-## Current M31 syscall surface
+## Current M32 syscall surface
 
 ```text
- 0 GETPID             9 FS_READ            18 FD_OPEN
- 1 DEBUG_WRITE       10 FS_TOUCH           19 FD_READ
- 2 CONSOLE_WRITE     11 FS_WRITE           20 FD_WRITE
- 3 CONSOLE_READ      12 FS_UNLINK          21 FD_CLOSE
- 4 LAUNCH            13 INFO               22 INPUT_CLAIM
- 5 FS_READDIR        14 GETCWD             23 INPUT_READ
- 6 FS_MKDIR          15 PROCESS_SNAPSHOT   24 INPUT_RELEASE
- 7 FS_RMDIR          16 EXIT
- 8 FS_CHDIR          17 WAITPID
+ 0 GETPID
+ 1 DEBUG_WRITE
+ 2 CONSOLE_WRITE
+ 3 CONSOLE_READ
+ 4 LAUNCH
+ 5 FS_READDIR
+ 6 FS_MKDIR
+ 7 FS_RMDIR
+ 8 FS_CHDIR
+ 9 FS_READ
+10 FS_TOUCH
+11 FS_WRITE
+12 FS_UNLINK
+13 INFO
+14 GETCWD
+15 PROCESS_SNAPSHOT
+16 EXIT
+17 WAITPID
+18 FD_OPEN
+19 FD_READ
+20 FD_WRITE
+21 FD_CLOSE
+22 INPUT_CLAIM
+23 INPUT_READ
+24 INPUT_RELEASE
+25 MEMORY_ALLOC
+26 MEMORY_FREE
+27 BUFFER_CREATE
+28 BUFFER_MAP
+29 BUFFER_UNMAP
+30 BUFFER_CLOSE
 ```
 
 All pointer-bearing calls retain the established complete-range validation
@@ -42,6 +64,18 @@ permits only one suspended child; this is not general POSIX process control.
 
 The current additional symbolic error `EISDIR` maps directory-vs-regular-file
 misuse without changing underlying VFS semantics.
+
+## Milestone 32 memory calls
+
+`MEMORY_ALLOC(size)` accepts a nonzero size up to 16 MiB, rounds it to 4-KiB pages, allocates and explicitly zero-fills PMM frames, then maps them writable + NX into the current ordinary process. The process has 32 bounded anonymous-allocation metadata slots. `MEMORY_FREE(base)` requires the exact base returned by a live allocation and releases its mappings and frames.
+
+`BUFFER_CREATE(size)` accepts a nonzero size up to 64 MiB, allocates zero-filled kernel-owned backing frames and returns a generation-bearing capability handle from the current process's fixed 32-slot handle table. Handles are process-local; M32 has no syscall that transfers or installs one in another process.
+
+`BUFFER_MAP(handle)` maps the same backing frames at a newly selected writable + NX user range and records one of 32 bounded per-process mapping entries. Repeated mapping of one handle is allowed and produces true aliases: writes through one mapping are visible through the others. `BUFFER_UNMAP(base)` removes exactly one recorded mapping.
+
+`BUFFER_CLOSE(handle)` invalidates the process-local capability and advances its generation. Handle and mapping lifetimes are independent, so existing mappings remain valid after close and keep the generic byte-buffer object alive. Backing storage is reclaimed after the final handle/mapping reference is released. Process teardown releases every remaining anonymous allocation, mapping and handle.
+
+The standalone `/bin/memory-test` and permanent host/QEMU coverage exercise the real ABI, zero-fill, aliasing, lifetime and exit-reclamation behavior. M32 shared buffers have no display, surface, cursor, compositor or BoringWM semantics, and M32 does not implement cross-process transfer or general IPC.
 
 ## Milestone 31 input calls
 
