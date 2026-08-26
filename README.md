@@ -13,18 +13,18 @@ It is **not a Linux distribution**, **not a BSD distribution**, and **not based 
 
 **Extremely early bootstrap kernel.**
 
-BoringKernel boots under **QEMU x86_64**. Limine remains the external bootloader. BoringKernel currently provides COM1 serial output, memory and address-space management, exceptions and PIT/PIC interrupts, kernel scheduling, real CPL3 ELF userspace, a checked native syscall boundary, VFS/RAMFS, VirtIO-backed writable BoringFS, PID 1 `boring-init`, an interactive native `boring-shell`, bounded VFS-backed static ELF launching, a 16-slot per-process native descriptor/stdio foundation used by standalone `/bin/boringfetch` and `/bin/cat` from persistent BoringFS, an optional validated native framebuffer graphics foundation with a one-shot kernel-rendered graphical boot dashboard, and a bounded native i8042/PS/2 keyboard-and-mouse input foundation exposed through exclusive blocking Ring-3 event syscalls and standalone `/bin/input-test`, plus M32 dynamic anonymous Ring-3 memory, a minimal userspace heap, and generic kernel-owned shared byte buffers with process-local capability handles and `/bin/memory-test`.
+BoringKernel boots under **QEMU x86_64**. Limine remains the external bootloader. BoringKernel currently provides COM1 serial output, memory and address-space management, exceptions and PIT/PIC interrupts, kernel scheduling, real CPL3 ELF userspace, a checked native syscall boundary, VFS/RAMFS, VirtIO-backed writable BoringFS, PID 1 `boring-init`, an interactive native `boring-shell`, bounded VFS-backed static ELF launching, a 16-slot per-process native descriptor/stdio foundation used by standalone `/bin/boringfetch` and `/bin/cat` from persistent BoringFS, an optional validated native framebuffer graphics foundation with a one-shot kernel-rendered graphical boot dashboard, and a bounded native i8042/PS/2 keyboard-and-mouse input foundation exposed through exclusive blocking Ring-3 event syscalls and standalone `/bin/input-test`, plus M32 dynamic anonymous Ring-3 memory, a minimal userspace heap, and generic kernel-owned shared byte buffers with process-local capability handles and `/bin/memory-test`, plus the M33 bounded native service registry and blocking connection-oriented IPC with transactional M32 shared-buffer capability grants and `/bin/ipc-test`.
 
 Current serial output begins with:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.33-dev
+BoringKernel 0.0.34-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```
 
-The original VMM still adopts the active Limine-created x86_64 four-level root for PID 0. BoringKernel 0.0.9-dev introduced PMM-backed process roots with an empty private lower half and shared higher-half kernel mappings. BoringKernel 0.0.10-dev added the first real Ring 3 transition, and 0.0.11-dev added the native x86_64 syscall boundary. Later milestones extended that same checked foundation through native ELF programs, filesystems, storage, system identity, the M27 shell lifecycle, M28 VFS-backed standalone programs and the M29 native descriptor/stdio layer, the M30 framebuffer foundation, the M31 native PS/2 input foundation, and the M32 userspace-memory/shared-buffer foundation; the exact current state is tracked in [`docs/roadmap.md`](docs/roadmap.md).
+The original VMM still adopts the active Limine-created x86_64 four-level root for PID 0. BoringKernel 0.0.9-dev introduced PMM-backed process roots with an empty private lower half and shared higher-half kernel mappings. BoringKernel 0.0.10-dev added the first real Ring 3 transition, and 0.0.11-dev added the native x86_64 syscall boundary. Later milestones extended that same checked foundation through native ELF programs, filesystems, storage, system identity, the M27 shell lifecycle, M28 VFS-backed standalone programs and the M29 native descriptor/stdio layer, the M30 framebuffer foundation, the M31 native PS/2 input foundation, the M32 userspace-memory/shared-buffer foundation, and the M33 native IPC/service/capability-grant foundation; the exact current state is tracked in [`docs/roadmap.md`](docs/roadmap.md).
 
 The current process split is:
 

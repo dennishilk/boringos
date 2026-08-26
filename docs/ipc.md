@@ -1,6 +1,6 @@
 # BoringOS native IPC / service foundation (M33)
 
-M33 adds a deliberately small, bounded, connection-oriented IPC layer. This document is part of the in-progress M33 implementation; the kernel remains `BoringKernel 0.0.33-dev` until Semantic Freeze has passed.
+M33 adds a deliberately small, bounded, connection-oriented IPC layer. The M33 implementation is Semantic Frozen and accepted; the closeout development banner is `BoringKernel 0.0.34-dev`.
 
 ## Scope
 
