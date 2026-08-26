@@ -8,6 +8,9 @@ TMPDIR_PATH=$(mktemp -d)
 LOG="${TMPDIR_PATH}/serial.log"
 QEMU_LOG="${TMPDIR_PATH}/qemu.log"
 BUILD_LOG="${TMPDIR_PATH}/build.log"
+QMP_LOG="${TMPDIR_PATH}/qmp.log"
+WITNESS_LOG="${TMPDIR_PATH}/witnesses.log"
+FAIL_STATE="${TMPDIR_PATH}/failure-state.txt"
 QMP="${TMPDIR_PATH}/qmp.sock"
 SCREENSHOT="${ROOT}/build/m34-display-reference.ppm"
 DIAG_DIR="${ROOT}/build/m34-display-diagnostics"
@@ -30,16 +33,48 @@ trap cleanup EXIT INT TERM
 
 preserve_failure() {
     reason=$1
+    classification=acceptance
+    qemu_exit=unknown
+
+    case "${reason}" in
+        timeout*) classification=timeout ;;
+        'QEMU exited'*) classification=qemu-exit ;;
+        'failure marker'*) classification=serial-failure-marker ;;
+        'QMP '*) classification=qmp ;;
+        *build/audit*) classification=build-audit ;;
+        *framebuffer*|*screendump*) classification=visual ;;
+    esac
+
     mkdir -p "${DIAG_DIR}"
     printf '%s\n' "${reason}" > "${DIAG_DIR}/failure.txt"
+    printf 'failure-class: %s\n' "${classification}" >> "${DIAG_DIR}/failure.txt"
     if [ -n "${PID}" ] && kill -0 "${PID}" 2>/dev/null; then
         printf '%s\n' 'qemu-state: running-at-failure' >> "${DIAG_DIR}/failure.txt"
     else
         printf '%s\n' 'qemu-state: exited-before-success' >> "${DIAG_DIR}/failure.txt"
+        if [ -n "${PID}" ]; then
+            if wait "${PID}" 2>/dev/null; then
+                qemu_exit=0
+            else
+                qemu_exit=$?
+            fi
+            PID=
+        fi
+    fi
+    printf 'qemu-exit-code: %s\n' "${qemu_exit}" >> "${DIAG_DIR}/failure.txt"
+    if [ -s "${FAIL_STATE}" ]; then
+        cat "${FAIL_STATE}" >> "${DIAG_DIR}/failure.txt"
+    fi
+    if [ -s "${WITNESS_LOG}" ]; then
+        printf 'last-good-witness: %s\n' "$(tail -n 1 "${WITNESS_LOG}")" >> "${DIAG_DIR}/failure.txt"
+    else
+        printf '%s\n' 'last-good-witness: none' >> "${DIAG_DIR}/failure.txt"
     fi
     cp "${BUILD_LOG}" "${DIAG_DIR}/build.log" 2>/dev/null || true
     cp "${LOG}" "${DIAG_DIR}/serial.log" 2>/dev/null || true
     cp "${QEMU_LOG}" "${DIAG_DIR}/qemu.log" 2>/dev/null || true
+    cp "${QMP_LOG}" "${DIAG_DIR}/qmp.log" 2>/dev/null || true
+    cp "${WITNESS_LOG}" "${DIAG_DIR}/witnesses.log" 2>/dev/null || true
     if [ -f "${SCREENSHOT}" ]; then
         cp "${SCREENSHOT}" "${DIAG_DIR}/m34-display-reference.ppm" 2>/dev/null || true
     fi
@@ -53,6 +88,8 @@ fail() {
     tail -n 120 "${BUILD_LOG}" >&2 2>/dev/null || true
     echo '--- last M34 serial context ---' >&2
     tail -n 100 "${LOG}" >&2 2>/dev/null || true
+    echo '--- QMP evidence ---' >&2
+    tail -n 80 "${QMP_LOG}" >&2 2>/dev/null || true
     echo '--- QEMU stderr ---' >&2
     cat "${QEMU_LOG}" >&2 2>/dev/null || true
     exit 1
@@ -61,25 +98,39 @@ fail() {
 wait_for() {
     needle=$1
     attempt=0
+    : > "${FAIL_STATE}"
     while [ "${attempt}" -lt 600 ]; do
         if grep -Fq "${needle}" "${LOG}" 2>/dev/null; then
+            printf '%s\n' "${needle}" >> "${WITNESS_LOG}"
             return 0
         fi
         if grep -Eiq 'M34 display acceptance FAILED|boring-display: FAILED|display-client-a: FAILED|display-client-b: FAILED|BoringKernel M34 syscall fatal|Fatal exception|M34 display acceptance unexpected exception' "${LOG}" 2>/dev/null; then
+            printf 'first-missing-witness: %s\n' "${needle}" > "${FAIL_STATE}"
             fail "failure marker while waiting for: ${needle}"
         fi
         if [ -n "${PID}" ] && ! kill -0 "${PID}" 2>/dev/null; then
+            printf 'first-missing-witness: %s\n' "${needle}" > "${FAIL_STATE}"
             fail "QEMU exited while waiting for: ${needle}"
         fi
         attempt=$((attempt + 1))
         sleep 0.1
     done
+    printf 'first-missing-witness: %s\n' "${needle}" > "${FAIL_STATE}"
     fail "timeout waiting for: ${needle}"
 }
 
 qmp_input() {
-    python3 "${ROOT}/tests/qmp-input.py" "${QMP}" "$@" ||
-        fail "QMP input injection failed: $*"
+    printf 'qmp-command:' >> "${QMP_LOG}"
+    for argument in "$@"; do
+        printf ' %s' "${argument}" >> "${QMP_LOG}"
+    done
+    printf '\n' >> "${QMP_LOG}"
+    if python3 "${ROOT}/tests/qmp-input.py" "${QMP}" "$@" >> "${QMP_LOG}" 2>&1; then
+        printf '%s\n' 'qmp-result: ok' >> "${QMP_LOG}"
+        return 0
+    fi
+    printf '%s\n' 'qmp-result: failed' >> "${QMP_LOG}"
+    fail "QMP input injection failed: $*"
 }
 
 qmp_move_steps() {
@@ -102,6 +153,9 @@ rm -f "${SCREENSHOT}"
 : > "${BUILD_LOG}"
 : > "${LOG}"
 : > "${QEMU_LOG}"
+: > "${QMP_LOG}"
+: > "${WITNESS_LOG}"
+: > "${FAIL_STATE}"
 
 if ! {
     make -C "${ROOT}" display-host-test display-audit &&
@@ -164,8 +218,13 @@ if grep -Fq 'display-client-b: destroy acknowledged' "${LOG}"; then
     fail 'Client B destroyed its surface before framebuffer witness capture'
 fi
 
-python3 "${ROOT}/tests/qmp-screendump.py" "${QMP}" "${SCREENSHOT}" ||
+printf '%s\n' 'qmp-command: screendump' >> "${QMP_LOG}"
+if python3 "${ROOT}/tests/qmp-screendump.py" "${QMP}" "${SCREENSHOT}" >> "${QMP_LOG}" 2>&1; then
+    printf '%s\n' 'qmp-result: screendump ok' >> "${QMP_LOG}"
+else
+    printf '%s\n' 'qmp-result: screendump failed' >> "${QMP_LOG}"
     fail 'QMP framebuffer screendump failed'
+fi
 python3 "${ROOT}/tests/validate-display-screenshot.py" "${SCREENSHOT}" "${LOG}" ||
     fail 'deterministic M34 framebuffer validation failed'
 
