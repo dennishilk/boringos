@@ -12,6 +12,7 @@ DYNAMIC=$(readelf -dW "${ELF}")
 RELOCS=$(readelf -rW "${ELF}")
 SYMBOLS=$(nm -n "${ELF}")
 UNDEFINED=$(nm -u "${ELF}" || true)
+DISASSEMBLY=$(objdump -d "${ELF}")
 
 printf '%s\n' "${HEADER}" | grep -Fq 'Class:                             ELF64'
 printf '%s\n' "${HEADER}" | grep -Fq "Data:                              2's complement, little endian"
@@ -57,8 +58,18 @@ for symbol in _start boring_main boring_fd_open boring_fd_read boring_fd_write b
         exit 1
     fi
 done
-if printf '%s\n' "${SYMBOLS}" | grep -Eq '(boring_fs_read$|boring_console_write$|__libc_start_main|__stack_chk_fail| printf$| snprintf$| malloc$| free$| fopen$| open$| close$)'; then
-    echo 'cat used legacy FS/console I/O or host CRT/libc/file-I/O' >&2
+for symbol in boring_fd_open boring_fd_read boring_fd_write boring_fd_close boring_exit; do
+    if ! printf '%s\n' "${DISASSEMBLY}" | grep -Eq "call[q]?[[:space:]].*<${symbol}>"; then
+        echo "cat does not call required descriptor/runtime function: ${symbol}" >&2
+        exit 1
+    fi
+done
+if printf '%s\n' "${DISASSEMBLY}" | grep -Eq 'call[q]?[[:space:]].*<(boring_fs_read|boring_console_write)>'; then
+    echo 'cat calls a legacy FS_READ or CONSOLE_WRITE wrapper' >&2
+    exit 1
+fi
+if printf '%s\n' "${SYMBOLS}" | grep -Eq '(__libc_start_main|__stack_chk_fail| printf$| snprintf$| malloc$| free$| fopen$| open$| close$)'; then
+    echo 'cat contains a host CRT/libc/file-I/O dependency' >&2
     exit 1
 fi
 echo 'standalone cat build audit passed.'
