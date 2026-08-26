@@ -1701,7 +1701,7 @@ static uint64_t syscall_fd_write(uint64_t raw_fd,
         serial_write_string(" bytes ");
         serial_write_u64((uint64_t)transferred);
         serial_write_string("\n");
-        serial_write_bytes(buffer, transferred);
+        serial_write_bytes((const char *)buffer, transferred);
         return (uint64_t)transferred;
     }
     if (kind != KERNEL_FD_REGULAR) {
