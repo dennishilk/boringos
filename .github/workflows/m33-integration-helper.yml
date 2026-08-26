@@ -10,6 +10,7 @@ on:
       - tools/m33_finish.py
       - tools/m33_fixture.py
       - tools/m33_quickfix.py
+      - tools/m33_harness_fix.py
       - .github/workflows/m33-integration-helper.yml
 
 permissions:
@@ -29,6 +30,7 @@ jobs:
           python3 tools/m33_apply.py
           python3 tools/m33_finish.py
           python3 tools/m33_quickfix.py
+          python3 tools/m33_harness_fix.py
           git restore .github/workflows/boot-test.yml
       - name: Commit generated integration changes
         run: |
