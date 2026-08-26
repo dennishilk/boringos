@@ -136,8 +136,17 @@ bool boring_pixel_font_draw_char(const struct boring_framebuffer *surface,
     for (row = 0U; row < BORING_PIXEL_FONT_HEIGHT; ++row) {
         for (column = 0U; column < BORING_PIXEL_FONT_WIDTH; ++column) {
             if ((rows[row] & (uint8_t)(1U << (4U - column))) != 0U) {
-                uint64_t pixel_x = x + ((uint64_t)column * (uint64_t)scale);
-                uint64_t pixel_y = y + ((uint64_t)row * (uint64_t)scale);
+                uint64_t x_offset = (uint64_t)column * (uint64_t)scale;
+                uint64_t y_offset = (uint64_t)row * (uint64_t)scale;
+                uint64_t pixel_x;
+                uint64_t pixel_y;
+
+                if ((x > UINT64_MAX - x_offset) ||
+                    (y > UINT64_MAX - y_offset)) {
+                    continue;
+                }
+                pixel_x = x + x_offset;
+                pixel_y = y + y_offset;
                 wrote = boring_graphics_fill_rect(surface,
                                                    pixel_x,
                                                    pixel_y,
