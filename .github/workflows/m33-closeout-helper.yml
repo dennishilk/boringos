@@ -5,7 +5,7 @@ on:
     branches:
       - agent/native-ipc-service-foundation
     paths:
-      - tools/m33_closeout.py
+      - tools/m33_closeout_v2.py
       - .github/workflows/m33-closeout-helper.yml
   workflow_dispatch:
 
@@ -23,7 +23,7 @@ jobs:
           fetch-depth: 0
       - name: Apply input-neutral M33 closeout
         run: |
-          python3 tools/m33_closeout.py
+          python3 tools/m33_closeout_v2.py
           git diff --check
       - name: Commit closeout changes
         run: |
