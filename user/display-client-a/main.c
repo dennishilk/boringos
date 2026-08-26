@@ -7,8 +7,8 @@
 #include <boring/syscall_abi.h>
 #include <boring/display_abi.h>
 
-#define SURFACE_WIDTH 64U
-#define SURFACE_HEIGHT 64U
+#define SURFACE_WIDTH 160U
+#define SURFACE_HEIGHT 100U
 #define SURFACE_STRIDE (SURFACE_WIDTH * BORING_DISPLAY_BYTES_PER_PIXEL)
 #define SURFACE_BYTES ((size_t)SURFACE_STRIDE * (size_t)SURFACE_HEIGHT)
 
