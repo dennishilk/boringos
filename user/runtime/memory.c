@@ -104,14 +104,17 @@ static bool heap_same_arena(const struct boring_heap_block *first,
 
 static bool heap_physically_adjacent(const struct boring_heap_block *first,
                                      const struct boring_heap_block *second) {
+    uintptr_t payload;
     uintptr_t first_end;
 
-    if (!heap_same_arena(first, second) ||
-        (first->size > UINTPTR_MAX - (uintptr_t)heap_payload(
-             (struct boring_heap_block *)(uintptr_t)first))) {
+    if (!heap_same_arena(first, second)) {
         return false;
     }
-    first_end = (uintptr_t)(const void *)(first + 1) + (uintptr_t)first->size;
+    payload = (uintptr_t)(const void *)(first + 1);
+    if ((uintptr_t)first->size > UINTPTR_MAX - payload) {
+        return false;
+    }
+    first_end = payload + (uintptr_t)first->size;
     return first_end == (uintptr_t)(const void *)second;
 }
 

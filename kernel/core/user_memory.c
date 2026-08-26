@@ -491,6 +491,7 @@ enum user_memory_result user_memory_allocate(struct process *process,
     uint32_t mapped = 0U;
     uint32_t index;
     uint64_t vector_bytes;
+    bool mapping_verified = true;
 
     if (!process_ready(process)) {
         return USER_MEMORY_RESULT_NOT_INITIALIZED;
@@ -538,10 +539,12 @@ enum user_memory_result user_memory_allocate(struct process *process,
                                       virtual_address, &info) ||
             (info.physical_address != frames[index]) || !info.writable ||
             info.executable) {
+            mapping_verified = false;
             break;
         }
     }
-    if ((allocated != page_count) || (mapped != page_count)) {
+    if ((allocated != page_count) || (mapped != page_count) ||
+        !mapping_verified) {
         rollback_mappings(process, base, mapped);
         free_frame_vector(frames, allocated);
         (void)kfree(frames);
@@ -715,6 +718,7 @@ enum user_memory_result user_buffer_map(struct process *process,
     uintptr_t base;
     uint32_t mapped = 0U;
     uint32_t index;
+    bool mapping_verified = true;
 
     if (!process_ready(process)) {
         return USER_MEMORY_RESULT_NOT_INITIALIZED;
@@ -750,10 +754,11 @@ enum user_memory_result user_buffer_map(struct process *process,
                                       virtual_address, &info) ||
             (info.physical_address != object->frames[index]) ||
             !info.writable || info.executable) {
+            mapping_verified = false;
             break;
         }
     }
-    if (mapped != object->page_count) {
+    if ((mapped != object->page_count) || !mapping_verified) {
         rollback_mappings(process, base, mapped);
         return USER_MEMORY_RESULT_NO_MEMORY;
     }

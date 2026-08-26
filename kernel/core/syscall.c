@@ -14,6 +14,7 @@
 #include <boring/serial.h>
 #include <boring/syscall.h>
 #include <boring/timer.h>
+#include <boring/user_memory.h>
 #include <boring/vfs.h>
 #include <boring/vmm.h>
 
@@ -121,6 +122,20 @@ _Static_assert(VFS_ACCESS_READ == BORING_FD_OPEN_READ,
                "descriptor read flag ABI mismatch");
 _Static_assert(VFS_ACCESS_WRITE == BORING_FD_OPEN_WRITE,
                "descriptor write flag ABI mismatch");
+_Static_assert(USER_MEMORY_PAGE_SIZE == BORING_MEMORY_PAGE_SIZE,
+               "M32 page-size ABI mismatch");
+_Static_assert(USER_MEMORY_ANON_MAX_BYTES == BORING_MEMORY_ALLOC_MAX_BYTES,
+               "M32 anonymous allocation bound mismatch");
+_Static_assert(USER_MEMORY_BUFFER_MAX_BYTES == BORING_BUFFER_MAX_BYTES,
+               "M32 shared-buffer bound mismatch");
+_Static_assert(USER_MEMORY_ALLOCATION_MAX == BORING_MEMORY_ALLOCATION_MAX,
+               "M32 allocation-slot bound mismatch");
+_Static_assert(USER_MEMORY_BUFFER_HANDLE_MAX == BORING_BUFFER_HANDLE_MAX,
+               "M32 handle-slot bound mismatch");
+_Static_assert(USER_MEMORY_BUFFER_MAPPING_MAX == BORING_BUFFER_MAPPING_MAX,
+               "M32 mapping-slot bound mismatch");
+_Static_assert(USER_MEMORY_BUFFER_OBJECT_MAX == BORING_BUFFER_OBJECT_MAX,
+               "M32 object-table bound mismatch");
 
 extern void x86_64_syscall_entry(void);
 
@@ -1850,6 +1865,108 @@ static uint64_t syscall_input_release(void) {
     return 0ULL;
 }
 
+static int syscall_user_memory_error(enum user_memory_result result) {
+    switch (result) {
+        case USER_MEMORY_RESULT_OK:
+            return 0;
+        case USER_MEMORY_RESULT_INVALID:
+            return BORING_SYSCALL_EINVAL;
+        case USER_MEMORY_RESULT_NO_SPACE:
+            return BORING_SYSCALL_ENOSPC;
+        case USER_MEMORY_RESULT_NO_MEMORY:
+            return BORING_SYSCALL_ENOMEM;
+        case USER_MEMORY_RESULT_INTERNAL:
+        case USER_MEMORY_RESULT_NOT_INITIALIZED:
+        default:
+            return BORING_SYSCALL_EIO;
+    }
+}
+
+static uint64_t syscall_memory_alloc(uint64_t raw_size) {
+    struct process *const process = process_current();
+    uintptr_t base = 0U;
+    enum user_memory_result result;
+
+    if ((raw_size == 0ULL) || (raw_size > (uint64_t)SIZE_MAX) ||
+        (process == NULL) || !process_is_alive(process)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    result = user_memory_allocate(process, (size_t)raw_size, &base);
+    if (result != USER_MEMORY_RESULT_OK) {
+        return syscall_error(syscall_user_memory_error(result));
+    }
+    return (uint64_t)base;
+}
+
+static uint64_t syscall_memory_free(uint64_t raw_base) {
+    struct process *const process = process_current();
+    enum user_memory_result result;
+
+    if ((process == NULL) || !process_is_alive(process)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    result = user_memory_free(process, (uintptr_t)raw_base);
+    return (result == USER_MEMORY_RESULT_OK) ? 0ULL :
+        syscall_error(syscall_user_memory_error(result));
+}
+
+static uint64_t syscall_buffer_create(uint64_t raw_size) {
+    struct process *const process = process_current();
+    uint32_t handle = BORING_BUFFER_HANDLE_INVALID;
+    enum user_memory_result result;
+
+    if ((raw_size == 0ULL) || (raw_size > (uint64_t)SIZE_MAX) ||
+        (process == NULL) || !process_is_alive(process)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    result = user_buffer_create(process, (size_t)raw_size, &handle);
+    if (result != USER_MEMORY_RESULT_OK) {
+        return syscall_error(syscall_user_memory_error(result));
+    }
+    return (uint64_t)handle;
+}
+
+static uint64_t syscall_buffer_map(uint64_t raw_handle) {
+    struct process *const process = process_current();
+    uintptr_t base = 0U;
+    enum user_memory_result result;
+
+    if ((raw_handle > (uint64_t)UINT32_MAX) || (process == NULL) ||
+        !process_is_alive(process)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    result = user_buffer_map(process, (uint32_t)raw_handle, &base);
+    if (result != USER_MEMORY_RESULT_OK) {
+        return syscall_error(syscall_user_memory_error(result));
+    }
+    return (uint64_t)base;
+}
+
+static uint64_t syscall_buffer_unmap(uint64_t raw_base) {
+    struct process *const process = process_current();
+    enum user_memory_result result;
+
+    if ((process == NULL) || !process_is_alive(process)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    result = user_buffer_unmap(process, (uintptr_t)raw_base);
+    return (result == USER_MEMORY_RESULT_OK) ? 0ULL :
+        syscall_error(syscall_user_memory_error(result));
+}
+
+static uint64_t syscall_buffer_close(uint64_t raw_handle) {
+    struct process *const process = process_current();
+    enum user_memory_result result;
+
+    if ((raw_handle > (uint64_t)UINT32_MAX) || (process == NULL) ||
+        !process_is_alive(process)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    result = user_buffer_close(process, (uint32_t)raw_handle);
+    return (result == USER_MEMORY_RESULT_OK) ? 0ULL :
+        syscall_error(syscall_user_memory_error(result));
+}
+
 static uint64_t syscall_getcwd(uint64_t user_buffer, uint64_t capacity) {
     char cwd[VFS_PATH_MAX + 1U];
     struct process *const process = process_current();
@@ -1916,6 +2033,7 @@ static uint64_t syscall_exit(struct x86_64_syscall_frame *frame,
     struct process *const child = process_current();
     struct process *parent;
     uint64_t child_pid;
+    struct user_memory_cleanup_stats memory_cleanup;
     bool input_released = false;
 
     if ((frame == NULL) || (launch == NULL) || !launch->active ||
@@ -1927,6 +2045,10 @@ static uint64_t syscall_exit(struct x86_64_syscall_frame *frame,
     child_pid = child->pid;
     launch->exit_status = (int32_t)raw_status;
     (void)boring_input_process_teardown(child_pid, &input_released);
+    if (user_memory_process_cleanup(child, &memory_cleanup) !=
+        USER_MEMORY_RESULT_OK) {
+        syscall_fatal("cannot release child M32 memory during SYS_EXIT");
+    }
 
     if (!process_activate(parent)) {
         syscall_fatal("cannot resume parent during SYS_EXIT");
@@ -1951,6 +2073,19 @@ static uint64_t syscall_exit(struct x86_64_syscall_frame *frame,
         serial_write_u64(child_pid);
         serial_write_string(" teardown released\n");
     }
+    serial_write_string("boring-memory: cleanup pid " );
+    serial_write_u64(child_pid);
+    serial_write_string(" allocations " );
+    serial_write_u64((uint64_t)memory_cleanup.allocations_released);
+    serial_write_string(" mappings " );
+    serial_write_u64((uint64_t)memory_cleanup.mappings_released);
+    serial_write_string(" handles " );
+    serial_write_u64((uint64_t)memory_cleanup.handles_released);
+    serial_write_string(" objects " );
+    serial_write_u64((uint64_t)memory_cleanup.objects_before);
+    serial_write_string("->" );
+    serial_write_u64((uint64_t)memory_cleanup.objects_after);
+    serial_write_string("\n");
     *frame = launch->parent_frame;
     return child_pid;
 }
@@ -2216,6 +2351,24 @@ void x86_64_syscall_dispatch(struct x86_64_syscall_frame *frame) {
             break;
         case BORING_SYS_INPUT_RELEASE:
             result = syscall_input_release();
+            break;
+        case BORING_SYS_MEMORY_ALLOC:
+            result = syscall_memory_alloc(frame->rdi);
+            break;
+        case BORING_SYS_MEMORY_FREE:
+            result = syscall_memory_free(frame->rdi);
+            break;
+        case BORING_SYS_BUFFER_CREATE:
+            result = syscall_buffer_create(frame->rdi);
+            break;
+        case BORING_SYS_BUFFER_MAP:
+            result = syscall_buffer_map(frame->rdi);
+            break;
+        case BORING_SYS_BUFFER_UNMAP:
+            result = syscall_buffer_unmap(frame->rdi);
+            break;
+        case BORING_SYS_BUFFER_CLOSE:
+            result = syscall_buffer_close(frame->rdi);
             break;
         default:
             result = syscall_error(BORING_SYSCALL_ENOSYS);
