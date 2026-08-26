@@ -66,6 +66,8 @@ M34 uses fixed tables:
 
 A surface owns the receiver-local granted M32 handle and one mapping for as long as the surface is live. Destroy, peer close or client death unmaps and closes that capability.
 
+The permanent bundle gate uses the real built ELF sizes rather than assuming a milestone-sized expansion. The complete inherited bundle cannot fit in the historical 80-block M32 geometry because the M33 IPC program crosses that boundary, while all eight programs including the three M34 display ELFs fit and verify byte-for-byte in the existing 96-block M33 geometry. M34 therefore retains 96 blocks instead of forcing an unnecessary 112-block image.
+
 ## Composition
 
 `boring-display` owns a userspace composition buffer sized from the validated scanout geometry. Every presentation is generated in CPU software:

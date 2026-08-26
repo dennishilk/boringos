@@ -10,10 +10,13 @@ int boringfs_fixture_historical_main(int argc, char **argv);
 #include "boringfs-fixture.c"
 #undef main
 
-#define M34_FIXTURE_BLOCKS 112U
+#define M34_FIXTURE_BLOCKS M33_FIXTURE_BLOCKS
 #define M34_PROGRAM_COUNT 3U
 #define M34_FIRST_OBJECT_ID 17U
 #define M34_BIN_FIRST_INDEX 5ULL
+
+_Static_assert(M34_FIXTURE_BLOCKS == 96U,
+               "M34 must retain the proven M33 fixture geometry");
 
 struct m34_program {
     const char *name;
@@ -195,8 +198,11 @@ int main(int argc, char **argv) {
           0U, 0U, { { 0U, 0U } } }
     };
     struct boringfs_extent bin_extent = { BIN_BLOCK, 1U };
+    uint8_t *m32_attempt = NULL;
     uint8_t *volume = NULL;
     uint32_t free_below_m33;
+    uint32_t free_after_m34;
+    uint32_t ipc_test_blocks;
     uint32_t required_display_blocks = 0U;
     uint32_t highest;
     size_t index;
@@ -221,6 +227,13 @@ int main(int argc, char **argv) {
             goto cleanup;
         }
     }
+    if (!program_block_count(base_sizes[4], &ipc_test_blocks) ||
+        (IPC_TEST_BLOCK0 > UINT32_MAX - ipc_test_blocks) ||
+        (IPC_TEST_BLOCK0 + ipc_test_blocks <= M32_FIXTURE_BLOCKS) ||
+        (IPC_TEST_BLOCK0 + ipc_test_blocks > M33_FIXTURE_BLOCKS)) {
+        (void)fputs("M34 inherited IPC boundary proof failed\n", stderr);
+        goto cleanup;
+    }
     for (index = 0U; index < (size_t)M34_PROGRAM_COUNT; ++index) {
         uint32_t blocks;
 
@@ -238,6 +251,33 @@ int main(int argc, char **argv) {
         required_display_blocks += blocks;
     }
 
+    /*
+     * Prove the lower boundary with the complete inherited bundle. The M33
+     * ipc-test slot begins at block 80, so the M34 superset cannot fit in the
+     * historical M32 geometry. The same exact inputs must then build at 96.
+     */
+    fixture_blocks = M32_FIXTURE_BLOCKS;
+    m32_attempt = (uint8_t *)malloc((size_t)M32_FIXTURE_BLOCKS *
+                                    (size_t)BORINGFS_BLOCK_SIZE);
+    if (m32_attempt == NULL) {
+        (void)fputs("M34 lower-bound allocation failed\n", stderr);
+        goto cleanup;
+    }
+    if (build_valid(m32_attempt,
+                    (size_t)M32_FIXTURE_BLOCKS *
+                        (size_t)BORINGFS_BLOCK_SIZE,
+                    base_programs[0], base_sizes[0],
+                    base_programs[1], base_sizes[1],
+                    base_programs[2], base_sizes[2],
+                    base_programs[3], base_sizes[3],
+                    base_programs[4], base_sizes[4])) {
+        (void)fputs("M34 lower-bound proof failed: complete inherited bundle unexpectedly fits in 80 blocks\n",
+                    stderr);
+        goto cleanup;
+    }
+    free(m32_attempt);
+    m32_attempt = NULL;
+
     fixture_blocks = M34_FIXTURE_BLOCKS;
     volume = (uint8_t *)malloc(volume_size);
     if ((volume == NULL) ||
@@ -252,9 +292,9 @@ int main(int argc, char **argv) {
     }
 
     free_below_m33 = count_free_blocks(volume, M33_FIXTURE_BLOCKS);
-    if (required_display_blocks <= free_below_m33) {
+    if (required_display_blocks > free_below_m33) {
         (void)fprintf(stderr,
-                      "M34 geometry proof failed: display trio needs %u blocks but %u free blocks already exist below M33 limit %u\n",
+                      "M34 geometry proof failed: display trio needs %u blocks but only %u blocks are free inside M33 limit %u\n",
                       required_display_blocks, free_below_m33,
                       M33_FIXTURE_BLOCKS);
         goto cleanup;
@@ -295,8 +335,9 @@ int main(int argc, char **argv) {
     }
 
     highest = highest_allocated_block(volume);
-    if ((highest < M33_FIXTURE_BLOCKS) ||
-        (highest >= M34_FIXTURE_BLOCKS) ||
+    free_after_m34 = count_free_blocks(volume, M34_FIXTURE_BLOCKS);
+    if ((highest < IPC_TEST_BLOCK0) || (highest >= M34_FIXTURE_BLOCKS) ||
+        (free_below_m33 - required_display_blocks != free_after_m34) ||
         (validate_m34(volume, volume_size) != BORINGFS_VALIDATE_OK)) {
         (void)fprintf(stderr,
                       "M34 geometry/validation failed: highest=%u limit=%u\n",
@@ -309,9 +350,15 @@ int main(int argc, char **argv) {
         (void)printf("M34 BoringFS bundle: %s\n", argv[1]);
         (void)printf("M34 fixture blocks: %u\n", M34_FIXTURE_BLOCKS);
         (void)printf("M33 fixture blocks: %u\n", M33_FIXTURE_BLOCKS);
-        (void)printf("M33 free blocks below limit: %u\n", free_below_m33);
+        (void)printf("M32 lower-bound fixture blocks: %u\n",
+                     M32_FIXTURE_BLOCKS);
+        (void)puts("M32 complete-bundle capacity: rejected");
+        (void)printf("M33 ipc-test block range: %u-%u\n", IPC_TEST_BLOCK0,
+                     IPC_TEST_BLOCK0 + ipc_test_blocks - 1U);
+        (void)printf("M33 free blocks before display: %u\n", free_below_m33);
         (void)printf("M34 display blocks required: %u\n",
                      required_display_blocks);
+        (void)printf("M34 free blocks after display: %u\n", free_after_m34);
         (void)printf("M34 highest allocated block: %u\n", highest);
         for (index = 0U; index < (size_t)M34_PROGRAM_COUNT; ++index) {
             (void)printf("M34 program %s: %zu bytes, %u blocks, %u extents\n",
@@ -322,6 +369,7 @@ int main(int argc, char **argv) {
     }
 
 cleanup:
+    free(m32_attempt);
     for (index = 0U; index < 5U; ++index) {
         free(base_programs[index]);
     }

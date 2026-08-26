@@ -35,8 +35,8 @@ chmod +x "${OUT}/run-boringos.sh"
 
 "${ROOT}/build/boringfsck" "${OUT}/boringos-root.img" |
     grep -Fqx 'Status: VALID' || fail 'copied M34 root image failed boringfsck'
-[ "$(stat -c %s "${OUT}/boringos-root.img")" -eq $((112 * 4096)) ] ||
-    fail 'copied M34 root image lost its 112-block geometry'
+[ "$(stat -c %s "${OUT}/boringos-root.img")" -eq $((96 * 4096)) ] ||
+    fail 'copied M34 root image lost its proven 96-block geometry'
 
 (
     cd "${OUT}"
