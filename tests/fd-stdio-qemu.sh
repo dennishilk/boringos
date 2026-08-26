@@ -80,8 +80,8 @@ for line in \
     'boring-launch: independent address space' \
     'boring-launch: VFS executable source /bin/cat' \
     'fd-open: pid 3 path hello.txt fd 3' \
-    'fd-read: pid 3 fd 3 bytes 16' \
-    'fd-write: pid 3 fd 1 bytes 16' \
+    'fd-read: pid 3 fd 3 bytes 17' \
+    'fd-write: pid 3 fd 1 bytes 17' \
     'fd-read: pid 3 fd 3 EOF' \
     'fd-close: pid 3 fd 3' \
     'boring-exit: child pid 3 status 0 is zombie' \

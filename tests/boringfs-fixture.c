@@ -540,15 +540,13 @@ int main(int argc, char **argv) {
 
     if ((argc < 3) || (argc > 5)) {
         (void)fprintf(stderr,
-                      "usage: %s <output> <valid|bad-magic|bad-geometry|bad-bitmap|bad-object|bad-extent|bad-directory> [boringfetch-elf [cat-elf]]
-",
+                      "usage: %s <output> <valid|bad-magic|bad-geometry|bad-bitmap|bad-object|bad-extent|bad-directory> [boringfetch-elf [cat-elf]]\n",
                       argv[0]);
         return 2;
     }
     kind = argv[2];
     if ((argc > 3) && (strcmp(kind, "valid") != 0)) {
-        (void)fputs("program ELFs are supported only for valid fixtures
-",
+        (void)fputs("program ELFs are supported only for valid fixtures\n",
                     stderr);
         return 2;
     }
@@ -559,22 +557,19 @@ int main(int argc, char **argv) {
         (strcmp(kind, "bad-object") != 0) &&
         (strcmp(kind, "bad-extent") != 0) &&
         (strcmp(kind, "bad-directory") != 0)) {
-        (void)fprintf(stderr, "unknown fixture kind: %s
-", kind);
+        (void)fprintf(stderr, "unknown fixture kind: %s\n", kind);
         return 2;
     }
 
     if ((argc >= 4) &&
         !read_program(argv[3], &boringfetch_bytes, &boringfetch_size)) {
-        (void)fprintf(stderr, "cannot read bounded boringfetch ELF: %s
-",
+        (void)fprintf(stderr, "cannot read bounded boringfetch ELF: %s\n",
                       argv[3]);
         return 2;
     }
     if ((argc == 5) && !read_program(argv[4], &cat_bytes, &cat_size)) {
         free(boringfetch_bytes);
-        (void)fprintf(stderr, "cannot read bounded cat ELF: %s
-", argv[4]);
+        (void)fprintf(stderr, "cannot read bounded cat ELF: %s\n", argv[4]);
         return 2;
     }
     volume = (uint8_t *)malloc(volume_size);
@@ -585,8 +580,7 @@ int main(int argc, char **argv) {
         free(cat_bytes);
         free(boringfetch_bytes);
         free(volume);
-        (void)fputs("fixture construction failed
-", stderr);
+        (void)fputs("fixture construction failed\n", stderr);
         return 2;
     }
     free(cat_bytes);
@@ -599,8 +593,7 @@ int main(int argc, char **argv) {
          (result != BORINGFS_VALIDATE_OK)) ||
         ((strcmp(kind, "valid") != 0) &&
          (result == BORINGFS_VALIDATE_OK))) {
-        (void)fprintf(stderr, "fixture validation mismatch: %s -> %s
-",
+        (void)fprintf(stderr, "fixture validation mismatch: %s -> %s\n",
                       kind, boringfs_validation_result_name(result));
         free(volume);
         return 2;
@@ -608,8 +601,7 @@ int main(int argc, char **argv) {
     status = write_image(argv[1], volume, volume_size);
     free(volume);
     if (status == 0) {
-        (void)printf("BoringFS fixture: %s (%s)
-", argv[1], kind);
+        (void)printf("BoringFS fixture: %s (%s)\n", argv[1], kind);
     }
     return status;
 }
