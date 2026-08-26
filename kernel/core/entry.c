@@ -10,8 +10,10 @@
 #include <boring/context.h>
 #include <boring/cpu.h>
 #include <boring/exception.h>
+#include <boring/elf_boot.h>
 #include <boring/heap.h>
 #include <boring/init_test.h>
+#include <boring/ipc_test.h>
 #include <boring/irq.h>
 #include <boring/kernel.h>
 #include <boring/pmm.h>
@@ -46,6 +48,7 @@
 #define BORING_TEST_MODE_BORINGFS_RO 13
 #define BORING_TEST_MODE_BORINGFS_RW 14
 #define BORING_TEST_MODE_PERSISTENT_ROOT 15
+#define BORING_TEST_MODE_M33_IPC 16
 #define IRQ_TEST_TICKS 10ULL
 #define IRQ_TEST_SPIN_LIMIT 500000000ULL
 #define BOOTSTRAP_TIMER_FREQUENCY_HZ 100U
@@ -72,7 +75,8 @@
     (BORING_TEST_MODE != BORING_TEST_MODE_VIRTIO_BLOCK) && \
     (BORING_TEST_MODE != BORING_TEST_MODE_BORINGFS_RO) && \
     (BORING_TEST_MODE != BORING_TEST_MODE_BORINGFS_RW) && \
-    (BORING_TEST_MODE != BORING_TEST_MODE_PERSISTENT_ROOT)
+    (BORING_TEST_MODE != BORING_TEST_MODE_PERSISTENT_ROOT) && \
+    (BORING_TEST_MODE != BORING_TEST_MODE_M33_IPC)
 #error "unsupported BoringKernel test mode"
 #endif
 
@@ -957,6 +961,8 @@ static void run_exception_test_mode(void) {
     boringfs_ro_test_run();
 #elif BORING_TEST_MODE == BORING_TEST_MODE_PERSISTENT_ROOT
     boringfs_ro_test_run();
+#elif BORING_TEST_MODE == BORING_TEST_MODE_M33_IPC
+    ipc_test_run(elf_boot_module_response());
 #endif
 }
 #endif
