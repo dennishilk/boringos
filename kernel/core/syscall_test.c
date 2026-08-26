@@ -6,6 +6,7 @@
 #include <boring/cpu.h>
 #include <boring/descriptor.h>
 #include <boring/exception.h>
+#include <boring/input.h>
 #include <boring/pmm.h>
 #include <boring/process.h>
 #include <boring/ring3_memory.h>
