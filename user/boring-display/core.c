@@ -77,6 +77,7 @@ bool boring_display_core_init(struct boring_display_core *core,
     core->cursor_x = info->width / 2U;
     core->cursor_y = info->height / 2U;
     core->live_surfaces = 0U;
+    core->next_creation_order = 1ULL;
     for (index = 0U; index < (size_t)BORING_DISPLAY_SURFACE_MAX; ++index) {
         core->surfaces[index].owner_endpoint = 0U;
         core->surfaces[index].token = 0U;
@@ -86,6 +87,7 @@ bool boring_display_core_init(struct boring_display_core *core,
         core->surfaces[index].buffer_handle = 0U;
         core->surfaces[index].pixels = NULL;
         core->surfaces[index].generation = 1U;
+        core->surfaces[index].creation_order = 0ULL;
         core->surfaces[index].active = false;
     }
     return true;
@@ -134,9 +136,14 @@ uint32_t boring_display_surface_add(struct boring_display_core *core,
     uint32_t token;
 
     if ((core == NULL) || (request == NULL) || (owner_endpoint == 0U) ||
-        (buffer_handle == 0U) || (pixels == NULL) || (token_out == NULL) ||
-        (core->live_surfaces >= BORING_DISPLAY_SURFACE_MAX)) {
+        (buffer_handle == 0U) || (pixels == NULL) || (token_out == NULL)) {
         return BORING_DISPLAY_STATUS_INVALID;
+    }
+    if (core->live_surfaces >= BORING_DISPLAY_SURFACE_MAX) {
+        return BORING_DISPLAY_STATUS_NO_SPACE;
+    }
+    if (core->next_creation_order == 0ULL) {
+        return BORING_DISPLAY_STATUS_INTERNAL;
     }
     for (index = 0U; index < (size_t)BORING_DISPLAY_SURFACE_MAX; ++index) {
         struct boring_display_surface_state *surface = &core->surfaces[index];
@@ -154,6 +161,10 @@ uint32_t boring_display_surface_add(struct boring_display_core *core,
         surface->stride = request->stride;
         surface->buffer_handle = buffer_handle;
         surface->pixels = pixels;
+        surface->creation_order = core->next_creation_order;
+        core->next_creation_order =
+            (core->next_creation_order == UINT64_MAX) ?
+            0ULL : core->next_creation_order + 1ULL;
         surface->active = true;
         ++core->live_surfaces;
         *token_out = token;
@@ -198,6 +209,7 @@ uint32_t boring_display_surface_destroy(struct boring_display_core *core,
     surface->stride = 0U;
     surface->buffer_handle = 0U;
     surface->pixels = NULL;
+    surface->creation_order = 0ULL;
     surface->active = false;
     surface->generation = next_generation(surface->generation);
     if (core->live_surfaces != 0U) {
@@ -232,6 +244,7 @@ size_t boring_display_peer_cleanup(struct boring_display_core *core,
         surface->stride = 0U;
         surface->buffer_handle = 0U;
         surface->pixels = NULL;
+        surface->creation_order = 0ULL;
         surface->active = false;
         surface->generation = next_generation(surface->generation);
         if (core->live_surfaces != 0U) {
@@ -315,6 +328,40 @@ static void compose_surface(const struct boring_display_core *core,
     }
 }
 
+static bool compose_surfaces(const struct boring_display_core *core,
+                             uint8_t *output) {
+    uint64_t previous_order = 0ULL;
+    size_t rendered;
+
+    for (rendered = 0U; rendered < (size_t)core->live_surfaces; ++rendered) {
+        uint64_t best_order = 0ULL;
+        size_t best_index = 0U;
+        bool found = false;
+        size_t index;
+
+        for (index = 0U; index < (size_t)BORING_DISPLAY_SURFACE_MAX; ++index) {
+            const struct boring_display_surface_state *surface =
+                &core->surfaces[index];
+
+            if (!surface->active || (surface->creation_order == 0ULL) ||
+                (surface->creation_order <= previous_order)) {
+                continue;
+            }
+            if (!found || (surface->creation_order < best_order)) {
+                best_order = surface->creation_order;
+                best_index = index;
+                found = true;
+            }
+        }
+        if (!found) {
+            return false;
+        }
+        compose_surface(core, &core->surfaces[best_index], best_index, output);
+        previous_order = best_order;
+    }
+    return true;
+}
+
 static void compose_cursor(const struct boring_display_core *core, uint8_t *output) {
     uint32_t row;
 
@@ -338,11 +385,11 @@ bool boring_display_compose(const struct boring_display_core *core,
                             size_t output_size) {
     uint64_t pixel_count;
     uint64_t pixel;
-    size_t index;
 
     if ((core == NULL) || (output == NULL) ||
         (core->byte_size > (uint64_t)SIZE_MAX) ||
-        (output_size != (size_t)core->byte_size)) {
+        (output_size != (size_t)core->byte_size) ||
+        (core->live_surfaces > BORING_DISPLAY_SURFACE_MAX)) {
         return false;
     }
     pixel_count = (uint64_t)core->width * (uint64_t)core->height;
@@ -353,8 +400,8 @@ bool boring_display_compose(const struct boring_display_core *core,
         output[offset + 2U] = 0x0bU;
         output[offset + 3U] = 0U;
     }
-    for (index = 0U; index < (size_t)BORING_DISPLAY_SURFACE_MAX; ++index) {
-        compose_surface(core, &core->surfaces[index], index, output);
+    if (!compose_surfaces(core, output)) {
+        return false;
     }
     compose_cursor(core, output);
     return true;
