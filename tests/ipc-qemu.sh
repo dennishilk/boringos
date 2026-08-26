@@ -203,9 +203,9 @@ for line in \
 done
 
 for pid in 1 2 3; do
-    grep -Eq "^ipc-test: enter CPL3 pid ${pid} cr3 0x[0-9a-f]+$" "${LOG}" || fail "missing CPL3/CR3 witness for pid ${pid}"
+    grep -Eq "^ipc-test: enter CPL3 pid ${pid} cr3 0x[0-9A-F]+$" "${LOG}" || fail "missing CPL3/CR3 witness for pid ${pid}"
 done
-CR3_COUNT=$(grep -E '^ipc-test: enter CPL3 pid [123] cr3 0x[0-9a-f]+$' "${LOG}" | sed -E 's/.* cr3 //' | sort -u | wc -l)
+CR3_COUNT=$(grep -E '^ipc-test: enter CPL3 pid [123] cr3 0x[0-9A-F]+$' "${LOG}" | sed -E 's/.* cr3 //' | sort -u | wc -l)
 [ "${CR3_COUNT}" -eq 3 ] || fail 'M33 processes did not use three distinct CR3 roots'
 
 ACCOUNTING=$(grep -E '^ipc-test: pmm before=[0-9]+ during=[0-9]+ after=[0-9]+$' "${LOG}" | tail -n 1 || true)
