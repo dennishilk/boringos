@@ -46,9 +46,7 @@ static int cat_file(const char *path) {
     uint32_t fd;
 
     if (opened < 0L) {
-        (void)cat_write_text(BORING_FD_STDERR, "cat: ");
-        (void)cat_write_text(BORING_FD_STDERR, path);
-        (void)cat_write_text(BORING_FD_STDERR, ": cannot open\r\n");
+        (void)cat_write_text(BORING_FD_STDERR, "cat: cannot open\r\n");
         return 1;
     }
     fd = (uint32_t)opened;
