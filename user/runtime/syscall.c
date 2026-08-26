@@ -231,3 +231,50 @@ long boring_waitpid(uint64_t pid, int *status) {
         : "rcx", "r11", "cc", "memory");
     return result;
 }
+
+long boring_fd_open(const char *path, size_t path_length, uint32_t flags) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_FD_OPEN), "D"(path), "S"(path_length),
+          "d"((uint64_t)flags)
+        : "rcx", "r11", "cc", "memory");
+    return result;
+}
+
+long boring_fd_read(uint32_t fd, void *buffer, size_t capacity) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_FD_READ), "D"((uint64_t)fd),
+          "S"(buffer), "d"(capacity)
+        : "rcx", "r11", "cc", "memory");
+    return result;
+}
+
+long boring_fd_write(uint32_t fd, const void *buffer, size_t length) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_FD_WRITE), "D"((uint64_t)fd),
+          "S"(buffer), "d"(length)
+        : "rcx", "r11", "cc", "memory");
+    return result;
+}
+
+long boring_fd_close(uint32_t fd) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_FD_CLOSE), "D"((uint64_t)fd)
+        : "rcx", "r11", "cc", "memory");
+    return result;
+}
