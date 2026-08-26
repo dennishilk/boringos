@@ -1,0 +1,36 @@
+name: M33 temporary integration helper
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/native-ipc-service-foundation
+    paths:
+      - tools/m33_apply.py
+      - .github/workflows/m33-integration-helper.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/native-ipc-service-foundation
+          fetch-depth: 0
+      - name: Apply deterministic M33 integration patch
+        run: python3 tools/m33_apply.py
+      - name: Commit generated integration changes
+        run: |
+          if git diff --quiet; then
+            echo 'No integration changes required.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Apply M33 integration patch'
+          git push origin HEAD:agent/native-ipc-service-foundation
