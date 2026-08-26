@@ -1,36 +1,35 @@
-name: M31 integration patch
+name: M31 focused proof
 
 on:
   push:
     branches:
       - agent/native-input-foundation
-
-permissions:
-  contents: write
+  workflow_dispatch:
 
 jobs:
-  patch:
+  focused:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/native-input-foundation
-          fetch-depth: 0
-      - name: Apply bounded M31 integration edits
+      - name: Install focused build and QEMU dependencies
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('tests/m31-integrate.py')
-          text = path.read_text()
-          text = text.replace('<boring/heap.h>', '<boring/fd.h>')
-          path.write_text(text)
-          PY
-          python3 tests/m31-integrate.py
-          git diff --check
-      - name: Commit integration result
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add Makefile kernel user tests/boringfs-fixture.c tests/input-host-test.c
-          git commit -m 'Integrate native input through IRQ and Ring 3'
-          git push origin HEAD:agent/native-input-foundation
+          sudo apt-get update
+          sudo apt-get install -y build-essential binutils curl xorriso qemu-system-x86
+      - name: Build kernel
+        run: make kernel
+      - name: Native input decoder and queue host tests
+        run: make input-host-test
+      - name: Standalone input-test ELF audit
+        run: sh ./tests/input-test-build-audit.sh
+      - name: Existing CPL3 syscall acceptance
+        run: sh ./tests/syscall-qemu.sh
+      - name: Real PS/2 keyboard and mouse userspace input
+        run: sh ./tests/input-qemu.sh
+      - name: Persistent BoringFS root regression
+        run: sh ./tests/persistent-root-qemu.sh
+      - name: Descriptor and cat regression
+        run: sh ./tests/fd-stdio-qemu.sh
+      - name: Framebuffer regression
+        run: sh ./tests/framebuffer-qemu.sh
