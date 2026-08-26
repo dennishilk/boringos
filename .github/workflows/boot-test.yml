@@ -24,6 +24,9 @@ jobs:
       - name: Standalone boringfetch build audit
         run: sh ./tests/boringfetch-build-audit.sh
 
+      - name: Standalone cat ELF audit
+        run: sh ./tests/cat-build-audit.sh
+
       - name: Audit generated native C runtime artifact
         run: sh ./tests/runtime-build-audit.sh
 
@@ -81,6 +84,9 @@ jobs:
       - name: Bounded shell editor and completion host tests
         run: make shell-host-test
 
+      - name: Native descriptor host tests
+        run: make fd-host-test
+
       - name: Build boring-shell test mode
         run: make TEST_MODE=shell
 
@@ -110,6 +116,9 @@ jobs:
 
       - name: Persistent BoringFS root human boot
         run: sh ./tests/persistent-root-qemu.sh
+
+      - name: Native descriptor and standalone cat verification
+        run: sh ./tests/fd-stdio-qemu.sh
 
       - name: Writable BoringFS allocation and rollback matrix
         run: make boringfs-vfs-host-test
