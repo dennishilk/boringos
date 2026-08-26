@@ -114,6 +114,17 @@ int boring_main(void) {
     }
     say("display-client-a: live COMMIT acknowledged\n");
 
+    /*
+     * Stay alive until boring-display has produced the deterministic visual
+     * witness with both clients and the real cursor. The service then sends
+     * one ordinary protocol reply solely as the M34 acceptance release.
+     */
+    reply = receive_reply(endpoint);
+    if ((reply.status != BORING_DISPLAY_STATUS_OK) ||
+        (reply.surface_token != BORING_DISPLAY_SURFACE_INVALID)) {
+        fail("visual witness release");
+    }
+
     /* Leave endpoint, mapping and original handle for process-exit cleanup. */
     say("display-client-a: exiting without destroy\n");
     boring_exit(0);
