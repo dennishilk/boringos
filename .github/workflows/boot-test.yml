@@ -206,8 +206,11 @@ jobs:
       - name: Read-only boringfsck inspector
         run: make boringfsck-test
 
-      - name: Build human-runnable QEMU bundle
-        run: make qemu-bundle
+      - name: M34 BoringFS bundle geometry and exact contents
+        run: sh ./tests/m34-bundle-test.sh
+
+      - name: Build human-runnable M34 QEMU bundle
+        run: sh ./tests/build-m34-qemu-bundle.sh
 
       - name: Upload human-runnable QEMU bundle
         uses: actions/upload-artifact@v4
