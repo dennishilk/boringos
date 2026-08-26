@@ -44,6 +44,10 @@
 #define BORING_SYS_IPC_SEND 34
 #define BORING_SYS_IPC_RECEIVE 35
 #define BORING_SYS_IPC_CLOSE 36
+#define BORING_SYS_BUFFER_INFO 37
+#define BORING_SYS_FRAMEBUFFER_CLAIM 38
+#define BORING_SYS_FRAMEBUFFER_PRESENT 39
+#define BORING_SYS_FRAMEBUFFER_RELEASE 40
 
 #define BORING_SYSCALL_DEBUG_WRITE_MAX 64
 #define BORING_SYSCALL_CONSOLE_IO_MAX 64
@@ -201,6 +205,14 @@ _Static_assert(BORING_SYS_IPC_RECEIVE == 35,
                "IPC_RECEIVE syscall number contract changed");
 _Static_assert(BORING_SYS_IPC_CLOSE == 36,
                "IPC_CLOSE syscall number contract changed");
+_Static_assert(BORING_SYS_BUFFER_INFO == 37,
+               "BUFFER_INFO syscall number contract changed");
+_Static_assert(BORING_SYS_FRAMEBUFFER_CLAIM == 38,
+               "FRAMEBUFFER_CLAIM syscall number contract changed");
+_Static_assert(BORING_SYS_FRAMEBUFFER_PRESENT == 39,
+               "FRAMEBUFFER_PRESENT syscall number contract changed");
+_Static_assert(BORING_SYS_FRAMEBUFFER_RELEASE == 40,
+               "FRAMEBUFFER_RELEASE syscall number contract changed");
 _Static_assert(sizeof(struct boring_ipc_receive_result) == 16U,
                "M33 IPC receive ABI size must remain fixed");
 _Static_assert(sizeof(struct boring_system_info) == 256U,
