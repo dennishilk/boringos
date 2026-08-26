@@ -109,10 +109,12 @@ def main() -> int:
                   "Client A retained surface content")
     require_pixel(pixels, width, height, 100, 100, CLIENT_A,
                   "Client A surface interior")
+    require_pixel(pixels, width, height, 179, 140, CLIENT_A,
+                  "Client A immediately before overlap")
     require_pixel(pixels, width, height, 180, 140, CLIENT_B,
-                  "Client B surface origin")
+                  "creation-order overlap: Client B above Client A")
     require_pixel(pixels, width, height, 200, 160, CLIENT_B,
-                  "Client B surface interior")
+                  "Client B overlap interior")
     require_pixel(pixels, width, height, 40, 30, CURSOR_EDGE,
                   "software cursor anchor")
     require_pixel(pixels, width, height, 41, 34, CURSOR_FILL,
@@ -133,7 +135,7 @@ def main() -> int:
 
     if counts[BACKGROUND] < (width * height) // 2:
         die("dark desktop does not dominate framebuffer")
-    if counts[CLIENT_A] < 4000:
+    if counts[CLIENT_A] < 12000:
         die(f"Client A region incomplete: only {counts[CLIENT_A]} expected-color pixels")
     if counts[CLIENT_A_UPDATED] < 1:
         die("live Client A updated pixel is absent")
