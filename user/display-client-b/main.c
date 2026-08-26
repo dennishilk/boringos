@@ -13,6 +13,8 @@
 #define SURFACE_BYTES ((size_t)SURFACE_STRIDE * (size_t)SURFACE_HEIGHT)
 #define CLIENT_A_FIRST_TOKEN 0x00000101U
 
+int boring_main(void);
+
 static void say(const char *text) {
     (void)boring_debug_write(text, boring_strlen(text));
 }
