@@ -116,7 +116,9 @@ static bool test_rgb_packing(void) {
     struct boring_framebuffer surface32;
     struct boring_framebuffer surface24;
     uint8_t tiny32[4];
-    uint8_t tiny24[3];
+    uint8_t guarded24[11];
+    uint32_t packed24;
+    size_t index;
 
     if (!boring_framebuffer_surface_init(
             &surface32, tiny32, 1ULL, 1ULL, 4ULL, 32U,
@@ -125,12 +127,30 @@ static bool test_rgb_packing(void) {
         boring_color_pack(&surface32, 0x3aU, 0xcdU, 0xdcU) != 0x003acddcU) {
         return false;
     }
+
+    for (index = 0U; index < sizeof(guarded24); ++index) {
+        guarded24[index] = 0x6cU;
+    }
     if (!boring_framebuffer_surface_init(
-            &surface24, tiny24, 1ULL, 1ULL, 3ULL, 24U,
+            &surface24, &guarded24[4], 1ULL, 1ULL, 3ULL, 24U,
             BORING_FRAMEBUFFER_MEMORY_MODEL_RGB,
-            8U, 16U, 8U, 8U, 8U, 0U) ||
-        boring_color_pack(&surface24, 0x72U, 0xd6U, 0x8aU) != 0x0072d68aU) {
+            8U, 16U, 8U, 8U, 8U, 0U)) {
         return false;
+    }
+    packed24 = boring_color_pack(&surface24, 0x72U, 0xd6U, 0x8aU);
+    if ((packed24 != 0x0072d68aU) ||
+        !boring_graphics_put_pixel(&surface24, 0ULL, 0ULL, packed24) ||
+        (guarded24[4] != 0x8aU) ||
+        (guarded24[5] != 0xd6U) ||
+        (guarded24[6] != 0x72U) ||
+        boring_graphics_put_pixel(&surface24, 1ULL, 0ULL, packed24)) {
+        return false;
+    }
+    for (index = 0U; index < 4U; ++index) {
+        if ((guarded24[index] != 0x6cU) ||
+            (guarded24[7U + index] != 0x6cU)) {
+            return false;
+        }
     }
     return true;
 }
@@ -219,7 +239,11 @@ static bool test_font(void) {
     foreground = boring_color_pack(&surface, 232U, 239U, 242U);
     if (!boring_pixel_font_draw_char(&surface, 0ULL, 0ULL, 'A', foreground, 1U) ||
         !boring_pixel_font_draw_text(&surface, 8ULL, 0ULL, "aZ09", foreground) ||
-        !boring_pixel_font_draw_text_scaled(&surface, 0ULL, 10ULL, "B/", foreground, 2U)) {
+        !boring_pixel_font_draw_text_scaled(&surface, 0ULL, 10ULL, "B/", foreground, 2U) ||
+        !boring_pixel_font_draw_char(&surface, FONT_WIDTH - 2ULL,
+                                     FONT_HEIGHT - 2ULL, 'X', foreground, 2U) ||
+        boring_pixel_font_draw_char(&surface, UINT64_MAX - 1ULL,
+                                    UINT64_MAX - 1ULL, 'A', foreground, 4U)) {
         return false;
     }
     for (index = 16U; index < sizeof(guarded) - 16U; ++index) {
@@ -245,7 +269,7 @@ int main(void) {
         return 1;
     }
     if (!test_rgb_packing()) {
-        fail("rgb-packing");
+        fail("rgb-packing-24bpp");
         return 1;
     }
     if (!test_primitives_and_canaries()) {
@@ -253,7 +277,7 @@ int main(void) {
         return 1;
     }
     if (!test_font()) {
-        fail("font-clipping");
+        fail("font-clipping-overflow");
         return 1;
     }
 
