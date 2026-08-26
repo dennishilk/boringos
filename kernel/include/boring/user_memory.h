@@ -55,6 +55,27 @@ struct user_memory_process_state {
     struct user_memory_buffer_mapping mappings[USER_MEMORY_BUFFER_MAPPING_MAX];
 };
 
+/*
+ * Kernel-internal M33 grant token. It carries no userspace authority and is
+ * never exposed through the ABI. One active token owns exactly one retained
+ * reference to an existing M32 buffer backing object.
+ */
+struct user_buffer_retained_ref {
+    uint32_t object_index;
+    bool active;
+};
+
+/*
+ * Receive-side reservation for transactional capability installation. No
+ * handle-table mutation occurs until user_buffer_commit_install().
+ */
+struct user_buffer_install_ticket {
+    uint32_t object_index;
+    uint32_t generation;
+    uint16_t slot;
+    bool active;
+};
+
 struct user_memory_cleanup_stats {
     uint32_t allocations_released;
     uint32_t mappings_released;
@@ -87,6 +108,27 @@ enum user_memory_result user_buffer_unmap(struct process *process,
                                            uintptr_t base);
 enum user_memory_result user_buffer_close(struct process *process,
                                            uint32_t handle);
+
+void user_buffer_retained_ref_clear(struct user_buffer_retained_ref *reference);
+bool user_buffer_retained_ref_active(
+    const struct user_buffer_retained_ref *reference);
+enum user_memory_result user_buffer_retain(
+    struct process *process,
+    uint32_t handle,
+    struct user_buffer_retained_ref *reference_out);
+enum user_memory_result user_buffer_release_retained(
+    struct user_buffer_retained_ref *reference);
+void user_buffer_install_ticket_clear(struct user_buffer_install_ticket *ticket);
+enum user_memory_result user_buffer_prepare_install(
+    struct process *process,
+    const struct user_buffer_retained_ref *reference,
+    struct user_buffer_install_ticket *ticket_out,
+    uint32_t *handle_out);
+enum user_memory_result user_buffer_commit_install(
+    struct process *process,
+    struct user_buffer_retained_ref *reference,
+    struct user_buffer_install_ticket *ticket);
+
 enum user_memory_result user_memory_process_cleanup(
     struct process *process,
     struct user_memory_cleanup_stats *stats);
