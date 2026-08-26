@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include <boring/display_abi.h>
+#include <boring/syscall_abi.h>
 
 struct boring_display_surface_state {
     uint32_t owner_endpoint;
