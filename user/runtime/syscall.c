@@ -311,3 +311,82 @@ long boring_input_release(void) {
         : "rcx", "r11", "cc", "memory");
     return result;
 }
+
+
+long boring_memory_alloc_raw(size_t size) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_MEMORY_ALLOC), "D"(size)
+        : "rcx", "r11", "cc", "memory");
+    return result;
+}
+
+void *boring_memory_alloc(size_t size) {
+    const long result = boring_memory_alloc_raw(size);
+
+    return (result > 0L) ? (void *)(uintptr_t)result : NULL;
+}
+
+long boring_memory_free(void *base) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_MEMORY_FREE), "D"(base)
+        : "rcx", "r11", "cc", "memory");
+    return result;
+}
+
+long boring_buffer_create(size_t size) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_BUFFER_CREATE), "D"(size)
+        : "rcx", "r11", "cc", "memory");
+    return result;
+}
+
+long boring_buffer_map_raw(uint32_t handle) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_BUFFER_MAP), "D"((uint64_t)handle)
+        : "rcx", "r11", "cc", "memory");
+    return result;
+}
+
+void *boring_buffer_map(uint32_t handle) {
+    const long result = boring_buffer_map_raw(handle);
+
+    return (result > 0L) ? (void *)(uintptr_t)result : NULL;
+}
+
+long boring_buffer_unmap(void *base) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_BUFFER_UNMAP), "D"(base)
+        : "rcx", "r11", "cc", "memory");
+    return result;
+}
+
+long boring_buffer_close(uint32_t handle) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_BUFFER_CLOSE), "D"((uint64_t)handle)
+        : "rcx", "r11", "cc", "memory");
+    return result;
+}

@@ -55,6 +55,7 @@ static void process_clear(struct process *process) {
     if (process->cwd_valid) {
         (void)vfs_path_release(&process->cwd);
     }
+    user_memory_process_state_init(&process->user_memory);
     process->pid = 0ULL;
     process->parent_pid = 0ULL;
     process->address_space.root_physical = 0ULL;
@@ -117,7 +118,8 @@ bool process_init(void) {
     for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
         process_clear(&processes[index]);
     }
-    if (!address_space_system_init(&bootstrap_process.address_space)) {
+    if (!user_memory_system_init() ||
+        !address_space_system_init(&bootstrap_process.address_space)) {
         process_clear(&bootstrap_process);
         process_restore_interrupts(interrupts_were_enabled);
         return false;
@@ -225,6 +227,7 @@ bool process_discard_unstarted(struct process *process) {
         (process->pid == 0ULL) || (process->pid == UINT64_MAX) ||
         (next_pid != (process->pid + 1ULL)) ||
         (created_process_count == 0ULL) ||
+        !user_memory_process_state_empty(&process->user_memory) ||
         !address_space_destroy(&process->address_space)) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
@@ -258,6 +261,7 @@ bool process_mark_finished(struct process *process) {
     x86_64_interrupts_disable();
     if ((!process_initialized) || !process_is_regular(process) ||
         (process->state != PROCESS_ALIVE) || (current_process == process) ||
+        !user_memory_process_state_empty(&process->user_memory) ||
         !kernel_fd_table_destroy(&process->fd_table)) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
@@ -274,6 +278,7 @@ bool process_destroy(struct process *process) {
     x86_64_interrupts_disable();
     if ((!process_initialized) || !process_is_regular(process) ||
         (process->state != PROCESS_FINISHED) || (current_process == process) ||
+        !user_memory_process_state_empty(&process->user_memory) ||
         !address_space_destroy(&process->address_space)) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;

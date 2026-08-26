@@ -30,6 +30,9 @@ jobs:
       - name: Standalone input-test ELF audit
         run: sh ./tests/input-test-build-audit.sh
 
+      - name: Standalone memory-test ELF audit
+        run: sh ./tests/memory-test-build-audit.sh
+
       - name: Audit generated native C runtime artifact
         run: sh ./tests/runtime-build-audit.sh
 
@@ -96,6 +99,9 @@ jobs:
       - name: Native input decoder and queue host tests
         run: make input-host-test
 
+      - name: M32 userspace memory shared-buffer and runtime heap host tests
+        run: make memory-host-test
+
       - name: Build boring-shell test mode
         run: make TEST_MODE=shell
 
@@ -131,6 +137,9 @@ jobs:
 
       - name: Real PS/2 keyboard and mouse userspace input
         run: sh ./tests/input-qemu.sh
+
+      - name: Real userspace memory allocation and shared buffers
+        run: sh ./tests/memory-qemu.sh
 
       - name: Real Limine framebuffer and BoringOS dashboard
         run: sh ./tests/framebuffer-qemu.sh

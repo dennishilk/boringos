@@ -32,6 +32,12 @@
 #define BORING_SYS_INPUT_CLAIM 22
 #define BORING_SYS_INPUT_READ 23
 #define BORING_SYS_INPUT_RELEASE 24
+#define BORING_SYS_MEMORY_ALLOC 25
+#define BORING_SYS_MEMORY_FREE 26
+#define BORING_SYS_BUFFER_CREATE 27
+#define BORING_SYS_BUFFER_MAP 28
+#define BORING_SYS_BUFFER_UNMAP 29
+#define BORING_SYS_BUFFER_CLOSE 30
 
 #define BORING_SYSCALL_DEBUG_WRITE_MAX 64
 #define BORING_SYSCALL_CONSOLE_IO_MAX 64
@@ -42,6 +48,15 @@
 #define BORING_SYSCALL_FS_IO_MAX 4096
 #define BORING_SYSCALL_FD_IO_MAX 4096
 #define BORING_SYSCALL_CWD_MAX 1024
+
+#define BORING_MEMORY_PAGE_SIZE 4096ULL
+#define BORING_MEMORY_ALLOC_MAX_BYTES (16ULL * 1024ULL * 1024ULL)
+#define BORING_BUFFER_MAX_BYTES (64ULL * 1024ULL * 1024ULL)
+#define BORING_MEMORY_ALLOCATION_MAX 32U
+#define BORING_BUFFER_HANDLE_MAX 32U
+#define BORING_BUFFER_MAPPING_MAX 32U
+#define BORING_BUFFER_OBJECT_MAX 64U
+#define BORING_BUFFER_HANDLE_INVALID 0U
 
 #define BORING_FD_STDIN 0U
 #define BORING_FD_STDOUT 1U
@@ -83,6 +98,7 @@
 #define BORING_SYSCALL_EIO 13
 #define BORING_SYSCALL_EISDIR 14
 #define BORING_SYSCALL_ENOEXEC 15
+#define BORING_SYSCALL_ENOMEM 16
 
 #ifndef __ASSEMBLER__
 
@@ -142,6 +158,18 @@ _Static_assert(BORING_SYS_INPUT_READ == 23,
                "INPUT_READ syscall number contract changed");
 _Static_assert(BORING_SYS_INPUT_RELEASE == 24,
                "INPUT_RELEASE syscall number contract changed");
+_Static_assert(BORING_SYS_MEMORY_ALLOC == 25,
+               "MEMORY_ALLOC syscall number contract changed");
+_Static_assert(BORING_SYS_MEMORY_FREE == 26,
+               "MEMORY_FREE syscall number contract changed");
+_Static_assert(BORING_SYS_BUFFER_CREATE == 27,
+               "BUFFER_CREATE syscall number contract changed");
+_Static_assert(BORING_SYS_BUFFER_MAP == 28,
+               "BUFFER_MAP syscall number contract changed");
+_Static_assert(BORING_SYS_BUFFER_UNMAP == 29,
+               "BUFFER_UNMAP syscall number contract changed");
+_Static_assert(BORING_SYS_BUFFER_CLOSE == 30,
+               "BUFFER_CLOSE syscall number contract changed");
 _Static_assert(sizeof(struct boring_system_info) == 256U,
                "BoringOS system-info ABI size must remain fixed");
 _Static_assert(sizeof(struct boring_process_info) == 56U,

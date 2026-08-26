@@ -5,7 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define FIXTURE_BLOCKS 64U
+#define HISTORICAL_FIXTURE_BLOCKS 64U
+#define M32_FIXTURE_BLOCKS 80U
 #define FIXTURE_OBJECTS BORINGFS_MIN_OBJECTS
 #define ROOT_BLOCK 4U
 #define DOCS_BLOCK 5U
@@ -23,7 +24,11 @@
 #define PROGRAM_SLOT_BLOCKS 16U
 #define CAT_BLOCK0 (BORINGFETCH_BLOCK0 + PROGRAM_SLOT_BLOCKS)
 #define INPUT_TEST_BLOCK0 (CAT_BLOCK0 + PROGRAM_SLOT_BLOCKS)
+#define MEMORY_TEST_BLOCK0 (INPUT_TEST_BLOCK0 + PROGRAM_SLOT_BLOCKS)
 #define ARCH_SIZE 4200U
+
+static uint32_t fixture_blocks = HISTORICAL_FIXTURE_BLOCKS;
+#define FIXTURE_BLOCKS fixture_blocks
 
 static const char readme_text[] = "Welcome to BoringOS.\n";
 static const char hello_text[] = "Hello from BoringFS on VirtIO.\n";
@@ -193,20 +198,25 @@ static bool build_valid(uint8_t *volume, size_t volume_size,
                         const uint8_t *cat_bytes,
                         size_t cat_size,
                         const uint8_t *input_test_bytes,
-                        size_t input_test_size) {
+                        size_t input_test_size,
+                        const uint8_t *memory_test_bytes,
+                        size_t memory_test_size) {
     struct boringfs_superblock superblock;
     struct boringfs_extent extent[2];
     uint32_t block;
     uint32_t boringfetch_blocks = 0U;
     uint32_t cat_blocks = 0U;
     uint32_t input_test_blocks = 0U;
+    uint32_t memory_test_blocks = 0U;
     size_t index;
     const bool have_boringfetch = (boringfetch_bytes != NULL);
     const bool have_cat = (cat_bytes != NULL);
     const bool have_input_test = (input_test_bytes != NULL);
+    const bool have_memory_test = (memory_test_bytes != NULL);
 
     if ((have_cat && !have_boringfetch) ||
-        (have_input_test && !have_cat)) {
+        (have_input_test && !have_cat) ||
+        (have_memory_test && !have_input_test)) {
         return false;
     }
     if (have_boringfetch) {
@@ -230,6 +240,14 @@ static bool build_valid(uint8_t *volume, size_t volume_size,
             return false;
         }
     } else if (input_test_size != 0U) {
+        return false;
+    }
+    if (have_memory_test) {
+        if (!fixture_program_blocks(memory_test_size, MEMORY_TEST_BLOCK0,
+                                    &memory_test_blocks)) {
+            return false;
+        }
+    } else if (memory_test_size != 0U) {
         return false;
     }
 
@@ -267,6 +285,12 @@ static bool build_valid(uint8_t *volume, size_t volume_size,
     if (have_input_test) {
         for (block = INPUT_TEST_BLOCK0;
              block < INPUT_TEST_BLOCK0 + input_test_blocks; ++block) {
+            bitmap_set(volume, block, true);
+        }
+    }
+    if (have_memory_test) {
+        for (block = MEMORY_TEST_BLOCK0;
+             block < MEMORY_TEST_BLOCK0 + memory_test_blocks; ++block) {
             bitmap_set(volume, block, true);
         }
     }
@@ -345,8 +369,9 @@ static bool build_valid(uint8_t *volume, size_t volume_size,
         extent[0].block_count = 1U;
         if (!make_object(volume, volume_size, &superblock, 11U, 1U,
                          BORINGFS_TYPE_DIRECTORY,
-                         (have_input_test ? 3ULL :
-                          (have_cat ? 2ULL : 1ULL)) *
+                         (have_memory_test ? 4ULL :
+                          (have_input_test ? 3ULL :
+                           (have_cat ? 2ULL : 1ULL))) *
                              (uint64_t)BORINGFS_DIRECTORY_RECORD_SIZE,
                          extent, 1U)) {
             return false;
@@ -373,6 +398,15 @@ static bool build_valid(uint8_t *volume, size_t volume_size,
             if (!make_object(volume, volume_size, &superblock, 14U, 11U,
                              BORINGFS_TYPE_REGULAR,
                              (uint64_t)input_test_size, extent, 1U)) {
+                return false;
+            }
+        }
+        if (have_memory_test) {
+            extent[0].start_block = MEMORY_TEST_BLOCK0;
+            extent[0].block_count = memory_test_blocks;
+            if (!make_object(volume, volume_size, &superblock, 15U, 11U,
+                             BORINGFS_TYPE_REGULAR,
+                             (uint64_t)memory_test_size, extent, 1U)) {
                 return false;
             }
         }
@@ -408,7 +442,10 @@ static bool build_valid(uint8_t *volume, size_t volume_size,
                         BORINGFS_TYPE_REGULAR, "cat")) ||
          (have_input_test &&
           !write_dirent(volume, volume_size, BIN_BLOCK, 2ULL, 14U,
-                        BORINGFS_TYPE_REGULAR, "input-test")))) {
+                        BORINGFS_TYPE_REGULAR, "input-test")) ||
+         (have_memory_test &&
+          !write_dirent(volume, volume_size, BIN_BLOCK, 3ULL, 15U,
+                        BORINGFS_TYPE_REGULAR, "memory-test")))) {
         return false;
     }
 
@@ -432,6 +469,10 @@ static bool build_valid(uint8_t *volume, size_t volume_size,
     if (have_input_test) {
         (void)memcpy(&volume[(size_t)INPUT_TEST_BLOCK0 * BORINGFS_BLOCK_SIZE],
                      input_test_bytes, input_test_size);
+    }
+    if (have_memory_test) {
+        (void)memcpy(&volume[(size_t)MEMORY_TEST_BLOCK0 * BORINGFS_BLOCK_SIZE],
+                     memory_test_bytes, memory_test_size);
     }
     for (index = 0U; index < ARCH_SIZE; ++index) {
         const uint32_t block_number = (index < BORINGFS_BLOCK_SIZE) ?
@@ -502,7 +543,7 @@ static void corrupt(uint8_t *volume, const char *kind) {
 
 static enum boringfs_validation_result validate_fixture(
     const uint8_t *volume, size_t volume_size) {
-    uint32_t block_owner[FIXTURE_BLOCKS];
+    uint32_t block_owner[M32_FIXTURE_BLOCKS];
     uint8_t reference_count[FIXTURE_OBJECTS];
     const struct boringfs_validation_workspace workspace = {
         .block_owner = block_owner,
@@ -565,24 +606,30 @@ static int write_image(const char *path, const uint8_t *volume, size_t size) {
 
 int main(int argc, char **argv) {
     const size_t volume_size =
-        (size_t)FIXTURE_BLOCKS * (size_t)BORINGFS_BLOCK_SIZE;
+        (size_t)((argc == 7) ? M32_FIXTURE_BLOCKS :
+                 HISTORICAL_FIXTURE_BLOCKS) *
+        (size_t)BORINGFS_BLOCK_SIZE;
     uint8_t *volume;
     uint8_t *boringfetch_bytes = NULL;
     uint8_t *cat_bytes = NULL;
     uint8_t *input_test_bytes = NULL;
+    uint8_t *memory_test_bytes = NULL;
     size_t boringfetch_size = 0U;
     size_t cat_size = 0U;
     size_t input_test_size = 0U;
+    size_t memory_test_size = 0U;
     enum boringfs_validation_result result;
     const char *kind;
     int status;
 
-    if ((argc < 3) || (argc > 6)) {
+    if ((argc < 3) || (argc > 7)) {
         (void)fprintf(stderr,
-                      "usage: %s <output> <valid|bad-magic|bad-geometry|bad-bitmap|bad-object|bad-extent|bad-directory> [boringfetch-elf [cat-elf [input-test-elf]]]\n",
+                      "usage: %s <output> <valid|bad-magic|bad-geometry|bad-bitmap|bad-object|bad-extent|bad-directory> [boringfetch-elf [cat-elf [input-test-elf [memory-test-elf]]]]\n",
                       argv[0]);
         return 2;
     }
+    fixture_blocks = (argc == 7) ? M32_FIXTURE_BLOCKS :
+                                   HISTORICAL_FIXTURE_BLOCKS;
     kind = argv[2];
     if ((argc > 3) && (strcmp(kind, "valid") != 0)) {
         (void)fputs("program ELFs are supported only for valid fixtures\n",
@@ -611,11 +658,19 @@ int main(int argc, char **argv) {
         (void)fprintf(stderr, "cannot read bounded cat ELF: %s\n", argv[4]);
         return 2;
     }
-    if ((argc == 6) &&
+    if ((argc >= 6) &&
         !read_program(argv[5], &input_test_bytes, &input_test_size)) {
         free(cat_bytes);
         free(boringfetch_bytes);
         (void)fprintf(stderr, "cannot read bounded input-test ELF: %s\n", argv[5]);
+        return 2;
+    }
+    if ((argc == 7) &&
+        !read_program(argv[6], &memory_test_bytes, &memory_test_size)) {
+        free(input_test_bytes);
+        free(cat_bytes);
+        free(boringfetch_bytes);
+        (void)fprintf(stderr, "cannot read bounded memory-test ELF: %s\n", argv[6]);
         return 2;
     }
     volume = (uint8_t *)malloc(volume_size);
@@ -623,7 +678,9 @@ int main(int argc, char **argv) {
         !build_valid(volume, volume_size,
                      boringfetch_bytes, boringfetch_size,
                      cat_bytes, cat_size,
-                     input_test_bytes, input_test_size)) {
+                     input_test_bytes, input_test_size,
+                     memory_test_bytes, memory_test_size)) {
+        free(memory_test_bytes);
         free(input_test_bytes);
         free(cat_bytes);
         free(boringfetch_bytes);
@@ -631,6 +688,7 @@ int main(int argc, char **argv) {
         (void)fputs("fixture construction failed\n", stderr);
         return 2;
     }
+    free(memory_test_bytes);
     free(input_test_bytes);
     free(cat_bytes);
     free(boringfetch_bytes);

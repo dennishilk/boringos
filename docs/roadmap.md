@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.32-dev
+BoringKernel 0.0.33-dev
 ```
 
 The current syscall ABI is exactly:
@@ -106,15 +106,24 @@ The current syscall ABI is exactly:
 22 INPUT_CLAIM
 23 INPUT_READ
 24 INPUT_RELEASE
+25 MEMORY_ALLOC
+26 MEMORY_FREE
+27 BUFFER_CREATE
+28 BUFFER_MAP
+29 BUFFER_UNMAP
+30 BUFFER_CLOSE
 ```
 
 VFS-backed executable loading and standalone `/bin/boringfetch` are real
 since Milestone 28. Milestone 29 adds the bounded per-process descriptor and
 standard-I/O foundation plus standalone `/bin/cat`; Milestone 30 adds optional
 kernel framebuffer output; Milestone 31 adds bounded native PS/2 keyboard/mouse
-events and exclusive blocking userspace input ownership. There is still no
-partition layer, networking, cursor, display server, terminal graphics stack or
-GUI/window system.
+events and exclusive blocking userspace input ownership. Milestone 32 adds
+bounded dynamic anonymous Ring-3 memory, the minimal native userspace heap and
+generic kernel-owned shared byte buffers with process-local capability handles,
+multiple alias mappings and process-exit reclamation. There is still no partition
+layer, networking, cross-process buffer transfer, service registry, cursor, display
+server, terminal graphics stack or GUI/window system.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -806,3 +815,40 @@ M31 does not add a cursor, framebuffer mapping for userspace, `boring-display`,
 a terminal graphics stack, GUI clients, BoringWM, USB input, general HID, SMP
 input routing or Milestone 32 implementation. The next roadmap target is the
 native display/compositor/window-system foundation; it is not part of M31.
+
+
+---
+
+# Stage 16 — dynamic userspace memory foundation
+
+## Milestone 32: dynamic userspace memory and shared buffers — COMPLETE
+
+Milestone 32 adds real bounded anonymous data memory to ordinary Ring-3 processes. New PMM frames are explicitly zero-filled before they become user-accessible and are mapped writable + NX through the existing checked Ring-3 mapper. Per-process allocation state is fixed at 32 metadata slots, individual anonymous allocations are bounded to 16 MiB, and partial failures roll back rather than publishing incomplete state.
+
+The freestanding runtime now has a minimal native heap (`boring_malloc`, `boring_calloc`, `boring_free`) backed by the new anonymous-memory ABI. It uses 16-byte alignment, first-fit reuse, splitting and same-arena coalescing without introducing libc or a POSIX memory contract.
+
+M32 also adds generic kernel-owned shared byte-buffer objects. A process receives a generation-bearing process-local capability handle; the same handle can be mapped multiple times to create real aliases of the same backing frames. Handle references and mapping references have independent lifetimes: closing the handle does not invalidate existing mappings, and storage is reclaimed only after the final handle/mapping reference disappears. Process exit explicitly reclaims forgotten anonymous allocations, mappings and handles.
+
+The new provisional ABI slots are exactly:
+
+```text
+25 MEMORY_ALLOC
+26 MEMORY_FREE
+27 BUFFER_CREATE
+28 BUFFER_MAP
+29 BUFFER_UNMAP
+30 BUFFER_CLOSE
+```
+
+The standalone static `/bin/memory-test` proves the real Ring-3 path, including zero-fill, allocation/read-write, shared-buffer aliasing, handle-vs-mapping lifetime, negative cases and exit reclamation. Permanent CI contains the memory-test build audit, the M32 kernel/runtime host tests and real QEMU memory acceptance while preserving the full historical fixture and regression suite. The historical 64-block BoringFS fixture geometry remains unchanged unless `/bin/memory-test` is deliberately seeded into the enlarged fixture.
+
+Semantic Freeze acceptance record:
+
+```text
+implementation SHA: a494a800818f14bb375bee5674dcd27d8bfb82ee
+implementation tree: 4dd1b01c40d49a8447fd7fc52a047b7a40383d9e
+exact-head Semantic Freeze CI: Run #338 / 32959154779 / SUCCESS
+final version after closeout: BoringKernel 0.0.33-dev
+```
+
+M32 buffers are generic bytes only. Milestone 32 does **not** add cross-process buffer/capability transfer, IPC, a service registry, display or surface semantics, cursor work, `boring-display`, a compositor, BoringWM or terminal work. Those boundaries remain deferred; Milestone 33 was not started as part of M32.
