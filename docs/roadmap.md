@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.30-dev
+BoringKernel 0.0.31-dev
 ```
 
 The current syscall ABI is exactly:
