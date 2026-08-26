@@ -82,6 +82,17 @@ qmp_input() {
         fail "QMP input injection failed: $*"
 }
 
+qmp_move_steps() {
+    dx=$1
+    dy=$2
+    steps=$3
+    step=0
+    while [ "${step}" -lt "${steps}" ]; do
+        qmp_input move "${dx}" "${dy}"
+        step=$((step + 1))
+    done
+}
+
 require_line() {
     grep -Fqx "$1" "${LOG}" || fail "missing exact M34 witness: $1"
 }
@@ -127,16 +138,20 @@ wait_for 'boring-display: cross-client authority isolation passed'
 wait_for 'display-client-b: own COMMIT acknowledged'
 wait_for 'boring-display: deterministic stacking passed'
 
+# Stay within a single signed PS/2 packet delta. Sixteen 127-pixel steps span
+# 2032 pixels, enough to cross the full M34 maximum width (1920) and height
+# (1080) from any legal cursor position without relying on oversized QMP
+# relative-motion handling.
 wait_for 'boring-display: waiting for cursor clip top-left'
-qmp_input move -4096 -4096
+qmp_move_steps -127 -127 16
 wait_for 'boring-display: cursor clipped top-left and presented'
 
 wait_for 'boring-display: waiting for cursor clip bottom-right'
-qmp_input move 4096 4096
+qmp_move_steps 127 127 16
 wait_for 'boring-display: cursor clipped bottom-right and presented'
 
 wait_for 'boring-display: waiting for cursor witness position'
-qmp_input move -4096 -4096
+qmp_move_steps -127 -127 16
 qmp_input move 40 30
 wait_for 'boring-display: visual witness ready cursor=40,30 surfaces=2'
 wait_for 'boring-display: framebuffer present witness complete'
