@@ -13,13 +13,13 @@ Es ist **keine Linux-Distribution**, **keine BSD-Distribution** und **basiert we
 
 **Extrem früher Bootstrap-Kernel.**
 
-BoringKernel bootet unter **QEMU x86_64**. Limine bleibt der externe Bootloader. BoringKernel besitzt aktuell COM1-Seriellenausgabe, Speicher- und Adressraumverwaltung, Exceptions und PIT/PIC-Interrupts, Kernel-Scheduling, echten CPL3-ELF-Userspace, eine geprüfte native Syscall-Grenze, VFS/RAMFS, schreibbares VirtIO-gestütztes BoringFS, PID 1 `boring-init`, eine interaktive native `boring-shell`, VFS-gestützte statische ELF-Programme und eine prozesslokale native 16-Slot-Descriptor-/stdio-Schicht für die eigenständigen `/bin/boringfetch` und `/bin/cat` im persistenten BoringFS.
+BoringKernel bootet unter **QEMU x86_64**. Limine bleibt der externe Bootloader. BoringKernel besitzt aktuell COM1-Seriellenausgabe, Speicher- und Adressraumverwaltung, Exceptions und PIT/PIC-Interrupts, Kernel-Scheduling, echten CPL3-ELF-Userspace, eine geprüfte native Syscall-Grenze, VFS/RAMFS, schreibbares VirtIO-gestütztes BoringFS, PID 1 `boring-init`, eine interaktive native `boring-shell`, VFS-gestützte statische ELF-Programme, eine prozesslokale native 16-Slot-Descriptor-/stdio-Schicht für die eigenständigen `/bin/boringfetch` und `/bin/cat` im persistenten BoringFS sowie eine optionale validierte native Framebuffer-Grafikgrundlage mit einem einmalig vom Kernel gerenderten grafischen Boot-Dashboard.
 
 Die aktuelle serielle Ausgabe beginnt mit:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.30-dev
+BoringKernel 0.0.31-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```

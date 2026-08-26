@@ -3,6 +3,8 @@
 #include <stdint.h>
 
 #include <boring/boot_protocol.h>
+#include <boring/boot_dashboard.h>
+#include <boring/framebuffer.h>
 #include <boring/block_device.h>
 #include <boring/boringfs.h>
 #include <boring/boringfs_vfs.h>
@@ -11,6 +13,7 @@
 #include <boring/elf_boot.h>
 #include <boring/elf_loader.h>
 #include <boring/process.h>
+#include <boring/pmm.h>
 #include <boring/ramfs.h>
 #include <boring/ring3_memory.h>
 #include <boring/serial.h>
@@ -430,6 +433,35 @@ void boringfs_ro_test_run(void) {
     serial_write_string(BORINGFS_TEST_WRITABLE ?
                         "BoringFS writable mount ready.\n\n" :
                         "BoringFS read-only mount ready.\n\n");
+
+#if BORING_TEST_MODE == 15
+    {
+        const struct boring_framebuffer *const surface = boring_framebuffer_get();
+        struct pmm_stats memory_stats;
+
+        if ((surface != NULL) && pmm_get_stats(&memory_stats)) {
+            const struct boring_boot_dashboard_info dashboard_info = {
+                .kernel_name = "BoringKernel",
+                .kernel_version = "0.0.31-dev",
+                .arch = "x86_64",
+                .memory_bytes = memory_stats.usable_bytes,
+                .root_fs = "BoringFS",
+                .block_device = "VirtIO block",
+                .pmm_online = true,
+                .vmm_online = true,
+                .irq_online = false,
+                .ring3_available = true,
+                .vfs_online = true,
+                .boringfs_online = true
+            };
+            if (boring_boot_dashboard_render(surface, &dashboard_info)) {
+                serial_write_string("boring-graphics: dashboard rendered\n\n");
+            } else {
+                serial_write_string("boring-graphics: dashboard skipped\n\n");
+            }
+        }
+    }
+#endif
 
     if (!process_create(&init_process) || (init_process == NULL) ||
         (init_process->pid != 1ULL)) {

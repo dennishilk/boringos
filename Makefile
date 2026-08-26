@@ -41,6 +41,7 @@ BORINGFS_FIXTURE := $(BUILD_DIR)/boringfs-fixture
 BORINGFS_VFS_HOST_TEST := $(BUILD_DIR)/boringfs-vfs-host-test
 SHELL_HOST_TEST := $(BUILD_DIR)/shell-host-test
 FD_HOST_TEST := $(BUILD_DIR)/fd-host-test
+FRAMEBUFFER_HOST_TEST := $(BUILD_DIR)/framebuffer-host-test
 MKBORINGFS_VERIFY := $(BUILD_DIR)/mkboringfs-test/mkboringfs-verify
 BORINGFS_HEADER := libs/boringfs/include/boring/boringfs.h
 BORINGFS_CODEC := libs/boringfs/codec.c
@@ -190,6 +191,10 @@ CAT_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 
 KERNEL_C_SOURCES := \
 	kernel/core/entry.c \
+	kernel/core/framebuffer.c \
+	kernel/core/graphics.c \
+	kernel/core/pixel_font.c \
+	kernel/core/boot_dashboard.c \
 	kernel/core/pmm.c \
 	kernel/core/heap.c \
 	kernel/core/process.c \
@@ -234,7 +239,7 @@ KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCE
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
 
-.PHONY: all kernel user-elf user-runtime user-console user-init user-shell user-boringfetch user-cat elf-audit runtime-audit console-audit init-audit shell-audit boringfetch-audit cat-audit shell-host-test fd-host-test boringfs-host-test boringfs-vfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test boringfs-fixture qemu-bundle run run-headless test clean distclean
+.PHONY: all kernel user-elf user-runtime user-console user-init user-shell user-boringfetch user-cat elf-audit runtime-audit console-audit init-audit shell-audit boringfetch-audit cat-audit shell-host-test fd-host-test framebuffer-host-test boringfs-host-test boringfs-vfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test boringfs-fixture qemu-bundle run run-headless test clean distclean
 
 all: $(ISO)
 
@@ -280,6 +285,9 @@ shell-host-test: $(SHELL_HOST_TEST)
 
 fd-host-test: $(FD_HOST_TEST)
 	$(FD_HOST_TEST)
+
+framebuffer-host-test: $(FRAMEBUFFER_HOST_TEST)
+	$(FRAMEBUFFER_HOST_TEST)
 
 boringfs-host-test:
 	sh ./tests/boringfs-host-test.sh
@@ -351,6 +359,15 @@ $(FD_HOST_TEST): tests/fd-host-test.c kernel/core/fd.c \
 	@mkdir -p $(dir $@)
 	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) \
 		tests/fd-host-test.c kernel/core/fd.c -o $@
+
+$(FRAMEBUFFER_HOST_TEST): tests/framebuffer-host-test.c \
+		kernel/core/framebuffer.c kernel/core/graphics.c kernel/core/pixel_font.c \
+		kernel/include/boring/framebuffer.h kernel/include/boring/graphics.h \
+		kernel/include/boring/pixel_font.h kernel/include/boring/boot_protocol.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) \
+		tests/framebuffer-host-test.c kernel/core/framebuffer.c \
+		kernel/core/graphics.c kernel/core/pixel_font.c -o $@
 
 $(MKBORINGFS_VERIFY): tests/mkboringfs-verify.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) $(BORINGFS_HEADER)
 	@mkdir -p $(dir $@)
@@ -535,6 +552,7 @@ test:
 	sh ./tests/cat-build-audit.sh
 	$(MAKE) shell-host-test
 	$(MAKE) fd-host-test
+	$(MAKE) framebuffer-host-test
 	sh ./tests/shell-qemu.sh
 	sh ./tests/shell-editing-qemu.sh
 	sh ./tests/shell-lifecycle-qemu.sh
@@ -545,6 +563,7 @@ test:
 	sh ./tests/boringfs-rw-qemu.sh
 	sh ./tests/persistent-root-qemu.sh
 	sh ./tests/fd-stdio-qemu.sh
+	sh ./tests/framebuffer-qemu.sh
 	sh ./tests/boringfs-host-test.sh
 	$(MAKE) boringfs-vfs-host-test
 	$(MAKE) mkboringfs-test

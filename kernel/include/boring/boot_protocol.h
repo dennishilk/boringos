@@ -36,6 +36,11 @@
 #define BORING_LIMINE_MODULE_REQUEST_ID \
     { BORING_LIMINE_COMMON_MAGIC, \
       0x3e7e279702be32afULL, 0xca1c4f3bd1280ceeULL }
+#define BORING_LIMINE_FRAMEBUFFER_REQUEST_ID \
+    { BORING_LIMINE_COMMON_MAGIC, \
+      0x9d5827dcd881dd75ULL, 0xa3148604f6fab11bULL }
+
+#define BORING_LIMINE_FRAMEBUFFER_RGB 1U
 
 #define BORING_LIMINE_PAGING_MODE_X86_64_4LVL 0ULL
 #define BORING_LIMINE_PAGING_MODE_X86_64_5LVL 1ULL
@@ -115,6 +120,52 @@ struct boring_limine_memmap_request {
     uint64_t id[4];
     uint64_t revision;
     struct boring_limine_memmap_response *response;
+};
+
+struct boring_limine_video_mode {
+    uint64_t pitch;
+    uint64_t width;
+    uint64_t height;
+    uint16_t bpp;
+    uint8_t memory_model;
+    uint8_t red_mask_size;
+    uint8_t red_mask_shift;
+    uint8_t green_mask_size;
+    uint8_t green_mask_shift;
+    uint8_t blue_mask_size;
+    uint8_t blue_mask_shift;
+};
+
+struct boring_limine_framebuffer {
+    void *address;
+    uint64_t width;
+    uint64_t height;
+    uint64_t pitch;
+    uint16_t bpp;
+    uint8_t memory_model;
+    uint8_t red_mask_size;
+    uint8_t red_mask_shift;
+    uint8_t green_mask_size;
+    uint8_t green_mask_shift;
+    uint8_t blue_mask_size;
+    uint8_t blue_mask_shift;
+    uint8_t unused[7];
+    uint64_t edid_size;
+    void *edid;
+    uint64_t mode_count;
+    struct boring_limine_video_mode **modes;
+};
+
+struct boring_limine_framebuffer_response {
+    uint64_t revision;
+    uint64_t framebuffer_count;
+    struct boring_limine_framebuffer **framebuffers;
+};
+
+struct boring_limine_framebuffer_request {
+    uint64_t id[4];
+    uint64_t revision;
+    struct boring_limine_framebuffer_response *response;
 };
 
 struct boring_limine_internal_module {
