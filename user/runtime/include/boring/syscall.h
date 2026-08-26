@@ -44,4 +44,14 @@ long boring_input_claim(void);
 long boring_input_read(struct boring_input_event *events, size_t max_events);
 long boring_input_release(void);
 
+/* Raw forms expose exact negative BoringOS errno values for acceptance tests. */
+long boring_memory_alloc_raw(size_t size);
+void *boring_memory_alloc(size_t size);
+long boring_memory_free(void *base);
+long boring_buffer_create(size_t size);
+long boring_buffer_map_raw(uint32_t handle);
+void *boring_buffer_map(uint32_t handle);
+long boring_buffer_unmap(void *base);
+long boring_buffer_close(uint32_t handle);
+
 #endif
