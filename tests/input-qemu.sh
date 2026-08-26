@@ -45,6 +45,17 @@ wait_for() {
     done
     fail "timeout waiting for ${needle}"
 }
+wait_for_count() {
+    needle=$1; target=$2; attempt=0
+    while [ "${attempt}" -lt 400 ]; do
+        count=$(grep -Fc "${needle}" "${LOG}" 2>/dev/null || true)
+        if [ "${count:-0}" -ge "${target}" ]; then return 0; fi
+        if grep -Eiq 'acceptance FAILED|boring-shell: FAILED|boring-init: FAILED|Fatal exception' "${LOG}" 2>/dev/null; then fail "failure marker while waiting for ${target} x ${needle}"; fi
+        kill -0 "${PID}" 2>/dev/null || fail "QEMU exited while waiting for ${target} x ${needle}"
+        attempt=$((attempt + 1)); sleep 0.1
+    done
+    fail "timeout waiting for ${target} x ${needle}"
+}
 wait_prompt() {
     target=$1; attempt=0
     while [ "${attempt}" -lt 400 ]; do
@@ -99,9 +110,9 @@ grep -Fqx 'boring-waitpid: reaped child pid 3' "${LOG}" || fail 'teardown child 
 
 # Second process must reclaim ownership without a reboot and witness real input.
 printf '%s\n' 'input-test' >&3
-wait_for 'input-test: waiting for keyboard/mouse events'
-CLAIMS=$(grep -Fc 'input-test: input claimed' "${LOG}" || true)
-[ "${CLAIMS}" -ge 2 ] || fail 'second input owner did not reclaim input'
+wait_for 'boring-input: claim pid 4'
+wait_for_count 'input-test: input claimed' 2
+wait_for_count 'input-test: waiting for keyboard/mouse events' 2
 grep -Fqx 'input-test: syscall negatives passed' "${LOG}" || fail 'Ring-3 input syscall negative tests missing'
 
 qmp super-q
