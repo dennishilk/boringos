@@ -119,6 +119,50 @@ x86_64_syscall_test_payload_start:
     syscall
     movq %rax, -0x70(%rsp)
 
+    /* BORING_SYS_INPUT_READ = 23: no owner must be rejected before wait. */
+    leaq -0xe00(%rsp), %rdi
+    movq $1, %rsi
+    movq $23, %rax
+    syscall
+    movq %rax, -0x68(%rsp)
+
+    /* BORING_SYS_INPUT_RELEASE = 24: no owner must be rejected. */
+    movq $24, %rax
+    syscall
+    movq %rax, -0x60(%rsp)
+
+    /* BORING_SYS_INPUT_CLAIM = 22: first and same-owner second claim succeed. */
+    movq $22, %rax
+    syscall
+    movq %rax, -0x58(%rsp)
+    movq $22, %rax
+    syscall
+    movq %rax, -0x50(%rsp)
+
+    /* INPUT_READ validates destination before consuming or blocking. */
+    movabsq $0x0000000040020000, %rdi
+    movq $1, %rsi
+    movq $23, %rax
+    syscall
+    movq %rax, -0x48(%rsp)
+
+    /* INPUT_READ count bounds are 1..16 events. */
+    leaq -0xe00(%rsp), %rdi
+    xorl %esi, %esi
+    movq $23, %rax
+    syscall
+    movq %rax, -0x40(%rsp)
+    leaq -0xe00(%rsp), %rdi
+    movq $17, %rsi
+    movq $23, %rax
+    syscall
+    movq %rax, -0x38(%rsp)
+
+    /* Owner release succeeds after deterministic same-owner claim. */
+    movq $24, %rax
+    syscall
+    movq %rax, -0x30(%rsp)
+
     movq $1, %rax
     movabsq $0x1111111122222222, %rcx
     cmpq %rcx, %rbx
