@@ -100,9 +100,6 @@ write_diagnostics() {
             if [ -z "${line_no}" ]; then
                 line_no=$(grep -Fnx "Syscall DEBUG_WRITE: ${last_success}" "${LOG}" 2>/dev/null | tail -n 1 | cut -d: -f1 || true)
             fi
-            if [ -z "${line_no}" ]; then
-                line_no=$(grep -Fnx "Syscall DEBUG_WRITE: ${last_success}" "${LOG}" 2>/dev/null | tail -n 1 | cut -d: -f1 || true)
-            fi
             if [ -n "${line_no}" ]; then
                 start=$((line_no > 8 ? line_no - 8 : 1))
                 end=$((line_no + 8))
