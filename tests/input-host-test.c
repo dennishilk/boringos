@@ -78,6 +78,27 @@ static void keyboard_tests(void) {
     check(key_feed(&decoder, 0x1eU, BORING_KEY_A, true), "malformed E0 recovery");
 
     check(boring_input_claim(11ULL) == BORING_INPUT_RESULT_OK, "keyboard owner claim");
+
+    check(boring_input_submit_key(BORING_KEY_LEFT_SHIFT, true), "Shift down enqueue");
+    check(boring_input_submit_key(BORING_KEY_LEFT_CTRL, true), "Ctrl down enqueue");
+    check(boring_input_submit_key(BORING_KEY_LEFT_ALT, true), "Alt down enqueue");
+    check(boring_input_submit_key(BORING_KEY_LEFT_SHIFT, false), "Shift up enqueue");
+    check(boring_input_submit_key(BORING_KEY_LEFT_CTRL, false), "Ctrl up enqueue");
+    check(boring_input_submit_key(BORING_KEY_LEFT_ALT, false), "Alt up enqueue");
+    check(boring_input_read(11ULL, events, 6U, &count) == BORING_INPUT_RESULT_OK &&
+          count == 6U, "modifier transition read");
+    check(events[0].modifiers == BORING_MOD_SHIFT, "Shift modifier transition");
+    check(events[1].modifiers == (BORING_MOD_SHIFT | BORING_MOD_CTRL),
+          "Ctrl modifier transition");
+    check(events[2].modifiers ==
+              (BORING_MOD_SHIFT | BORING_MOD_CTRL | BORING_MOD_ALT),
+          "Alt modifier transition");
+    check(events[3].modifiers == (BORING_MOD_CTRL | BORING_MOD_ALT),
+          "Shift release modifier transition");
+    check(events[4].modifiers == BORING_MOD_ALT,
+          "Ctrl release modifier transition");
+    check(events[5].modifiers == 0U, "Alt release modifier transition");
+
     check(boring_input_submit_key(BORING_KEY_LEFT_SUPER, true), "Super down enqueue");
     check(boring_input_submit_key(BORING_KEY_Q, true), "Super+Q enqueue");
     check(boring_input_submit_key(BORING_KEY_Q, true), "Q repeat enqueue");
@@ -164,6 +185,7 @@ static void queue_tests(void) {
     size_t count = 99U;
     size_t drained = 0U;
     size_t index;
+    int32_t wrap_expected_dx;
     bool released = false;
 
     check(boring_input_claim(21ULL) == BORING_INPUT_RESULT_OK, "owner claim");
@@ -192,6 +214,14 @@ static void queue_tests(void) {
     while (drained < (size_t)BORING_INPUT_QUEUE_CAPACITY) {
         check(boring_input_read(21ULL, events, BORING_INPUT_READ_MAX, &count) ==
               BORING_INPUT_RESULT_OK && count != 0U, "drain chunk");
+        for (index = 0U; index < count; ++index) {
+            const bool expected_down = ((drained + index) & 1U) == 0U;
+            check(events[index].type == BORING_INPUT_EVENT_KEY &&
+                  events[index].code == BORING_KEY_A &&
+                  events[index].value1 ==
+                      (expected_down ? BORING_KEY_DOWN_VALUE : BORING_KEY_UP_VALUE),
+                  "FIFO content/order and drop-newest");
+        }
         drained += count;
     }
     check(drained == (size_t)BORING_INPUT_QUEUE_CAPACITY, "FIFO drain count");
@@ -204,16 +234,35 @@ static void queue_tests(void) {
     check(boring_input_read(21ULL, events, BORING_INPUT_READ_MAX, &count) ==
           BORING_INPUT_RESULT_OK && count == BORING_INPUT_READ_MAX,
           "wrap first drain");
+    for (index = 0U; index < count; ++index) {
+        check(events[index].type == BORING_INPUT_EVENT_MOUSE_MOVE &&
+              events[index].value1 == (int32_t)index + 1 &&
+              events[index].value2 == 0,
+              "wrap first drain exact order");
+    }
     for (index = 0U; index < 20U; ++index) {
         check(boring_input_submit_mouse_move((int32_t)index + 100, 0), "wrap enqueue B");
     }
     drained = 0U;
+    wrap_expected_dx = 17;
     do {
         check(boring_input_read(21ULL, events, BORING_INPUT_READ_MAX, &count) ==
               BORING_INPUT_RESULT_OK, "wrap drain");
+        for (index = 0U; index < count; ++index) {
+            check(events[index].type == BORING_INPUT_EVENT_MOUSE_MOVE &&
+                  events[index].value1 == wrap_expected_dx &&
+                  events[index].value2 == 0,
+                  "wrap-around exact FIFO order");
+            if (wrap_expected_dx == 40) {
+                wrap_expected_dx = 100;
+            } else {
+                ++wrap_expected_dx;
+            }
+        }
         drained += count;
     } while (count != 0U);
     check(drained == 44U, "wrap-around preserved");
+    check(wrap_expected_dx == 120, "wrap-around exact sequence complete");
 
     check(boring_input_release(22ULL) == BORING_INPUT_RESULT_ACCESS,
           "non-owner release rejected");
