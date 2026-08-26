@@ -49,6 +49,9 @@ FSCK="${ROOT}/build/boringfsck"
 [ "$(stat -c %s "${HIST}")" -eq $((64 * 4096)) ] || fail 'historical fixture is no longer exactly 64 blocks'
 [ "$(stat -c %s "${M32}")" -eq $((80 * 4096)) ] || fail 'M32 fixture is no longer exactly 80 blocks'
 [ "$(stat -c %s "${M33}")" -eq $((96 * 4096)) ] || fail 'M33 fixture is no longer exactly 96 blocks'
+[ $((80 - 64)) -eq 16 ] || fail 'historical-to-M32 fixture step is no longer 16 blocks'
+[ $((96 - 80)) -eq 16 ] || fail 'M32-to-M33 fixture step is no longer 16 blocks'
+[ $((112 - 96)) -eq 16 ] || fail 'M34 candidate is not the next explicit 16-block fixture step'
 
 "${BUILDER}" "${IMAGE}" valid \
     "${BF}" "${CAT}" "${INPUT}" "${MEMORY}" "${IPC}" \
@@ -64,6 +67,13 @@ grep -Fqx 'M34 fixture blocks: 112' "${BUILD}/geometry.txt" ||
     fail 'M34 explicit geometry builder witness missing'
 grep -Fqx 'M33 fixture blocks: 96' "${BUILD}/geometry.txt" ||
     fail 'M33 preserved geometry builder witness missing'
+
+M33_FREE=$(awk -F': ' '/^M33 free blocks below limit:/ {print $2}' "${BUILD}/geometry.txt")
+M34_REQUIRED=$(awk -F': ' '/^M34 display blocks required:/ {print $2}' "${BUILD}/geometry.txt")
+case "${M33_FREE}" in ''|*[!0-9]*) fail 'M33 free-block geometry witness is not numeric' ;; esac
+case "${M34_REQUIRED}" in ''|*[!0-9]*) fail 'M34 required-block geometry witness is not numeric' ;; esac
+[ "${M34_REQUIRED}" -gt "${M33_FREE}" ] ||
+    fail '96 blocks unexpectedly suffice for the complete M34 display trio'
 
 for spec in \
     '/bin/boringfetch:'"${BF}" \
@@ -87,5 +97,6 @@ sha256sum "${IMAGE}" \
     "${DISPLAY}" "${CLIENT_A}" "${CLIENT_B}" > "${BUILD}/SHA256SUMS"
 
 printf '%s\n' 'M34 BoringFS bundle integration passed.'
-printf '%s\n' 'Fixture geometries: historical=64 M32=80 M33=96 M34=112 blocks.'
+printf '%s\n' '96-block capacity rejection proved by real M34 builder allocation accounting.'
+printf '%s\n' 'Fixture geometries: historical=64 M32=80 M33=96 M34=112 blocks (next 16-block schema step).'
 printf 'M34 root image: %s\n' "${IMAGE}"
