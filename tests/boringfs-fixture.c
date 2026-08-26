@@ -5,7 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define FIXTURE_BLOCKS 80U
+#define HISTORICAL_FIXTURE_BLOCKS 64U
+#define M32_FIXTURE_BLOCKS 80U
 #define FIXTURE_OBJECTS BORINGFS_MIN_OBJECTS
 #define ROOT_BLOCK 4U
 #define DOCS_BLOCK 5U
@@ -25,6 +26,9 @@
 #define INPUT_TEST_BLOCK0 (CAT_BLOCK0 + PROGRAM_SLOT_BLOCKS)
 #define MEMORY_TEST_BLOCK0 (INPUT_TEST_BLOCK0 + PROGRAM_SLOT_BLOCKS)
 #define ARCH_SIZE 4200U
+
+static uint32_t fixture_blocks = HISTORICAL_FIXTURE_BLOCKS;
+#define FIXTURE_BLOCKS fixture_blocks
 
 static const char readme_text[] = "Welcome to BoringOS.\n";
 static const char hello_text[] = "Hello from BoringFS on VirtIO.\n";
@@ -539,7 +543,7 @@ static void corrupt(uint8_t *volume, const char *kind) {
 
 static enum boringfs_validation_result validate_fixture(
     const uint8_t *volume, size_t volume_size) {
-    uint32_t block_owner[FIXTURE_BLOCKS];
+    uint32_t block_owner[M32_FIXTURE_BLOCKS];
     uint8_t reference_count[FIXTURE_OBJECTS];
     const struct boringfs_validation_workspace workspace = {
         .block_owner = block_owner,
@@ -602,7 +606,9 @@ static int write_image(const char *path, const uint8_t *volume, size_t size) {
 
 int main(int argc, char **argv) {
     const size_t volume_size =
-        (size_t)FIXTURE_BLOCKS * (size_t)BORINGFS_BLOCK_SIZE;
+        (size_t)((argc == 7) ? M32_FIXTURE_BLOCKS :
+                 HISTORICAL_FIXTURE_BLOCKS) *
+        (size_t)BORINGFS_BLOCK_SIZE;
     uint8_t *volume;
     uint8_t *boringfetch_bytes = NULL;
     uint8_t *cat_bytes = NULL;
@@ -622,6 +628,8 @@ int main(int argc, char **argv) {
                       argv[0]);
         return 2;
     }
+    fixture_blocks = (argc == 7) ? M32_FIXTURE_BLOCKS :
+                                   HISTORICAL_FIXTURE_BLOCKS;
     kind = argv[2];
     if ((argc > 3) && (strcmp(kind, "valid") != 0)) {
         (void)fputs("program ELFs are supported only for valid fixtures\n",
