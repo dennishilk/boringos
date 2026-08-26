@@ -7,6 +7,7 @@ QEMU_CPU=${QEMU_CPU:-qemu64,apic=off}
 TMPDIR_PATH=$(mktemp -d)
 LOG="${TMPDIR_PATH}/serial.log"
 QEMU_LOG="${TMPDIR_PATH}/qemu.log"
+BUILD_LOG="${TMPDIR_PATH}/build.log"
 QMP="${TMPDIR_PATH}/qmp.sock"
 SCREENSHOT="${ROOT}/build/m34-display-reference.ppm"
 DIAG_DIR="${ROOT}/build/m34-display-diagnostics"
@@ -36,6 +37,7 @@ preserve_failure() {
     else
         printf '%s\n' 'qemu-state: exited-before-success' >> "${DIAG_DIR}/failure.txt"
     fi
+    cp "${BUILD_LOG}" "${DIAG_DIR}/build.log" 2>/dev/null || true
     cp "${LOG}" "${DIAG_DIR}/serial.log" 2>/dev/null || true
     cp "${QEMU_LOG}" "${DIAG_DIR}/qemu.log" 2>/dev/null || true
     if [ -f "${SCREENSHOT}" ]; then
@@ -47,6 +49,8 @@ fail() {
     FAIL_REASON=$1
     preserve_failure "${FAIL_REASON}"
     echo "${FAIL_REASON}" >&2
+    echo '--- M34 build/audit context ---' >&2
+    tail -n 120 "${BUILD_LOG}" >&2 2>/dev/null || true
     echo '--- last M34 serial context ---' >&2
     tail -n 100 "${LOG}" >&2 2>/dev/null || true
     echo '--- QEMU stderr ---' >&2
@@ -84,9 +88,17 @@ require_line() {
 
 rm -rf "${DIAG_DIR}"
 rm -f "${SCREENSHOT}"
+: > "${BUILD_LOG}"
+: > "${LOG}"
+: > "${QEMU_LOG}"
 
-make -C "${ROOT}" display-host-test display-audit
-make -C "${ROOT}" TEST_MODE=m34-display
+if ! {
+    make -C "${ROOT}" display-host-test display-audit &&
+    make -C "${ROOT}" TEST_MODE=m34-display
+} > "${BUILD_LOG}" 2>&1; then
+    fail 'M34 display build/audit failed'
+fi
+cat "${BUILD_LOG}"
 
 "${QEMU}" -M q35 -cpu "${QEMU_CPU}" -m 128M \
     -cdrom "${ROOT}/build/boringos.iso" -boot d \
