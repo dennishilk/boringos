@@ -54,6 +54,13 @@ static long request_receive(uint32_t endpoint,
     return boring_ipc_receive(endpoint, request, sizeof(*request), received);
 }
 
+static bool request_metadata_empty(const struct boring_display_request *request) {
+    return (request != NULL) && (request->width == 0U) &&
+           (request->height == 0U) && (request->stride == 0U) &&
+           (request->pixel_format == 0U) && (request->reserved == 0U) &&
+           (request->byte_size == 0ULL);
+}
+
 static void compose_present(void) {
     if ((composition_pixels == NULL) ||
         (display_core.byte_size > (uint64_t)SIZE_MAX) ||
@@ -121,7 +128,7 @@ static void receive_commit(uint32_t endpoint,
         (received.buffer_handle != BORING_BUFFER_HANDLE_INVALID) ||
         (request.version != BORING_DISPLAY_PROTOCOL_VERSION) ||
         (request.type != BORING_DISPLAY_REQUEST_COMMIT) ||
-        (request.reserved != 0U)) {
+        !request_metadata_empty(&request)) {
         fail("commit envelope");
     }
     status = boring_display_surface_commit(&display_core, endpoint,
@@ -162,7 +169,8 @@ static void receive_destroy(uint32_t endpoint, uint32_t expected_token) {
         (received.buffer_handle != BORING_BUFFER_HANDLE_INVALID) ||
         (request.version != BORING_DISPLAY_PROTOCOL_VERSION) ||
         (request.type != BORING_DISPLAY_REQUEST_DESTROY) ||
-        (request.surface_token != expected_token)) {
+        (request.surface_token != expected_token) ||
+        !request_metadata_empty(&request)) {
         fail("destroy envelope");
     }
     status = boring_display_surface_destroy(&display_core, endpoint,
