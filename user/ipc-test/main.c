@@ -20,6 +20,8 @@ struct test_message {
 _Static_assert(sizeof(struct test_message) == 16U,
                "M33 test message must be fixed-size");
 
+int boring_main(void);
+
 static void say(const char *text) {
     (void)boring_debug_write(text, boring_strlen(text));
 }
