@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.34-dev
+BoringKernel 0.0.35-dev
 ```
 
 The current syscall ABI is exactly:
@@ -118,6 +118,10 @@ The current syscall ABI is exactly:
 34 IPC_SEND
 35 IPC_RECEIVE
 36 IPC_CLOSE
+37 BUFFER_INFO
+38 FRAMEBUFFER_CLAIM
+39 FRAMEBUFFER_PRESENT
+40 FRAMEBUFFER_RELEASE
 ```
 
 VFS-backed executable loading and standalone `/bin/boringfetch` are real
@@ -129,9 +133,11 @@ bounded dynamic anonymous Ring-3 memory, the minimal native userspace heap and
 generic kernel-owned shared byte buffers with process-local capability handles,
 multiple alias mappings and process-exit reclamation. Milestone 33 adds the bounded
 native service registry, blocking connection-oriented IPC and transactional grants
-of existing M32 shared-buffer capabilities between processes. There is still no
-partition layer, networking, display/surface protocol, cursor, `boring-display`,
-terminal graphics stack, BoringWM or GUI/window system.
+of existing M32 shared-buffer capabilities between processes. Milestone 34 adds the
+native Ring-3 `boring-display` service, shared-buffer-backed surfaces, deterministic
+software composition, controlled kernel presentation and a real M31-driven cursor.
+There is still no partition layer, networking, window-placement/focus/tiling policy,
+terminal graphics stack, BoringWM or general GUI/window system.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -926,3 +932,51 @@ blocks, and only the M33 bundle including `/bin/ipc-test` uses 96 blocks.
 M33 does **not** add a display/surface protocol, framebuffer ownership transfer,
 cursor, compositor, `boring-display`, terminal graphics stack, BoringWM or GUI
 application. Those remain outside the M33 Semantic Freeze.
+
+
+---
+
+# Stage 18 — native display service foundation
+
+## Milestone 34: native boring-display service — COMPLETE
+
+Milestone 34 adds the first BoringOS-native Ring-3 display service as the
+freestanding `/bin/boring-display` program registered under `boring.display`.
+The physical framebuffer remains kernel-owned. Syscalls 37..40 add authoritative
+buffer-size queries plus exclusive framebuffer claim, controlled XRGB8888 present
+and release operations without exposing physical addresses, HHDM aliases or kernel
+pointers to userspace. Normal process exit also releases a forgotten framebuffer
+claim.
+
+The service uses M33 IPC for its bounded versioned control protocol and M32 shared
+buffers for pixel backing. Generation-protected surface tokens are scoped to the
+owning IPC endpoint. The fixed-capacity compositor clears a dark background,
+composes surfaces in deterministic creation order, draws a clipped software cursor
+last and presents one full frame through the kernel boundary.
+
+The real QEMU acceptance runs `boring-display`, display client A and display client
+B as three separate CPL3 processes with three distinct address spaces. It proves
+M32 capability grants and same-backing live update, cross-client token rejection,
+creation-order overlap, real QMP-to-PS/2-to-M31 mouse delivery, both edge clips, a
+deterministic 1280x800 pixel-validated framebuffer, process/device/IPC/input/buffer
+cleanup and PMM recovery while retaining every historical M0..M33 gate.
+
+The complete eight-program BoringFS bundle is measured from the real ELF files.
+The inherited IPC program proves that 80 blocks are insufficient; all M34 programs
+fit, validate and round-trip byte-for-byte in the existing 96-block M33 geometry,
+so M34 does not force an unnecessary 112-block expansion.
+
+Acceptance record:
+
+```text
+PR: #45
+base: 8b80c3f1e19532ade884290268021707b0a552fe
+Semantic Freeze SHA: 2c9e7994ec5c41c4f481f8e55fd4ea45ae621905
+Semantic Freeze tree: a874ac876797a2e4ace1328b8d5da3ec0e3ed4ab
+exact-head Semantic Freeze CI: Run #417 / 32996081201 / SUCCESS
+final version after closeout: BoringKernel 0.0.35-dev
+```
+
+M34 does **not** add BoringWM, window placement, focus or tiling policy,
+workspaces, terminal graphics, X11, Wayland, GPU acceleration or a general
+window-system ABI. Those remain outside the M34 Semantic Freeze.

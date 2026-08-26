@@ -1,6 +1,6 @@
 # BoringOS native boring-display foundation (M34)
 
-M34 introduces the first BoringOS-native Ring-3 display service. During semantic implementation the kernel remains `BoringKernel 0.0.34-dev`.
+M34 introduces the first BoringOS-native Ring-3 display service. The implementation is Semantic Frozen and accepted; the closeout development banner is `BoringKernel 0.0.35-dev`.
 
 ## Architectural boundary
 
@@ -95,7 +95,7 @@ Peer close or client process exit removes all surfaces belonging to that IPC con
 
 ## Acceptance
 
-Permanent M34 acceptance must prove at minimum:
+The permanent M34 acceptance proves:
 
 - three distinct real Ring-3 processes/address spaces: `/bin/boring-display`, display client A and display client B;
 - registration of `boring.display` and two real M33 connections;
@@ -113,5 +113,16 @@ Permanent M34 acceptance must prove at minimum:
 - a real CPL3 QEMU acceptance and deterministic framebuffer/reference artifact;
 - all permanent M0..M33 gates remain green;
 - BoringFS/qemu-bundle contains `/bin/boring-display` and both dedicated client programs while preserving historical fixture geometries.
+
+Semantic Freeze and closeout record:
+
+```text
+PR: #45
+base: 8b80c3f1e19532ade884290268021707b0a552fe
+Semantic Freeze SHA: 2c9e7994ec5c41c4f481f8e55fd4ea45ae621905
+Semantic Freeze tree: a874ac876797a2e4ace1328b8d5da3ec0e3ed4ab
+exact-head Semantic Freeze CI: Run #417 / 32996081201 / SUCCESS
+final version after closeout: BoringKernel 0.0.35-dev
+```
 
 M34 does not implement BoringWM, tiling, focus policy, workspaces, Super keybindings, a terminal, X11, Wayland, GPU acceleration, USB input or a generic graphics-driver ABI.
