@@ -14,6 +14,7 @@ struct boring_input_state {
     size_t count;
     uint32_t modifiers;
     bool owned;
+    bool owner_waiting;
     bool initialized;
 };
 
@@ -78,6 +79,7 @@ static bool input_push(const struct boring_input_event *event) {
            (size_t)BORING_INPUT_QUEUE_CAPACITY;
     input_state.queue[tail] = *event;
     ++input_state.count;
+    input_state.owner_waiting = false;
     return true;
 }
 
@@ -93,6 +95,7 @@ bool boring_input_init(void) {
     input_state.owner_pid = 0ULL;
     input_state.dropped_events = 0ULL;
     input_state.owned = false;
+    input_state.owner_waiting = false;
     input_state.initialized = true;
     input_clear_queue();
     input_clear_keys();
@@ -122,6 +125,7 @@ enum boring_input_result boring_input_claim(uint64_t pid) {
     } else if (!input_state.owned) {
         input_state.owned = true;
         input_state.owner_pid = pid;
+        input_state.owner_waiting = false;
         input_clear_queue();
         input_clear_keys();
     }
@@ -141,6 +145,7 @@ enum boring_input_result boring_input_release(uint64_t pid) {
     } else {
         input_state.owned = false;
         input_state.owner_pid = 0ULL;
+        input_state.owner_waiting = false;
         input_clear_queue();
         input_clear_keys();
     }
@@ -160,6 +165,7 @@ bool boring_input_process_teardown(uint64_t pid, bool *released_out) {
     if (input_state.owned && input_state.owner_pid == pid) {
         input_state.owned = false;
         input_state.owner_pid = 0ULL;
+        input_state.owner_waiting = false;
         input_clear_queue();
         input_clear_keys();
         released = true;
@@ -199,6 +205,31 @@ enum boring_input_result boring_input_read(uint64_t pid,
     }
     input_restore_interrupts(interrupts_were_enabled);
     return result;
+}
+
+bool boring_input_wait_prepare(uint64_t pid) {
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+    bool prepared = false;
+
+    x86_64_interrupts_disable();
+    if (input_state.initialized && input_state.owned &&
+        (input_state.owner_pid == pid) && (input_state.count == 0U)) {
+        input_state.owner_waiting = true;
+        prepared = true;
+    }
+    input_restore_interrupts(interrupts_were_enabled);
+    return prepared;
+}
+
+void boring_input_wait_cancel(uint64_t pid) {
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+
+    x86_64_interrupts_disable();
+    if (input_state.initialized && input_state.owned &&
+        (input_state.owner_pid == pid)) {
+        input_state.owner_waiting = false;
+    }
+    input_restore_interrupts(interrupts_were_enabled);
 }
 
 bool boring_input_submit_key(uint32_t code, bool down) {
@@ -285,6 +316,7 @@ bool boring_input_get_stats(struct boring_input_stats *stats) {
     stats->queued_events = input_state.count;
     stats->modifiers = input_state.modifiers;
     stats->owned = input_state.owned;
+    stats->waiting = input_state.owner_waiting;
     stats->initialized = input_state.initialized;
     input_restore_interrupts(interrupts_were_enabled);
     return true;

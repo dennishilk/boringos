@@ -205,14 +205,6 @@ bool i8042_init(struct i8042_state *state) {
         (void)i8042_write_command((uint8_t)I8042_COMMAND_DISABLE_MOUSE);
     }
 
-    if (!i8042_read_config(&config)) {
-        keyboard_online = false;
-        mouse_online = false;
-        (void)i8042_write_command((uint8_t)I8042_COMMAND_DISABLE_KEYBOARD);
-        (void)i8042_write_command((uint8_t)I8042_COMMAND_DISABLE_MOUSE);
-        *state = active_state;
-        return false;
-    }
     config = (uint8_t)(config | (uint8_t)I8042_CONFIG_TRANSLATION);
     config = (uint8_t)(config &
               (uint8_t)~(I8042_CONFIG_IRQ1 | I8042_CONFIG_IRQ12));

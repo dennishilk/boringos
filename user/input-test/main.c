@@ -7,6 +7,9 @@
 #include <boring/syscall_abi.h>
 
 #define INPUT_TEST_LINE_CAPACITY 160U
+#define INPUT_TEST_DATA_MARKER 0x424f52494e505554ULL
+
+static volatile uint64_t input_test_data_marker = INPUT_TEST_DATA_MARKER;
 
 int boring_main(int argc, char **argv);
 
@@ -238,6 +241,10 @@ int boring_main(int argc, char **argv) {
     bool saw_left_down = false;
     bool saw_left_up = false;
 
+    if (input_test_data_marker != INPUT_TEST_DATA_MARKER) {
+        (void)write_text("input-test: runtime data unavailable\r\n");
+        boring_exit(3);
+    }
     if ((argc == 2) && (argv != NULL) &&
         literal_equals(argv[1], "--teardown")) {
         teardown_mode = true;
@@ -246,11 +253,26 @@ int boring_main(int argc, char **argv) {
         boring_exit(2);
     }
 
+    if ((boring_input_read(events, 1U) != -(long)BORING_SYSCALL_EACCES) ||
+        (boring_input_release() != -(long)BORING_SYSCALL_EACCES) ||
+        (boring_input_read(events, 0U) != -(long)BORING_SYSCALL_EINVAL) ||
+        (boring_input_read(events, BORING_INPUT_READ_MAX + 1U) !=
+         -(long)BORING_SYSCALL_EINVAL)) {
+        (void)write_text("input-test: pre-claim syscall negatives failed\r\n");
+        boring_exit(1);
+    }
     if (boring_input_claim() != 0L) {
         (void)write_text("input-test: claim failed\r\n");
         boring_exit(1);
     }
     (void)write_text("input-test: input claimed\r\n");
+    if ((boring_input_claim() != 0L) ||
+        (boring_input_read((struct boring_input_event *)(uintptr_t)0xffff800000000000ULL,
+                           1U) != -(long)BORING_SYSCALL_EFAULT)) {
+        (void)write_text("input-test: claimed syscall negatives failed\r\n");
+        boring_exit(1);
+    }
+    (void)write_text("input-test: syscall negatives passed\r\n");
     (void)write_text("input-test: waiting for keyboard/mouse events\r\n");
 
     for (;;) {

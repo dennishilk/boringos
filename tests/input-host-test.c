@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include <boring/cpu.h>
 #include <boring/input.h>
 #include <boring/ps2_keyboard.h>
 #include <boring/ps2_mouse.h>
@@ -172,6 +173,10 @@ static void queue_tests(void) {
           "non-owner read rejected");
     check(boring_input_read(21ULL, events, 1U, &count) == BORING_INPUT_RESULT_OK &&
           count == 0U, "empty queue");
+    check(boring_input_wait_prepare(21ULL), "owner wait prepare");
+    check(boring_input_get_stats(&stats) && stats.waiting, "owner wait state");
+    boring_input_wait_cancel(21ULL);
+    check(boring_input_get_stats(&stats) && !stats.waiting, "owner wait cancel");
     check(boring_input_submit_key(BORING_KEY_A, true), "single enqueue");
     check(boring_input_read(21ULL, events, 1U, &count) == BORING_INPUT_RESULT_OK &&
           count == 1U && events[0].code == BORING_KEY_A, "single dequeue");

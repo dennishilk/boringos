@@ -21,6 +21,7 @@ struct boring_input_stats {
     size_t queued_events;
     uint32_t modifiers;
     bool owned;
+    bool waiting;
     bool initialized;
 };
 
@@ -32,6 +33,8 @@ enum boring_input_result boring_input_read(uint64_t pid,
                                            struct boring_input_event *events,
                                            size_t capacity,
                                            size_t *count_out);
+bool boring_input_wait_prepare(uint64_t pid);
+void boring_input_wait_cancel(uint64_t pid);
 bool boring_input_submit_key(uint32_t code, bool down);
 bool boring_input_submit_mouse_move(int32_t dx, int32_t dy);
 bool boring_input_submit_mouse_button(uint32_t button, bool down);

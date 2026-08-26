@@ -7,6 +7,7 @@
 #include <boring/elf_loader.h>
 #include <boring/elf_vfs.h>
 #include <boring/fd.h>
+#include <boring/input.h>
 #include <boring/process.h>
 #include <boring/pmm.h>
 #include <boring/ring3_memory.h>
@@ -1744,6 +1745,111 @@ static uint64_t syscall_fd_close(uint64_t raw_fd) {
     return 0ULL;
 }
 
+static int syscall_input_error(enum boring_input_result result) {
+    switch (result) {
+        case BORING_INPUT_RESULT_OK:
+            return 0;
+        case BORING_INPUT_RESULT_BUSY:
+            return BORING_SYSCALL_EBUSY;
+        case BORING_INPUT_RESULT_ACCESS:
+            return BORING_SYSCALL_EACCES;
+        case BORING_INPUT_RESULT_INVALID:
+            return BORING_SYSCALL_EINVAL;
+        case BORING_INPUT_RESULT_NOT_INITIALIZED:
+        default:
+            return BORING_SYSCALL_EIO;
+    }
+}
+
+static uint64_t syscall_input_claim(void) {
+    struct process *const process = process_current();
+    enum boring_input_result result;
+
+    if ((process == NULL) || !process_is_alive(process)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    result = boring_input_claim(process->pid);
+    if (result != BORING_INPUT_RESULT_OK) {
+        return syscall_error(syscall_input_error(result));
+    }
+    serial_write_string("boring-input: claim pid ");
+    serial_write_u64(process->pid);
+    serial_write_string("\n");
+    return 0ULL;
+}
+
+static uint64_t syscall_input_read(uint64_t user_events, uint64_t max_events) {
+    struct boring_input_event events[BORING_INPUT_READ_MAX];
+    struct process *const process = process_current();
+    size_t safe_max;
+    size_t bytes;
+    size_t count;
+    enum boring_input_result result;
+    bool copied;
+
+    if ((max_events == 0ULL) ||
+        (max_events > (uint64_t)BORING_INPUT_READ_MAX) ||
+        (max_events > (uint64_t)SIZE_MAX) || (process == NULL) ||
+        !process_is_alive(process)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    safe_max = (size_t)max_events;
+    bytes = safe_max * sizeof(struct boring_input_event);
+    if (!syscall_user_range_accessible((uintptr_t)user_events, bytes, true)) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+
+    for (;;) {
+        count = 0U;
+        x86_64_interrupts_disable();
+        result = boring_input_read(process->pid, events, safe_max, &count);
+        if (result != BORING_INPUT_RESULT_OK) {
+            return syscall_error(syscall_input_error(result));
+        }
+        if (count != 0U) {
+            break;
+        }
+        if (!boring_input_wait_prepare(process->pid)) {
+            return syscall_error(BORING_SYSCALL_EIO);
+        }
+        /*
+         * STI+HLT closes the empty-queue/sleep race on the current single-CPU
+         * target: a pending IRQ is delivered before or immediately after HLT.
+         * The one trusted SYSCALL stack remains owned by this process.
+         */
+        x86_64_enable_and_halt();
+        x86_64_interrupts_disable();
+        boring_input_wait_cancel(process->pid);
+    }
+
+    /* Never leave interrupts disabled while copying a userspace buffer. */
+    x86_64_interrupts_enable();
+    copied = syscall_copy_to_user((uintptr_t)user_events, events,
+                                  count * sizeof(struct boring_input_event));
+    x86_64_interrupts_disable();
+    if (!copied) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+    return (uint64_t)count;
+}
+
+static uint64_t syscall_input_release(void) {
+    struct process *const process = process_current();
+    enum boring_input_result result;
+
+    if ((process == NULL) || !process_is_alive(process)) {
+        return syscall_error(BORING_SYSCALL_EINVAL);
+    }
+    result = boring_input_release(process->pid);
+    if (result != BORING_INPUT_RESULT_OK) {
+        return syscall_error(syscall_input_error(result));
+    }
+    serial_write_string("boring-input: release pid ");
+    serial_write_u64(process->pid);
+    serial_write_string("\n");
+    return 0ULL;
+}
+
 static uint64_t syscall_getcwd(uint64_t user_buffer, uint64_t capacity) {
     char cwd[VFS_PATH_MAX + 1U];
     struct process *const process = process_current();
@@ -1810,6 +1916,7 @@ static uint64_t syscall_exit(struct x86_64_syscall_frame *frame,
     struct process *const child = process_current();
     struct process *parent;
     uint64_t child_pid;
+    bool input_released = false;
 
     if ((frame == NULL) || (launch == NULL) || !launch->active ||
         launch->child_exited || (child == NULL) || (child != launch->child) ||
@@ -1819,6 +1926,7 @@ static uint64_t syscall_exit(struct x86_64_syscall_frame *frame,
     parent = launch->parent;
     child_pid = child->pid;
     launch->exit_status = (int32_t)raw_status;
+    (void)boring_input_process_teardown(child_pid, &input_released);
 
     if (!process_activate(parent)) {
         syscall_fatal("cannot resume parent during SYS_EXIT");
@@ -1838,6 +1946,11 @@ static uint64_t syscall_exit(struct x86_64_syscall_frame *frame,
     serial_write_string(" status ");
     serial_write_u64((uint64_t)(uint32_t)launch->exit_status);
     serial_write_string(" is zombie\n");
+    if (input_released) {
+        serial_write_string("boring-input: owner pid " );
+        serial_write_u64(child_pid);
+        serial_write_string(" teardown released\n");
+    }
     *frame = launch->parent_frame;
     return child_pid;
 }
@@ -2094,6 +2207,15 @@ void x86_64_syscall_dispatch(struct x86_64_syscall_frame *frame) {
             break;
         case BORING_SYS_FD_CLOSE:
             result = syscall_fd_close(frame->rdi);
+            break;
+        case BORING_SYS_INPUT_CLAIM:
+            result = syscall_input_claim();
+            break;
+        case BORING_SYS_INPUT_READ:
+            result = syscall_input_read(frame->rdi, frame->rsi);
+            break;
+        case BORING_SYS_INPUT_RELEASE:
+            result = syscall_input_release();
             break;
         default:
             result = syscall_error(BORING_SYSCALL_ENOSYS);
