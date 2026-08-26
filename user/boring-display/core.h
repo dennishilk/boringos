@@ -16,6 +16,7 @@ struct boring_display_surface_state {
     uint32_t buffer_handle;
     uint8_t *pixels;
     uint32_t generation;
+    uint64_t creation_order;
     bool active;
 };
 
@@ -27,6 +28,7 @@ struct boring_display_core {
     uint32_t cursor_x;
     uint32_t cursor_y;
     uint32_t live_surfaces;
+    uint64_t next_creation_order;
     struct boring_display_surface_state surfaces[BORING_DISPLAY_SURFACE_MAX];
 };
 
