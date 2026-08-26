@@ -31,6 +31,7 @@ jobs:
           python3 tools/m33_finish.py
           python3 tools/m33_quickfix.py
           python3 tools/m33_harness_fix.py
+          python3 tools/m33_fixture.py
           git restore .github/workflows/boot-test.yml
       - name: Commit generated integration changes
         run: |
@@ -41,5 +42,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          git commit -m 'Apply M33 compiler quickfix'
+          git commit -m 'Apply M33 fixture integration'
           git push origin HEAD:agent/native-ipc-service-foundation
