@@ -148,7 +148,16 @@ jobs:
         run: sh ./tests/memory-qemu.sh
 
       - name: Real three-process native IPC service and M32 capability grants
+        id: m33_ipc_qemu
         run: sh ./tests/ipc-qemu.sh
+
+      - name: Upload M33 IPC failure diagnostics
+        if: ${{ failure() && steps.m33_ipc_qemu.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: m33-ipc-failure-diagnostics
+          path: build/m33-ipc-diagnostics/
+          if-no-files-found: error
 
       - name: Real Limine framebuffer and BoringOS dashboard
         run: sh ./tests/framebuffer-qemu.sh
