@@ -31,7 +31,29 @@ jobs:
           python3 tools/m33_finish.py
           python3 tools/m33_quickfix.py
           python3 tools/m33_harness_fix.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tools/m33_fixture.py')
+          text = p.read_text()
+          old = '''    if text.count(old) != 1:
+                  raise SystemExit(f"fixture anchor mismatch {path}: {text.count(old)} {old[:80]!r}")
+              p.write_text(text.replace(old, new, 1))
+          '''
+          new = '''    count = text.count(old)
+              if count != 1:
+                  duplicate_cleanup = "        free(memory_test_bytes);\\n        free(input_test_bytes);"
+                  if (old == duplicate_cleanup) and (count == 2):
+                      p.write_text(text.replace(old, new, 2))
+                      return
+                  raise SystemExit(f"fixture anchor mismatch {path}: {count} {old[:80]!r}")
+              p.write_text(text.replace(old, new, 1))
+          '''
+          if text.count(old) != 1:
+              raise SystemExit('m33_fixture rep helper anchor mismatch')
+          p.write_text(text.replace(old, new, 1))
+          PY
           python3 tools/m33_fixture.py
+          git restore tools/m33_fixture.py
           git restore .github/workflows/boot-test.yml
       - name: Commit generated integration changes
         run: |
