@@ -18,6 +18,13 @@ jobs:
           fetch-depth: 0
       - name: Apply bounded M31 integration edits
         run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/m31-integrate.py')
+          text = path.read_text()
+          text = text.replace('<boring/heap.h>', '<boring/fd.h>')
+          path.write_text(text)
+          PY
           python3 tests/m31-integrate.py
           git diff --check
       - name: Commit integration result
