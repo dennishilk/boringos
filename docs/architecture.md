@@ -545,3 +545,13 @@ BoringKernel still does **not** provide:
 - networking, USB, audio, graphics, keyboard/mouse input, or native BoringWM.
 
 BoringKernel 0.0.14-dev proves a **real compiled freestanding C userspace path with a BoringOS-owned minimal runtime and bounded bidirectional serial-console I/O: output crosses CPL3 -> `SYSCALL` -> validated kernel copy -> COM1, real COM1 input is accepted only after complete writable-userspace validation and returns through `copy_to_user` -> `SYSRETQ` into the same C program, which observes and echoes the byte before a final CPL3 `CLI` #GP through TSS.RSP0 and exact image/process cleanup**. It preserves the earlier kernel, Ring 3, syscall, ELF-loader, and native-runtime acceptance surfaces while still providing no VFS, file descriptors, shell/init, TTY model, dynamic linking, or scheduler-managed userspace execution.
+
+## Native framebuffer graphics foundation (Milestone 30 in progress)
+
+The x86_64 boot path now treats a Limine-provided RGB framebuffer as optional
+output state. Limine metadata is translated once into a validated BoringOS-owned
+surface; reusable integer-only renderer/font code depends only on that type. A
+separate boot-dashboard composer consumes explicit already-known system status
+data and renders once. No graphics syscall, userspace mapping, input path,
+display server or windowing contract is introduced, and framebuffer failure
+falls back to the unchanged serial boot path.

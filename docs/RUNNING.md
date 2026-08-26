@@ -17,12 +17,23 @@ of authentication or Unix permissions; neither exists yet.
 
 Requirements: `qemu-system-x86_64` on an x86_64 Linux host.
 
-Run from the extracted bundle:
+Run from the extracted bundle. The default remains headless and keeps the
+serial console as the interactive interface:
 
 ```sh
 chmod +x run-boringos.sh
-./run-boringos.sh
+./run-boringos.sh --headless
 ```
+
+To see the native kernel-rendered BoringOS framebuffer dashboard while keeping
+the same serial shell in the terminal, use:
+
+```sh
+./run-boringos.sh --gui
+```
+
+The graphical screen is informational in Milestone 30; keyboard input remains
+serial-only.
 
 The root image is attached through modern VirtIO PCI. Writes are persistent;
 do not add QEMU snapshot options. Try:

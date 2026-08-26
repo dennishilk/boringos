@@ -5,6 +5,8 @@
 #include <boring/block_device_test.h>
 #include <boring/boringfs_ro_test.h>
 #include <boring/boot_protocol.h>
+#include <boring/boot_dashboard.h>
+#include <boring/framebuffer.h>
 #include <boring/context.h>
 #include <boring/cpu.h>
 #include <boring/exception.h>
@@ -968,6 +970,8 @@ void boring_kernel_entry(void) {
     struct vmm_stats vmm_after_heap;
     struct heap_stats heap_stats;
     struct exception_stats exception_stats;
+    enum boring_framebuffer_status framebuffer_status;
+    const struct boring_framebuffer *framebuffer_surface;
     uint64_t heap_init_pmm_frames;
     uint64_t heap_init_page_table_frames;
 
@@ -980,6 +984,30 @@ void boring_kernel_entry(void) {
     serial_write_string("BoringKernel 0.0.30-dev\n");
     serial_write_string("Arch: x86_64\n");
     serial_write_string("Hello from BoringKernel.\n\n");
+
+    framebuffer_status = boring_framebuffer_boot_init();
+    framebuffer_surface = boring_framebuffer_get();
+    if ((framebuffer_status == BORING_FRAMEBUFFER_STATUS_READY) &&
+        (framebuffer_surface != NULL)) {
+        serial_write_string("boring-framebuffer: detected\n");
+        serial_write_string("boring-framebuffer: ");
+        serial_write_u64(framebuffer_surface->width);
+        serial_write_string("x");
+        serial_write_u64(framebuffer_surface->height);
+        serial_write_string("x");
+        serial_write_u64((uint64_t)framebuffer_surface->bpp);
+        serial_write_string("\nboring-framebuffer: pitch ");
+        serial_write_u64(framebuffer_surface->pitch);
+        serial_write_string("\nboring-framebuffer: rgb validated\n");
+        serial_write_string("boring-graphics: primitives online\n");
+        serial_write_string("boring-graphics: pixel font online\n\n");
+    } else if (framebuffer_status == BORING_FRAMEBUFFER_STATUS_UNAVAILABLE) {
+        serial_write_string("boring-framebuffer: unavailable, serial-only boot\n\n");
+    } else if (framebuffer_status == BORING_FRAMEBUFFER_STATUS_UNSUPPORTED) {
+        serial_write_string("boring-framebuffer: unsupported, serial-only boot\n\n");
+    } else {
+        serial_write_string("boring-framebuffer: malformed, serial-only boot\n\n");
+    }
 
     if (!pmm_init(limine_memmap_request.response) ||
         !pmm_get_stats(&pmm_stats)) {
@@ -1105,6 +1133,27 @@ void boring_kernel_entry(void) {
     if (!process_init()) {
         serial_write_string("Process subsystem: FAILED\n");
         x86_64_halt_forever();
+    }
+    if (framebuffer_surface != NULL) {
+        const struct boring_boot_dashboard_info dashboard_info = {
+            .kernel_name = "BoringKernel",
+            .kernel_version = "0.0.30-dev",
+            .arch = "x86_64",
+            .memory_bytes = pmm_stats.usable_bytes,
+            .root_fs = "N/A",
+            .block_device = "N/A",
+            .pmm_online = true,
+            .vmm_online = true,
+            .irq_online = true,
+            .ring3_available = true,
+            .vfs_online = false,
+            .boringfs_online = false
+        };
+        if (boring_boot_dashboard_render(framebuffer_surface, &dashboard_info)) {
+            serial_write_string("boring-graphics: dashboard rendered\n\n");
+        } else {
+            serial_write_string("boring-graphics: dashboard skipped\n\n");
+        }
     }
     run_cooperative_task_test();
     run_preemptive_task_test();

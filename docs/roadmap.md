@@ -704,3 +704,21 @@ M29 does not add `FD_SEEK`, `dup`/`dup2`, pipes, shell redirection, job control,
 signals, sockets, networking, permissions, authentication, a dynamic linker,
 shared libraries, `mmap`, nonblocking/asynchronous I/O, poll/select/epoll, TTY
 line discipline, PTYs, framebuffer/input work, BoringWM or Milestone 30 work.
+
+---
+
+# Stage 14 — native graphics foundation
+
+## Milestone 30: native framebuffer graphics foundation — IN PROGRESS
+
+Milestone 30 introduces optional validated Limine RGB framebuffer discovery, a
+BoringOS-owned bounded software-rendering surface, project-owned pixel text and
+a one-shot kernel-rendered boot/status dashboard. Serial remains authoritative
+and the persistent BoringFS root, native userspace, descriptor ABI,
+`/bin/boringfetch` and `/bin/cat` remain unchanged.
+
+Acceptance requires permanent host renderer tests plus a real QEMU/Limine
+framebuffer boot with QMP screenshot capture and semantic PPM validation. Input
+is intentionally deferred; Milestone 30 does not implement keyboard, mouse,
+graphics syscalls, userspace framebuffer access, `boring-display`, terminal
+graphics, GUI clients or BoringWM.
