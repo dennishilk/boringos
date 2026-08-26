@@ -1,0 +1,46 @@
+name: M31 closeout transport
+
+on:
+  push:
+    branches:
+      - agent/native-input-foundation
+
+permissions:
+  contents: write
+
+jobs:
+  closeout:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact M31 branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/native-input-foundation
+          fetch-depth: 0
+
+      - name: Verify freeze ancestry and apply input-neutral closeout
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor 065fa085ee7534012037e9eab9b3cfbdcacec39e HEAD
+          python3 tests/m31-closeout.py
+          git diff --check
+          echo '--- closeout diff stat ---'
+          git diff --stat
+          echo '--- remaining historical 0.0.31-dev ---'
+          git grep -n '0.0.31-dev' || true
+          echo '--- active 0.0.32-dev contracts ---'
+          git grep -n '0.0.32-dev'
+
+      - name: Commit closeout only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add README.md README.de.md docs kernel tests
+          git diff --cached --check
+          git diff --cached --quiet && { echo 'no closeout changes produced' >&2; exit 1; }
+          git commit -m 'Close out Milestone 31 documentation and version'
+          git push origin HEAD:agent/native-input-foundation
