@@ -10,6 +10,10 @@
 
 #include "core.h"
 
+#define CURSOR_WITNESS_X 40U
+#define CURSOR_WITNESS_Y 30U
+#define CURSOR_READ_LIMIT 128U
+
 static struct boring_display_core display_core;
 static uint32_t composition_handle;
 static uint8_t *composition_pixels;
@@ -173,9 +177,55 @@ static void receive_destroy(uint32_t endpoint, uint32_t expected_token) {
     reply_send(endpoint, status, request.surface_token);
 }
 
+static void apply_mouse_events(const struct boring_input_event *events,
+                               long count) {
+    long index;
+
+    if ((events == NULL) || (count <= 0L)) {
+        fail("input batch");
+    }
+    for (index = 0L; index < count; ++index) {
+        if (events[index].type == BORING_INPUT_EVENT_MOUSE_MOVE) {
+            boring_display_cursor_move(&display_core,
+                                       events[index].value1,
+                                       events[index].value2);
+        }
+    }
+}
+
+static void wait_cursor_target(uint32_t target_x, uint32_t target_y) {
+    struct boring_input_event events[BORING_INPUT_READ_MAX];
+    unsigned int reads = 0U;
+
+    while (((display_core.cursor_x != target_x) ||
+            (display_core.cursor_y != target_y)) &&
+           (reads < CURSOR_READ_LIMIT)) {
+        long count = boring_input_read(events, BORING_INPUT_READ_MAX);
+
+        if (count <= 0L) {
+            fail("input read");
+        }
+        apply_mouse_events(events, count);
+        ++reads;
+    }
+    if ((display_core.cursor_x != target_x) ||
+        (display_core.cursor_y != target_y)) {
+        fail("cursor target");
+    }
+}
+
+static void wait_capture_release(void) {
+    struct boring_input_event events[BORING_INPUT_READ_MAX];
+    long count = boring_input_read(events, BORING_INPUT_READ_MAX);
+
+    if (count <= 0L) {
+        fail("capture release input");
+    }
+    apply_mouse_events(events, count);
+}
+
 int boring_main(void) {
     struct boring_display_scanout_info info;
-    struct boring_input_event events[BORING_INPUT_READ_MAX];
     struct boring_display_request closed_request;
     struct boring_ipc_receive_result closed_result;
     long listener_raw;
@@ -188,7 +238,6 @@ int boring_main(void) {
     uint32_t endpoint_b;
     uint32_t token_a;
     uint32_t token_b;
-    unsigned int reads = 0U;
 
     if (boring_getpid() != 1ULL) {
         fail("service pid");
@@ -202,9 +251,19 @@ int boring_main(void) {
     say("boring-display: service boring.display registered\n");
 
     require_zero(boring_framebuffer_claim(&info), "framebuffer claim");
-    if (!boring_display_core_init(&display_core, &info)) {
+    say("boring-display: framebuffer claim passed\n");
+    if (!boring_display_core_init(&display_core, &info) ||
+        (info.width <= CURSOR_WITNESS_X) ||
+        (info.height <= CURSOR_WITNESS_Y)) {
         fail("scanout info");
     }
+    say("boring-display: scanout XRGB8888 validated\n");
+    if ((display_core.cursor_x != info.width / 2U) ||
+        (display_core.cursor_y != info.height / 2U)) {
+        fail("cursor initial position");
+    }
+    say("boring-display: cursor initial center\n");
+
     composition_raw = boring_buffer_create((size_t)info.byte_size);
     if (composition_raw <= 0L) {
         fail("composition buffer create");
@@ -227,11 +286,12 @@ int boring_main(void) {
         fail("accept client A");
     }
     endpoint_a = (uint32_t)endpoint_a_raw;
+    say("boring-display: client A connected via M33\n");
     token_a = create_surface(endpoint_a);
     if (token_a == 0U) {
         fail("client A surface");
     }
-    say("boring-display: client A surface created\n");
+    say("boring-display: client A surface created from granted M32 buffer\n");
     receive_commit(endpoint_a, BORING_DISPLAY_STATUS_OK, token_a);
     say("boring-display: live shared-buffer COMMIT passed\n");
 
@@ -240,48 +300,58 @@ int boring_main(void) {
         fail("accept client B");
     }
     endpoint_b = (uint32_t)endpoint_b_raw;
+    say("boring-display: client B connected via M33\n");
     token_b = create_surface(endpoint_b);
     if ((token_b == 0U) || (token_b == token_a)) {
         fail("client B surface");
     }
-    say("boring-display: client B surface created\n");
+    say("boring-display: client B surface created from granted M32 buffer\n");
     receive_commit(endpoint_b, BORING_DISPLAY_STATUS_ACCESS, 0U);
     say("boring-display: cross-client authority isolation passed\n");
     receive_commit(endpoint_b, BORING_DISPLAY_STATUS_OK, token_b);
+    if (display_core.live_surfaces != 2U) {
+        fail("two live surfaces");
+    }
     say("boring-display: deterministic stacking passed\n");
+
+    say("boring-display: waiting for cursor clip top-left\n");
+    wait_cursor_target(0U, 0U);
+    compose_present();
+    say("boring-display: cursor clipped top-left and presented\n");
+
+    say("boring-display: waiting for cursor clip bottom-right\n");
+    wait_cursor_target(display_core.width - 1U, display_core.height - 1U);
+    compose_present();
+    say("boring-display: cursor clipped bottom-right and presented\n");
+
+    say("boring-display: waiting for cursor witness position\n");
+    wait_cursor_target(CURSOR_WITNESS_X, CURSOR_WITNESS_Y);
+    if (display_core.live_surfaces != 2U) {
+        fail("visual witness surfaces");
+    }
+    compose_present();
+    say("boring-display: visual witness ready cursor=40,30 surfaces=2\n");
+    say("boring-display: framebuffer present witness complete\n");
+    say("boring-display: waiting for visual witness capture release\n");
+
+    /*
+     * The permanent QEMU harness captures and validates the framebuffer while
+     * this blocking M31 read holds both clients and both surfaces stable. A
+     * second real QMP mouse event releases the acceptance barrier.
+     */
+    wait_capture_release();
+    say("boring-display: visual witness capture released by real input\n");
+    reply_send(endpoint_a, BORING_DISPLAY_STATUS_OK,
+               BORING_DISPLAY_SURFACE_INVALID);
+    reply_send(endpoint_b, BORING_DISPLAY_STATUS_OK,
+               BORING_DISPLAY_SURFACE_INVALID);
 
     result = request_receive(endpoint_a, &closed_request, &closed_result);
     if (result != -(long)BORING_SYSCALL_EPIPE) {
         fail("client A death witness");
     }
     cleanup_peer(endpoint_a);
-    say("boring-display: client death cleanup passed\n");
-
-    say("boring-display: waiting for real mouse input\n");
-    while (((display_core.cursor_x + 1U) < display_core.width ||
-            (display_core.cursor_y + 1U) < display_core.height) &&
-           (reads < 64U)) {
-        long count = boring_input_read(events, BORING_INPUT_READ_MAX);
-        long index;
-        if (count <= 0L) {
-            fail("input read");
-        }
-        for (index = 0L; index < count; ++index) {
-            if (events[index].type == BORING_INPUT_EVENT_MOUSE_MOVE) {
-                boring_display_cursor_move(&display_core,
-                                           events[index].value1,
-                                           events[index].value2);
-            }
-        }
-        ++reads;
-    }
-    if (((display_core.cursor_x + 1U) != display_core.width) ||
-        ((display_core.cursor_y + 1U) != display_core.height)) {
-        fail("cursor clipping");
-    }
-    compose_present();
-    say("boring-display: real mouse cursor clipped and presented\n");
-    reply_send(endpoint_b, BORING_DISPLAY_STATUS_OK, 0U);
+    say("boring-display: client A death cleanup passed\n");
 
     receive_destroy(endpoint_b, token_b);
     say("boring-display: client B surface destroyed\n");
