@@ -12,6 +12,8 @@
 #define SURFACE_STRIDE (SURFACE_WIDTH * BORING_DISPLAY_BYTES_PER_PIXEL)
 #define SURFACE_BYTES ((size_t)SURFACE_STRIDE * (size_t)SURFACE_HEIGHT)
 
+int boring_main(void);
+
 static void say(const char *text) {
     (void)boring_debug_write(text, boring_strlen(text));
 }
