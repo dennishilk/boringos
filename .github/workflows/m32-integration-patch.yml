@@ -30,7 +30,10 @@ jobs:
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add kernel user tests Makefile .github/workflows/boot-test.yml
+          # The GitHub Actions token has contents:write but intentionally lacks
+          # workflows permission. Keep the permanent workflow edit unstaged;
+          # it is applied through the authorized GitHub connector afterward.
+          git add kernel user tests Makefile
           git diff --cached --check
           git diff --cached --quiet && { echo 'no integration changes produced' >&2; exit 1; }
           git commit -m 'Integrate M32 memory shared buffers and acceptance'
