@@ -371,9 +371,10 @@ qemu-bundle:
 	$(MAKE) user-cat
 	$(MAKE) user-input-test
 	$(MAKE) user-memory-test
+	$(MAKE) user-ipc-test
 	mkdir -p $(BUILD_DIR)/boringos-qemu-x86_64
 	cp $(ISO) $(BUILD_DIR)/boringos-qemu-x86_64/boringos.iso
-	$(BORINGFS_FIXTURE) $(BUILD_DIR)/boringos-qemu-x86_64/boringos-root.img valid $(BORINGFETCH_ELF) $(CAT_ELF) $(INPUT_TEST_ELF) $(MEMORY_TEST_ELF)
+	$(BORINGFS_FIXTURE) $(BUILD_DIR)/boringos-qemu-x86_64/boringos-root.img valid $(BORINGFETCH_ELF) $(CAT_ELF) $(INPUT_TEST_ELF) $(MEMORY_TEST_ELF) $(IPC_TEST_ELF)
 	cp scripts/run-boringos.sh $(BUILD_DIR)/boringos-qemu-x86_64/run-boringos.sh
 	cp docs/RUNNING.md $(BUILD_DIR)/boringos-qemu-x86_64/README.md
 	cd $(BUILD_DIR)/boringos-qemu-x86_64 && sha256sum boringos.iso boringos-root.img > SHA256SUMS
