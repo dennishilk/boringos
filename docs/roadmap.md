@@ -709,16 +709,33 @@ line discipline, PTYs, framebuffer/input work, BoringWM or Milestone 30 work.
 
 # Stage 14 — native graphics foundation
 
-## Milestone 30: native framebuffer graphics foundation — IN PROGRESS
+## Milestone 30: native framebuffer graphics foundation — COMPLETE
 
 Milestone 30 introduces optional validated Limine RGB framebuffer discovery, a
-BoringOS-owned bounded software-rendering surface, project-owned pixel text and
-a one-shot kernel-rendered boot/status dashboard. Serial remains authoritative
-and the persistent BoringFS root, native userspace, descriptor ABI,
-`/bin/boringfetch` and `/bin/cat` remain unchanged.
+BoringOS-owned bounded software-rendering surface, project-owned 5x7 printable
+ASCII pixel text and a one-shot kernel-rendered boot/status dashboard. The
+surface accepts validated 24-bpp and 32-bpp RGB layouts, uses checked geometry,
+pitch, byte-size and offset arithmetic, and clips every drawing primitive before
+writing. Explicit text-coordinate overflow guards and UINT64_MAX/canary tests
+close the final bounds-hardening edge found before semantic freeze.
 
-Acceptance requires permanent host renderer tests plus a real QEMU/Limine
-framebuffer boot with QMP screenshot capture and semantic PPM validation. Input
-is intentionally deferred; Milestone 30 does not implement keyboard, mouse,
-graphics syscalls, userspace framebuffer access, `boring-display`, terminal
-graphics, GUI clients or BoringWM.
+The real persistent-root acceptance renders the dashboard after VirtIO-backed
+BoringFS is mounted, captures the actual QEMU display through QMP `screendump`,
+parses and semantically validates the PPM, and then proves that serial userspace,
+`/bin/boringfetch`, descriptor-backed `/bin/cat`, BoringFS tooling and the full
+historical suite remain operational. Missing, unsupported or malformed
+framebuffer metadata remains non-fatal and falls back to the authoritative
+serial-only boot path.
+
+Semantic freeze acceptance record:
+
+```text
+feature head: 45baa4f2f62daee0e15c35909b7c6c1408a4378d
+exact-head verification: Run 32919539003 / SUCCESS
+freeze dashboard: 1024x768x32, visually inspected from exact-run artifact
+```
+
+M30 graphics remain kernel-only. Input is intentionally deferred; Milestone 30
+does not implement keyboard, mouse, an input subsystem, graphics syscalls,
+userspace framebuffer mapping, `boring-display`, a terminal graphics stack, GUI
+clients, BoringWM or Milestone 31 work.
