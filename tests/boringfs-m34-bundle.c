@@ -260,21 +260,6 @@ int main(int argc, char **argv) {
         goto cleanup;
     }
 
-    for (index = 0U; index < (size_t)M34_PROGRAM_COUNT; ++index) {
-        if (!allocate_program(volume, &programs[index]) ||
-            !make_object(volume, volume_size, NULL, 0U, 0U, 0U,
-                         0ULL, NULL, 0U)) {
-            /* The dummy make_object call is never reached as valid work; it
-             * keeps no state and is deliberately replaced below after the
-             * superblock is decoded. */
-            break;
-        }
-    }
-    if (index != 0U) {
-        /* unreachable; see allocation block below */
-        goto cleanup;
-    }
-
     {
         struct boringfs_superblock superblock;
 
