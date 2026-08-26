@@ -83,6 +83,14 @@ for line in \
     '  fd-write-stdin-rejected: PASS' \
     '  fd-invalid-pointer-rejected: PASS' \
     '  fd-oversized-transfer-rejected: PASS' \
+    '  input-non-owner-read-rejected: PASS' \
+    '  input-non-owner-release-rejected: PASS' \
+    '  input-claim: PASS' \
+    '  input-double-claim: PASS' \
+    '  input-invalid-pointer-rejected: PASS' \
+    '  input-zero-count-rejected: PASS' \
+    '  input-oversized-count-rejected: PASS' \
+    '  input-release: PASS' \
     '  sysret-cpl3: PASS' \
     '  user-rsp-restored: PASS' \
     '  callee-saved-preserved: PASS' \
@@ -90,7 +98,7 @@ for line in \
     '  final-tss-rsp0: PASS' \
     'GETPID result: 1' \
     'DEBUG_WRITE result: 25' \
-    'Syscall dispatches: 12' \
+    'Syscall dispatches: 20' \
     'BoringKernel syscall boundary test passed.'
 do
     if ! grep -Fqx "${line}" "${LOG}"; then
