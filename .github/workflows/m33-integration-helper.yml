@@ -26,6 +26,7 @@ jobs:
         run: |
           python3 tools/m33_apply.py
           python3 tools/m33_finish.py
+          git restore .github/workflows/boot-test.yml
       - name: Commit generated integration changes
         run: |
           if git diff --quiet; then
