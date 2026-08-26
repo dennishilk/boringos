@@ -2,20 +2,20 @@
 
 This remains a deliberately narrow, QEMU-verified bootstrap interface, **not
 a stable public ABI and not a general userspace runtime**. The original
-0.0.11-dev boundary is retained below; this section records the current M29
+0.0.11-dev boundary is retained below; this section records the current M31
 extensions that supersede its two-call inventory and process-lifecycle
 non-goals.
 
-## Current M29 syscall surface
+## Current M31 syscall surface
 
 ```text
  0 GETPID             9 FS_READ            18 FD_OPEN
  1 DEBUG_WRITE       10 FS_TOUCH           19 FD_READ
  2 CONSOLE_WRITE     11 FS_WRITE           20 FD_WRITE
  3 CONSOLE_READ      12 FS_UNLINK          21 FD_CLOSE
- 4 LAUNCH            13 INFO
- 5 FS_READDIR        14 GETCWD
- 6 FS_MKDIR          15 PROCESS_SNAPSHOT
+ 4 LAUNCH            13 INFO               22 INPUT_CLAIM
+ 5 FS_READDIR        14 GETCWD             23 INPUT_READ
+ 6 FS_MKDIR          15 PROCESS_SNAPSHOT   24 INPUT_RELEASE
  7 FS_RMDIR          16 EXIT
  8 FS_CHDIR          17 WAITPID
 ```
@@ -42,6 +42,26 @@ permits only one suspended child; this is not general POSIX process control.
 
 The current additional symbolic error `EISDIR` maps directory-vs-regular-file
 misuse without changing underlying VFS semantics.
+
+## Milestone 31 input calls
+
+`INPUT_CLAIM` gives the current process exclusive ownership of the native input
+queue; a repeated claim by the same PID succeeds and a competing PID is rejected.
+`INPUT_RELEASE` requires the owner and clears queued events and held modifier
+state. Process exit performs the same ownership cleanup before the parent resumes.
+
+`INPUT_READ(events, max_events)` requires `max_events` in the inclusive range
+1..16 and validates the complete writable user destination before dequeuing. An
+empty owned queue blocks inside the kernel rather than polling in userspace. On
+the current single-CPU trusted syscall stack the empty check and wait arm are
+atomic with interrupts disabled, then `sti; hlt` waits for an interrupt and the
+queue is rechecked after wakeup. The ABI event is the fixed 24-byte structure
+documented in `docs/input.md`; queue capacity is 128 events with drop-newest
+overflow accounting.
+
+These calls expose normalized keyboard/mouse events only. They do not introduce
+a TTY, cursor, display server, windowing API, USB HID or a general asynchronous
+I/O facility.
 
 ## Original 0.0.11-dev scope
 

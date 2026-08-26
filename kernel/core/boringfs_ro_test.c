@@ -484,7 +484,7 @@ void boringfs_ro_test_run(void) {
         if ((surface != NULL) && pmm_get_stats(&memory_stats)) {
             const struct boring_boot_dashboard_info dashboard_info = {
                 .kernel_name = "BoringKernel",
-                .kernel_version = "0.0.31-dev",
+                .kernel_version = "0.0.32-dev",
                 .arch = "x86_64",
                 .memory_bytes = memory_stats.usable_bytes,
                 .root_fs = "BoringFS",

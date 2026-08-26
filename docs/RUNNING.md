@@ -32,8 +32,12 @@ the same serial shell in the terminal, use:
 ./run-boringos.sh --gui
 ```
 
-The graphical screen is informational in Milestone 30; keyboard input remains
-serial-only.
+The graphical dashboard remains informational. Milestone 31 adds native PS/2
+keyboard and mouse events, but the shell's stdin/stdout remain on the serial
+console. From the shell, `/bin/input-test` claims the native input stream and
+blocks until real keyboard/mouse events arrive; its `--teardown` mode is used by
+the lifecycle acceptance. There is still no cursor, graphical shell, display
+server or window system.
 
 The root image is attached through modern VirtIO PCI. Writes are persistent;
 do not add QEMU snapshot options. Try:
