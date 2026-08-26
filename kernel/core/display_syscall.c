@@ -260,6 +260,28 @@ static bool display_test_exit(struct x86_64_syscall_frame *frame) {
     task_exit_current_process();
 }
 
+static void normal_exit_framebuffer_cleanup(struct x86_64_syscall_frame *frame) {
+    struct process *process;
+    bool released = false;
+
+    if ((frame == NULL) ||
+        (frame->syscall_number != (uint64_t)BORING_SYS_EXIT)) {
+        return;
+    }
+    process = process_current();
+    if ((process == NULL) || !process_is_alive(process)) {
+        return;
+    }
+    if (!boring_framebuffer_user_process_teardown(process->pid, &released)) {
+        display_syscall_fatal("normal process framebuffer cleanup failed");
+    }
+    if (released) {
+        serial_write_string("boring-framebuffer: owner pid ");
+        serial_write_u64(process->pid);
+        serial_write_string(" teardown released\n");
+    }
+}
+
 void x86_64_syscall_dispatch_m34(struct x86_64_syscall_frame *frame) {
     uint64_t result;
     const uint64_t number = (frame != NULL) ? frame->syscall_number : UINT64_MAX;
@@ -267,6 +289,7 @@ void x86_64_syscall_dispatch_m34(struct x86_64_syscall_frame *frame) {
     if (display_test_exit(frame)) {
         display_syscall_fatal("M34 process exit returned");
     }
+    normal_exit_framebuffer_cleanup(frame);
     if (!is_m34_syscall(number)) {
         x86_64_syscall_dispatch_m33(frame);
         return;
