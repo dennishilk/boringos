@@ -7,6 +7,7 @@ on:
       - agent/native-ipc-service-foundation
     paths:
       - tools/m33_apply.py
+      - tools/m33_finish.py
       - .github/workflows/m33-integration-helper.yml
 
 permissions:
@@ -21,8 +22,10 @@ jobs:
         with:
           ref: agent/native-ipc-service-foundation
           fetch-depth: 0
-      - name: Apply deterministic M33 integration patch
-        run: python3 tools/m33_apply.py
+      - name: Apply deterministic M33 integration patches
+        run: |
+          python3 tools/m33_apply.py
+          python3 tools/m33_finish.py
       - name: Commit generated integration changes
         run: |
           if git diff --quiet; then
@@ -32,5 +35,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          git commit -m 'Apply M33 integration patch'
+          git commit -m 'Apply remaining M33 integration patch'
           git push origin HEAD:agent/native-ipc-service-foundation
