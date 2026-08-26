@@ -34,6 +34,12 @@ qemu_is_running() {
     return 0
 }
 
+witness_seen() {
+    witness=$1
+    grep -Fqx "${witness}" "${LOG}" 2>/dev/null ||
+        grep -Fqx "Syscall DEBUG_WRITE: ${witness}" "${LOG}" 2>/dev/null
+}
+
 record_qemu_exit() {
     [ -n "${PID}" ] || return 0
     if qemu_is_running; then
@@ -66,7 +72,7 @@ write_diagnostics() {
     if [ -f "${EXPECTED}" ]; then
         while IFS= read -r witness; do
             [ -n "${witness}" ] || continue
-            if grep -Fqx "${witness}" "${LOG}" 2>/dev/null; then
+            if witness_seen "${witness}"; then
                 if [ -z "${first_missing}" ]; then
                     last_success=${witness}
                 fi
@@ -91,6 +97,9 @@ write_diagnostics() {
         echo '=== serial context around last successful M33 witness ==='
         if [ -n "${last_success}" ] && [ -f "${LOG}" ]; then
             line_no=$(grep -Fnx "${last_success}" "${LOG}" 2>/dev/null | tail -n 1 | cut -d: -f1 || true)
+            if [ -z "${line_no}" ]; then
+                line_no=$(grep -Fnx "Syscall DEBUG_WRITE: ${last_success}" "${LOG}" 2>/dev/null | tail -n 1 | cut -d: -f1 || true)
+            fi
             if [ -n "${line_no}" ]; then
                 start=$((line_no > 8 ? line_no - 8 : 1))
                 end=$((line_no + 8))
@@ -190,7 +199,7 @@ for line in \
     'ipc-test: IPC and M32 resources reclaimed' \
     'ipc-test: process-local handle isolation passed' \
     'ipc-test: process-exit cleanup passed'; do
-    grep -Fqx "${line}" "${LOG}" || fail "missing M33 witness: ${line}"
+    witness_seen "${line}" || fail "missing M33 witness: ${line}"
 done
 
 for pid in 1 2 3; do
