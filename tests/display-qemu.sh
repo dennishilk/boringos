@@ -242,17 +242,17 @@ wait_for 'display-test: process-exit cleanup passed'
 wait_for 'M34 native boring-display acceptance passed.'
 
 for line in \
-    'boring-display: client A surface created from granted M32 buffer' \
-    'boring-display: client B surface created from granted M32 buffer' \
-    'boring-display: live shared-buffer COMMIT passed' \
-    'boring-display: cross-client authority isolation passed' \
-    'boring-display: deterministic stacking passed' \
-    'boring-display: cursor clipped top-left and presented' \
-    'boring-display: cursor clipped bottom-right and presented' \
-    'boring-display: visual witness ready cursor=40,30 surfaces=2' \
-    'boring-display: framebuffer present witness complete' \
-    'boring-display: client A death cleanup passed' \
-    'boring-display: client B surface destroyed' \
+    'Syscall DEBUG_WRITE: boring-display: client A surface created from M32 grant' \
+    'Syscall DEBUG_WRITE: boring-display: client B surface created from M32 grant' \
+    'Syscall DEBUG_WRITE: boring-display: live shared-buffer COMMIT passed' \
+    'Syscall DEBUG_WRITE: boring-display: cross-client authority isolation passed' \
+    'Syscall DEBUG_WRITE: boring-display: deterministic stacking passed' \
+    'Syscall DEBUG_WRITE: boring-display: cursor clipped top-left and presented' \
+    'Syscall DEBUG_WRITE: boring-display: cursor clipped bottom-right and presented' \
+    'Syscall DEBUG_WRITE: boring-display: visual witness ready cursor=40,30 surfaces=2' \
+    'Syscall DEBUG_WRITE: boring-display: framebuffer present witness complete' \
+    'Syscall DEBUG_WRITE: boring-display: client A death cleanup passed' \
+    'Syscall DEBUG_WRITE: boring-display: client B surface destroyed' \
     'display-test: IPC/input/framebuffer/M32 resources reclaimed' \
     'display-test: process-exit cleanup passed' \
     'M34 native boring-display acceptance passed.'; do

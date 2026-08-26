@@ -13,6 +13,17 @@
 #define CURSOR_WITNESS_X 40U
 #define CURSOR_WITNESS_Y 30U
 #define CURSOR_READ_LIMIT 128U
+#define CLIENT_A_SURFACE_WITNESS \
+    "boring-display: client A surface created from M32 grant\n"
+#define CLIENT_B_SURFACE_WITNESS \
+    "boring-display: client B surface created from M32 grant\n"
+
+_Static_assert(sizeof(CLIENT_A_SURFACE_WITNESS) - 1U <=
+                   BORING_SYSCALL_DEBUG_WRITE_MAX,
+               "Client A surface witness exceeds DEBUG_WRITE ABI");
+_Static_assert(sizeof(CLIENT_B_SURFACE_WITNESS) - 1U <=
+                   BORING_SYSCALL_DEBUG_WRITE_MAX,
+               "Client B surface witness exceeds DEBUG_WRITE ABI");
 
 static struct boring_display_core display_core;
 static uint32_t composition_handle;
@@ -301,7 +312,7 @@ int boring_main(void) {
     if (token_a == 0U) {
         fail("client A surface");
     }
-    say("boring-display: client A surface created from granted M32 buffer\n");
+    say(CLIENT_A_SURFACE_WITNESS);
     receive_commit(endpoint_a, BORING_DISPLAY_STATUS_OK, token_a);
     say("boring-display: live shared-buffer COMMIT passed\n");
 
@@ -315,7 +326,7 @@ int boring_main(void) {
     if ((token_b == 0U) || (token_b == token_a)) {
         fail("client B surface");
     }
-    say("boring-display: client B surface created from granted M32 buffer\n");
+    say(CLIENT_B_SURFACE_WITNESS);
     receive_commit(endpoint_b, BORING_DISPLAY_STATUS_ACCESS, 0U);
     say("boring-display: cross-client authority isolation passed\n");
     receive_commit(endpoint_b, BORING_DISPLAY_STATUS_OK, token_b);
