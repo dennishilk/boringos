@@ -31,7 +31,18 @@ audit_common() {
     if printf '%s\n' "${programs}" | grep -Eq '^  (INTERP|DYNAMIC|TLS)'; then
         fail "${label}: unexpected PT_INTERP/PT_DYNAMIC/PT_TLS"
     fi
-    if printf '%s\n' "${programs}" | grep '^  LOAD' | grep -Eq ' W E '; then
+    if printf '%s\n' "${programs}" | awk '
+        /^  LOAD/ {
+            flags = ""
+            for (field = 7; field < NF; ++field) {
+                flags = flags $field
+            }
+            if ((index(flags, "W") != 0) && (index(flags, "E") != 0)) {
+                bad = 1
+            }
+        }
+        END { exit bad ? 0 : 1 }
+    '; then
         fail "${label}: writable+executable PT_LOAD"
     fi
     printf '%s\n' "${dynamic}" | grep -Fq 'There is no dynamic section in this file.' || fail "${label}: dynamic section"
