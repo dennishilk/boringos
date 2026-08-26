@@ -120,14 +120,14 @@ static bool task_stack_ranges_overlap(uintptr_t first_base,
     return (first_base < second_end) && (second_base < first_end);
 }
 
-static bool task_stack_common_is_valid(const struct kernel_task *task,
-                                       uintptr_t *base_out,
-                                       uintptr_t *end_out) {
+static bool task_stack_storage_is_valid(const struct kernel_task *task,
+                                        uintptr_t *base_out,
+                                        uintptr_t *end_out) {
     volatile const uint64_t *sentinel;
     uintptr_t base;
     uintptr_t end;
 
-    if ((!task->slot_used) || !task_process_is_valid(task) ||
+    if ((task == NULL) || !task->slot_used ||
         (task->stack_base == NULL) ||
         (task->stack_size != (size_t)KERNEL_TASK_STACK_SIZE)) {
         return false;
@@ -156,6 +156,13 @@ static bool task_stack_common_is_valid(const struct kernel_task *task,
         *end_out = end;
     }
     return true;
+}
+
+static bool task_stack_common_is_valid(const struct kernel_task *task,
+                                       uintptr_t *base_out,
+                                       uintptr_t *end_out) {
+    return task_process_is_valid(task) &&
+           task_stack_storage_is_valid(task, base_out, end_out);
 }
 
 static bool task_preempt_frame_is_valid_for(
@@ -793,7 +800,7 @@ bool task_finished_stacks_valid(void) {
         for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
             if (tasks[index].slot_used &&
                 ((tasks[index].state != KERNEL_TASK_FINISHED) ||
-                 !task_stack_is_valid(&tasks[index]))) {
+                 !task_stack_storage_is_valid(&tasks[index], NULL, NULL))) {
                 valid = false;
                 break;
             }
@@ -826,7 +833,7 @@ bool task_cleanup_finished(uint64_t *freed_stacks) {
     for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
         if (tasks[index].slot_used &&
             ((tasks[index].state != KERNEL_TASK_FINISHED) ||
-             !task_stack_is_valid(&tasks[index]))) {
+             !task_stack_storage_is_valid(&tasks[index], NULL, NULL))) {
             if (interrupts_were_enabled) {
                 x86_64_interrupts_enable();
             }
