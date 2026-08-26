@@ -12,7 +12,8 @@
 enum kernel_task_state {
     KERNEL_TASK_READY = 0,
     KERNEL_TASK_RUNNING = 1,
-    KERNEL_TASK_FINISHED = 2
+    KERNEL_TASK_FINISHED = 2,
+    KERNEL_TASK_BLOCKED = 3
 };
 
 struct process;
@@ -36,6 +37,9 @@ struct task_stats {
 
 bool task_init(void);
 bool task_create(void (*entry)(void *), void *arg, uint64_t *task_id);
+bool task_create_for_process(struct process *process,
+                             void (*entry)(void *),
+                             void *arg, uint64_t *task_id);
 bool task_create_preemptive(void (*entry)(void *), void *arg,
                             uint64_t *task_id);
 bool task_create_preemptive_for_process(struct process *process,
@@ -43,6 +47,9 @@ bool task_create_preemptive_for_process(struct process *process,
                                         void *arg,
                                         uint64_t *task_id);
 void task_yield(void);
+bool task_block_current(void);
+bool task_wake_process(struct process *process);
+void task_exit_current_process(void) __attribute__((noreturn));
 uint64_t task_current_id(void);
 uint64_t task_current_process_id(void);
 uint64_t task_current_preempt_slices(void);

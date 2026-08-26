@@ -38,6 +38,12 @@
 #define BORING_SYS_BUFFER_MAP 28
 #define BORING_SYS_BUFFER_UNMAP 29
 #define BORING_SYS_BUFFER_CLOSE 30
+#define BORING_SYS_SERVICE_REGISTER 31
+#define BORING_SYS_SERVICE_CONNECT 32
+#define BORING_SYS_SERVICE_ACCEPT 33
+#define BORING_SYS_IPC_SEND 34
+#define BORING_SYS_IPC_RECEIVE 35
+#define BORING_SYS_IPC_CLOSE 36
 
 #define BORING_SYSCALL_DEBUG_WRITE_MAX 64
 #define BORING_SYSCALL_CONSOLE_IO_MAX 64
@@ -57,6 +63,12 @@
 #define BORING_BUFFER_MAPPING_MAX 32U
 #define BORING_BUFFER_OBJECT_MAX 64U
 #define BORING_BUFFER_HANDLE_INVALID 0U
+
+#define BORING_IPC_SERVICE_NAME_MAX 31U
+#define BORING_IPC_HANDLE_INVALID 0U
+#define BORING_IPC_NO_ATTACHED_BUFFER BORING_BUFFER_HANDLE_INVALID
+#define BORING_IPC_INLINE_PAYLOAD_MAX 256U
+#define BORING_IPC_RECEIVE_FLAGS_NONE 0U
 
 #define BORING_FD_STDIN 0U
 #define BORING_FD_STDOUT 1U
@@ -99,12 +111,19 @@
 #define BORING_SYSCALL_EISDIR 14
 #define BORING_SYSCALL_ENOEXEC 15
 #define BORING_SYSCALL_ENOMEM 16
+#define BORING_SYSCALL_EPIPE 17
 
 #ifndef __ASSEMBLER__
 
 #include <stdint.h>
 
 #include <boring/input_abi.h>
+
+struct boring_ipc_receive_result {
+    uint64_t payload_length;
+    uint32_t buffer_handle;
+    uint32_t flags;
+};
 
 struct boring_dirent {
     uint64_t node_id;
@@ -170,6 +189,20 @@ _Static_assert(BORING_SYS_BUFFER_UNMAP == 29,
                "BUFFER_UNMAP syscall number contract changed");
 _Static_assert(BORING_SYS_BUFFER_CLOSE == 30,
                "BUFFER_CLOSE syscall number contract changed");
+_Static_assert(BORING_SYS_SERVICE_REGISTER == 31,
+               "SERVICE_REGISTER syscall number contract changed");
+_Static_assert(BORING_SYS_SERVICE_CONNECT == 32,
+               "SERVICE_CONNECT syscall number contract changed");
+_Static_assert(BORING_SYS_SERVICE_ACCEPT == 33,
+               "SERVICE_ACCEPT syscall number contract changed");
+_Static_assert(BORING_SYS_IPC_SEND == 34,
+               "IPC_SEND syscall number contract changed");
+_Static_assert(BORING_SYS_IPC_RECEIVE == 35,
+               "IPC_RECEIVE syscall number contract changed");
+_Static_assert(BORING_SYS_IPC_CLOSE == 36,
+               "IPC_CLOSE syscall number contract changed");
+_Static_assert(sizeof(struct boring_ipc_receive_result) == 16U,
+               "M33 IPC receive ABI size must remain fixed");
 _Static_assert(sizeof(struct boring_system_info) == 256U,
                "BoringOS system-info ABI size must remain fixed");
 _Static_assert(sizeof(struct boring_process_info) == 56U,
