@@ -34,6 +34,24 @@ jobs:
                  'and not line.startswith(".github/workflows/m31-closeout.yml:")]\n')
           if text.count(old) != 1:
               raise SystemExit('closeout grep filter anchor mismatch')
+          text = text.replace(old, new, 1)
+          old = ('    if count != 1:\n'
+                 '        raise SystemExit(f"{path}: expected exactly one closeout anchor, found {count}")\n'
+                 '    p.write_text(text.replace(old, new, 1))\n')
+          new = ('    if path == "docs/roadmap.md" and old.startswith("The accepted development banner is now:"):\n'
+                 '        marker = "# Stage 1 — memory foundations"\n'
+                 '        if marker not in text:\n'
+                 '            raise SystemExit("docs/roadmap.md: current-state boundary missing")\n'
+                 '        current, historical = text.split(marker, 1)\n'
+                 '        if current.count(old) != 1:\n'
+                 '            raise SystemExit(f"docs/roadmap.md: expected one current banner anchor, found {current.count(old)}")\n'
+                 '        p.write_text(current.replace(old, new, 1) + marker + historical)\n'
+                 '        return\n'
+                 '    if count != 1:\n'
+                 '        raise SystemExit(f"{path}: expected exactly one closeout anchor, found {count}")\n'
+                 '    p.write_text(text.replace(old, new, 1))\n')
+          if text.count(old) != 1:
+              raise SystemExit('closeout replace_once guard anchor mismatch')
           path.write_text(text.replace(old, new, 1))
           PY
           python3 tests/m31-closeout.py
