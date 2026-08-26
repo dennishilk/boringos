@@ -12,14 +12,17 @@ fail() {
 }
 
 # Build the ordinary persistent-root ISO exactly through the established M28+
-# path, then replace only the distributable root image with the fully verified
-# M34 superset fixture.
+# path, then use the verified M34 superset fixture as the distributable root.
 make -C "${ROOT}" TEST_MODE=persistent-root
-sh "${ROOT}/tests/m34-bundle-test.sh"
+if [ ! -f "${M34_ROOT}" ] || [ ! -f "${GEOMETRY}" ]; then
+    sh "${ROOT}/tests/m34-bundle-test.sh"
+fi
 
 [ -f "${ROOT}/build/boringos.iso" ] || fail 'persistent-root ISO missing'
 [ -f "${M34_ROOT}" ] || fail 'verified M34 BoringFS root image missing'
 [ -f "${GEOMETRY}" ] || fail 'M34 geometry evidence missing'
+"${ROOT}/build/boringfsck" "${M34_ROOT}" |
+    grep -Fqx 'Status: VALID' || fail 'verified M34 root no longer passes boringfsck'
 
 rm -rf "${OUT}"
 mkdir -p "${OUT}"
