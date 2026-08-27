@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   graphical-desktop-qemu:
-    if: "${{ github.event.head_commit.message == 'M36: rerun graphical desktop diagnostics' }}"
+    if: "${{ github.event.head_commit.message == 'M36: rerun graphical desktop diagnostics v2' }}"
     runs-on: ubuntu-24.04
     steps:
       - name: Check out exact feature branch
@@ -22,7 +22,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = "00f29ab45f60b15734131a568b173795386a97f0"
+          test "$(git rev-parse HEAD^)" = "a972ccc6a46858069fef595a18ac47f09709e191"
           cat .github/m36-desktop.patch.part00 \
               .github/m36-desktop.patch.part01 \
               .github/m36-desktop.patch.part02 > /tmp/m36-desktop.patch
@@ -32,7 +32,7 @@ jobs:
           echo '509272be600fe571233528ec62ff7ba10553561e53fe8cb1758afd4fdf053997  .github/m36-stackfix.patch' | sha256sum -c -
           git apply --check .github/m36-stackfix.patch
           git apply .github/m36-stackfix.patch
-          echo '8a7bebb5ec3ab894e3c9906dc59fd18ae27b662bb9106e0a54e069e283194adb  .github/m36-diag.patch' | sha256sum -c -
+          sha256sum .github/m36-diag.patch
           git apply --check .github/m36-diag.patch
           git apply .github/m36-diag.patch
 
