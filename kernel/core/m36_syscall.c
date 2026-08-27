@@ -404,8 +404,14 @@ static bool m36_reap_record(struct m36_spawn_record *record) {
         return false;
     }
     child = record->child;
-    if (!task_reap_finished_process(child) || !process_destroy(child)) {
-        return false;
+    {
+        const uint64_t child_pid = child->pid;
+        if (!task_reap_finished_process(child) || !process_destroy(child)) {
+            return false;
+        }
+        serial_write_string("boring-spawn: reaped child pid ");
+        serial_write_u64(child_pid);
+        serial_write_string(" task/process cleanup complete\n");
     }
     m36_record_clear(record);
     return true;
@@ -620,6 +626,19 @@ static uint64_t m36_spawn(uint64_t user_path,
         return m36_spawn_rollback(child, &image, image_loaded,
                                   BORING_SYSCALL_EIO);
     }
+
+    serial_write_string("boring-spawn: VFS executable source ");
+    serial_write_string(path);
+    serial_write_string("\nboring-spawn: independent address space\n");
+    serial_write_string("boring-spawn: argc ");
+    serial_write_u64((uint64_t)arguments.argc);
+    serial_write_string("\nboring-spawn: stdio child 0<-");
+    serial_write_u64((uint64_t)stdio_config.stdin_fd);
+    serial_write_string(" 1<-");
+    serial_write_u64((uint64_t)stdio_config.stdout_fd);
+    serial_write_string(" 2<-");
+    serial_write_u64((uint64_t)stdio_config.stderr_fd);
+    serial_write_string("\n");
 
     m36_record_clear(record);
     record->child = child;

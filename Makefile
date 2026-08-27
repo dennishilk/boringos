@@ -51,6 +51,12 @@ MEMORY_TEST_ELF := $(USER_BUILD_DIR)/memory-test.elf
 IPC_TEST_MAIN_OBJECT := $(USER_BUILD_DIR)/ipc-test/main.o
 IPC_TEST_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(IPC_RUNTIME_OBJECT) $(IPC_TEST_MAIN_OBJECT)
 IPC_TEST_ELF := $(USER_BUILD_DIR)/ipc-test.elf
+M36_SPAWN_PARENT_MAIN_OBJECT := $(USER_BUILD_DIR)/m36-spawn-parent/main.o
+M36_SPAWN_PARENT_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(M36_SPAWN_PARENT_MAIN_OBJECT)
+M36_SPAWN_PARENT_ELF := $(USER_BUILD_DIR)/m36-spawn-parent.elf
+M36_SPAWN_CHILD_MAIN_OBJECT := $(USER_BUILD_DIR)/m36-spawn-child/main.o
+M36_SPAWN_CHILD_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(M36_SPAWN_CHILD_MAIN_OBJECT)
+M36_SPAWN_CHILD_ELF := $(USER_BUILD_DIR)/m36-spawn-child.elf
 BORING_DISPLAY_CORE_OBJECT := $(USER_BUILD_DIR)/boring-display/core.o
 BORING_DISPLAY_MAIN_OBJECT := $(USER_BUILD_DIR)/boring-display/main.o
 BORING_DISPLAY_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(IPC_RUNTIME_OBJECT) \
@@ -193,6 +199,12 @@ TEST_HARNESS_C := kernel/core/syscall_test.c
 BOOT_USER_ELF := $(IPC_TEST_ELF)
 BOOT_USER_NAME := ipc-test.elf
 BOOT_LIMINE_CONF := limine-ipc.conf
+else ifeq ($(TEST_MODE),m36-spawn)
+TEST_MODE_VALUE := 5
+TEST_HARNESS_C := kernel/core/m36_spawn_test.c kernel/core/m36_spawn_test_adapter.c
+BOOT_USER_ELF := $(M36_SPAWN_PARENT_ELF)
+BOOT_USER_NAME := m36-spawn-parent.elf
+BOOT_LIMINE_CONF := limine-m36-spawn.conf
 else ifeq ($(TEST_MODE),m34-display)
 # Reuse the established special-test entry seam (value 5); the adapter below
 # routes it to the dedicated three-process display_test_run() harness.
@@ -221,7 +233,7 @@ BOOT_EXTRA3_USER_ELF := $(USER_BUILD_DIR)/wm-client-b.elf
 BOOT_EXTRA4_USER_ELF := $(USER_BUILD_DIR)/wm-client-c.elf
 BOOT_LIMINE_CONF := limine-wm.conf
 else
-$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, block, virtio-block, boringfs-ro, boringfs-rw, persistent-root, m33-ipc, or m34-display)
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, block, virtio-block, boringfs-ro, boringfs-rw, persistent-root, m33-ipc, or m34-display, m35-wm, m35-wm-death, or m36-spawn)
 endif
 
 LIMINE_VERSION := 12.5.2
@@ -332,7 +344,7 @@ KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCE
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
 
-.PHONY: all kernel user-elf user-runtime user-console user-init user-shell user-boringfetch user-cat user-input-test user-memory-test user-ipc-test user-boring-display user-display-clients elf-audit runtime-audit console-audit init-audit shell-audit boringfetch-audit cat-audit input-test-audit memory-test-audit ipc-test-audit display-audit shell-host-test fd-host-test pty-host-test framebuffer-host-test input-host-test memory-host-test ipc-host-test display-host-test boringfs-host-test boringfs-vfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test boringfs-fixture qemu-bundle run run-headless test clean distclean
+.PHONY: all kernel user-elf user-runtime user-console user-init user-shell user-boringfetch user-cat user-input-test user-memory-test user-ipc-test user-m36-spawn user-boring-display user-display-clients elf-audit runtime-audit console-audit init-audit shell-audit boringfetch-audit cat-audit input-test-audit memory-test-audit ipc-test-audit display-audit shell-host-test fd-host-test pty-host-test framebuffer-host-test input-host-test memory-host-test ipc-host-test display-host-test boringfs-host-test boringfs-vfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test boringfs-fixture qemu-bundle run run-headless test clean distclean
 
 all: $(ISO)
 
@@ -357,6 +369,8 @@ user-input-test: $(INPUT_TEST_ELF)
 user-memory-test: $(MEMORY_TEST_ELF)
 
 user-ipc-test: $(IPC_TEST_ELF)
+
+user-m36-spawn: $(M36_SPAWN_PARENT_ELF) $(M36_SPAWN_CHILD_ELF)
 
 user-boring-display: $(BORING_DISPLAY_ELF)
 
@@ -700,6 +714,22 @@ $(IPC_TEST_MAIN_OBJECT): user/ipc-test/main.c user/runtime/include/boring/ipc.h 
 $(IPC_TEST_ELF): $(IPC_TEST_OBJECTS) user/memory-test/linker.ld
 	@mkdir -p $(dir $@)
 	$(LD) $(IPC_TEST_LDFLAGS) $(IPC_TEST_OBJECTS) -o $@
+
+$(M36_SPAWN_PARENT_MAIN_OBJECT): user/m36-spawn-parent/main.c user/runtime/include/boring/syscall.h kernel/include/boring/syscall_abi.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(M36_SPAWN_PARENT_ELF): $(M36_SPAWN_PARENT_OBJECTS) user/m36-spawn-parent/linker.ld
+	@mkdir -p $(dir $@)
+	$(LD) -nostdlib -static --build-id=none -z max-page-size=0x1000 -T user/m36-spawn-parent/linker.ld $(M36_SPAWN_PARENT_OBJECTS) -o $@
+
+$(M36_SPAWN_CHILD_MAIN_OBJECT): user/m36-spawn-child/main.c user/runtime/include/boring/syscall.h user/runtime/include/boring/string.h kernel/include/boring/syscall_abi.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(M36_SPAWN_CHILD_ELF): $(M36_SPAWN_CHILD_OBJECTS) user/m36-spawn-child/linker.ld
+	@mkdir -p $(dir $@)
+	$(LD) -nostdlib -static --build-id=none -z max-page-size=0x1000 -T user/m36-spawn-child/linker.ld $(M36_SPAWN_CHILD_OBJECTS) -o $@
 
 $(BORING_DISPLAY_CORE_OBJECT): user/boring-display/core.c user/boring-display/core.h kernel/include/boring/display_abi.h
 	@mkdir -p $(dir $@)
