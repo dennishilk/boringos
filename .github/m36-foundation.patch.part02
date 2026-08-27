@@ -1,0 +1,224 @@
+opy_error = m36_copy_string(user_path, path_length,
++                                 (size_t)BORING_SYSCALL_EXEC_PATH_MAX, path);
++    if (copy_error != 0) {
++        return m36_error(copy_error);
++    }
++    copy_error = m36_copy_arguments(user_argv, raw_argc, &arguments);
++    if (copy_error != 0) {
++        return m36_error(copy_error);
++    }
++    if (!m36_copy_from_user(&stdio_config, (uintptr_t)user_stdio,
++                            sizeof(stdio_config))) {
++        return m36_error(BORING_SYSCALL_EFAULT);
++    }
++    if ((stdio_config.flags & ~BORING_SPAWN_FLAG_MASK) != 0U) {
++        return m36_error(BORING_SYSCALL_EINVAL);
++    }
++    name = m36_basename(path);
++    if ((name == NULL) || (name[0] == '\0') ||
++        (m36_text_length(name, (size_t)KERNEL_PROCESS_NAME_MAX) >
++         (size_t)KERNEL_PROCESS_NAME_MAX)) {
++        return m36_error(BORING_SYSCALL_ENAMETOOLONG);
++    }
++    vfs_result = boring_elf_vfs_source_open(parent, path, &source);
++    if (vfs_result != VFS_RESULT_OK) {
++        return m36_error((vfs_result == VFS_RESULT_OVERFLOW) ?
++            BORING_SYSCALL_ENOEXEC : m36_vfs_error(vfs_result));
++    }
++    if (!process_get_cwd(parent, &parent_cwd)) {
++        (void)boring_elf_vfs_source_close(&source);
++        return m36_error(BORING_SYSCALL_EINVAL);
++    }
++    if (!process_create(&child) || (child == NULL)) {
++        (void)vfs_path_release(&parent_cwd);
++        (void)boring_elf_vfs_source_close(&source);
++        return m36_error(BORING_SYSCALL_ENOSPC);
++    }
++    if (!process_set_name(child, name) ||
++        !process_set_cwd(child, &parent_cwd)) {
++        (void)vfs_path_release(&parent_cwd);
++        (void)boring_elf_vfs_source_close(&source);
++        return m36_spawn_rollback(child, &image, false,
++                                  BORING_SYSCALL_EIO);
++    }
++    if (vfs_path_release(&parent_cwd) != VFS_RESULT_OK) {
++        (void)boring_elf_vfs_source_close(&source);
++        return m36_spawn_rollback(child, &image, false,
++                                  BORING_SYSCALL_EIO);
++    }
++    if ((kernel_fd_clone_stdio(&parent->fd_table, stdio_config.stdin_fd,
++                               &child->fd_table, KERNEL_FD_STDIN,
++                               VFS_ACCESS_READ) != VFS_RESULT_OK) ||
++        (kernel_fd_clone_stdio(&parent->fd_table, stdio_config.stdout_fd,
++                               &child->fd_table, KERNEL_FD_STDOUT,
++                               VFS_ACCESS_WRITE) != VFS_RESULT_OK) ||
++        (kernel_fd_clone_stdio(&parent->fd_table, stdio_config.stderr_fd,
++                               &child->fd_table, KERNEL_FD_STDERR,
++                               VFS_ACCESS_WRITE) != VFS_RESULT_OK)) {
++        (void)boring_elf_vfs_source_close(&source);
++        return m36_spawn_rollback(child, &image, false,
++                                  BORING_SYSCALL_EACCES);
++    }
++    if (!boring_elf_load_source(child, &source.source,
++                                (uintptr_t)M36_PROGRAM_STACK_BASE,
++                                M36_PROGRAM_STACK_SIZE, &image)) {
++        (void)boring_elf_vfs_source_close(&source);
++        return m36_spawn_rollback(child, &image, false,
++                                  BORING_SYSCALL_ENOEXEC);
++    }
++    image_loaded = true;
++    if (boring_elf_vfs_source_close(&source) != VFS_RESULT_OK) {
++        return m36_spawn_rollback(child, &image, image_loaded,
++                                  BORING_SYSCALL_EIO);
++    }
++    if (!m36_prepare_arguments(child, &image, &arguments,
++                               &entry_rsp, &child_argv) ||
++        (child->address_space.root_physical ==
++         parent->address_space.root_physical) ||
++        !ring3_user_query_mapping(&child->address_space, image.entry,
++                                  &entry_info) ||
++        !entry_info.executable || entry_info.writable ||
++        !ring3_user_query_mapping(&child->address_space, image.stack_base,
++                                  &stack_info) ||
++        !stack_info.writable || stack_info.executable ||
++        !ring3_shared_higher_half_supervisor_only(&child->address_space)) {
++        return m36_spawn_rollback(child, &image, image_loaded,
++                                  BORING_SYSCALL_EIO);
++    }
++
++    m36_record_clear(record);
++    record->child = child;
++    record->image = image;
++    record->entry_rsp = entry_rsp;
++    record->argv = child_argv;
++    record->parent_pid = parent->pid;
++    record->argc = arguments.argc;
++    record->active = true;
++    record->image_loaded = true;
++    record->detached =
++        (stdio_config.flags & BORING_SPAWN_FLAG_DETACHED) != 0U;
++    if (!task_create_for_process(child, m36_spawn_entry, record, &task_id)) {
++        m36_record_clear(record);
++        return m36_spawn_rollback(child, &image, image_loaded,
++                                  BORING_SYSCALL_ENOSPC);
++    }
++
++    serial_write_string("boring-spawn: parent pid ");
++    serial_write_u64(parent->pid);
++    serial_write_string(" child pid ");
++    serial_write_u64(child->pid);
++    serial_write_string(" task ");
++    serial_write_u64(task_id);
++    serial_write_string(record->detached ? " detached\n" : " foreground\n");
++    return child->pid;
++}
++
++static bool m36_exit(struct x86_64_syscall_frame *frame) {
++    struct process *const process = process_current();
++    struct m36_spawn_record *record;
++    struct user_memory_cleanup_stats memory_cleanup;
++    bool input_released = false;
++
++    if ((frame == NULL) ||
++        (frame->syscall_number != (uint64_t)BORING_SYS_EXIT) ||
++        (process == NULL)) {
++        return false;
++    }
++    record = m36_record_child(process);
++    if (record == NULL) {
++        return false;
++    }
++    record->exit_status = (int32_t)frame->rdi;
++    (void)boring_input_process_teardown(process->pid, &input_released);
++    boring_ipc_process_cleanup(process);
++    if (user_memory_process_cleanup(process, &memory_cleanup) !=
++        USER_MEMORY_RESULT_OK) {
++        serial_write_string("m36: process memory cleanup failed\n");
++        x86_64_halt_forever();
++    }
++    if (record->image_loaded && !boring_elf_unload(&record->image)) {
++        serial_write_string("m36: child ELF cleanup failed\n");
++        x86_64_halt_forever();
++    }
++    record->image_loaded = false;
++    record->exited = true;
++    if (record->parent_waiting) {
++        (void)task_wake_pid(record->parent_pid);
++    }
++    serial_write_string("boring-spawn: child pid ");
++    serial_write_u64(process->pid);
++    serial_write_string(" exited status ");
++    serial_write_u64((uint64_t)(uint32_t)record->exit_status);
++    serial_write_string("\n");
++    task_exit_current_process();
++}
++
++static uint64_t m36_waitpid(uint64_t pid, uint64_t user_status) {
++    struct process *const parent = process_current();
++    struct m36_spawn_record *record;
++    int status;
++
++    if ((parent == NULL) || !process_is_alive(parent) || (pid == 0ULL) ||
++        !m36_user_range(parent, (uintptr_t)user_status, sizeof(status), true)) {
++        return m36_error(BORING_SYSCALL_EINVAL);
++    }
++    record = m36_record_pid(pid, parent->pid);
++    if ((record == NULL) || record->detached) {
++        return m36_error(BORING_SYSCALL_EINVAL);
++    }
++    while ((record->child != NULL) &&
++           (record->child->state != PROCESS_FINISHED)) {
++        record->parent_waiting = true;
++        if (!task_block_current()) {
++            record->parent_waiting = false;
++            return m36_error(BORING_SYSCALL_EBUSY);
++        }
++        record->parent_waiting = false;
++    }
++    if ((record->child == NULL) ||
++        (record->child->state != PROCESS_FINISHED)) {
++        return m36_error(BORING_SYSCALL_EIO);
++    }
++    status = record->exit_status;
++    if (!m36_copy_to_user((uintptr_t)user_status, &status, sizeof(status))) {
++        return m36_error(BORING_SYSCALL_EFAULT);
++    }
++    if (!m36_reap_record(record)) {
++        return m36_error(BORING_SYSCALL_EIO);
++    }
++    return pid;
++}
++
++void x86_64_syscall_dispatch_m36(struct x86_64_syscall_frame *frame) {
++    uint64_t result;
++    uint64_t number;
++
++    if (frame == NULL) {
++        return;
++    }
++    number = frame->syscall_number;
++    if (m36_exit(frame)) {
++        x86_64_halt_forever();
++    }
++
++    x86_64_syscall_dispatch_events(frame);
++    m36_reap_detached();
++
++    if (number == (uint64_t)BORING_SYS_PTY_CREATE) {
++        result = m36_pty_create(frame->rdi);
++    } else if (number == (uint64_t)BORING_SYS_SPAWN) {
++        result = m36_spawn(frame->rdi, frame->rsi, frame->rdx,
++                           frame->r10, frame->r8);
++    } else if (number == (uint64_t)BORING_SYS_WAITPID) {
++        struct process *const process = process_current();
++        if ((process != NULL) &&
++            (m36_record_pid(frame->rdi, process->pid) != NULL)) {
++            result = m36_waitpid(frame->rdi, frame->rsi);
++        } else {
++            return;
++        }
++    } else {
++        return;
++    }
++    frame->result = result;
++}
