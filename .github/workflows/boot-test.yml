@@ -286,6 +286,17 @@ jobs:
       - name: Build human-runnable M36 graphical terminal bundle
         run: sh ./tests/build-m36-qemu-bundle.sh
 
+      - name: Reboot exact M36 bundle images without rebuilding
+        run: python3 ./tests/m36-desktop-qemu.py --bundle build/boringos-m36-qemu-x86_64
+
+      - name: Upload M36 bundle reboot evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boringos-m36-bundle-reboot
+          path: build/m36-bundle-reboot/
+          if-no-files-found: error
+
       - name: Upload human-runnable M36 graphical terminal bundle
         uses: actions/upload-artifact@v4
         with:

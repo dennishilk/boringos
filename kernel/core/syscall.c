@@ -1716,6 +1716,11 @@ static uint64_t syscall_fd_read(uint64_t raw_fd,
         !syscall_copy_to_user((uintptr_t)user_buffer, buffer, transferred)) {
         return syscall_error(BORING_SYSCALL_EFAULT);
     }
+    /* Input tracing must not insert diagnostic newlines into the same serial
+     * stream that carries the console editor's prompts and ANSI redraws. */
+    if (kind == KERNEL_FD_CONSOLE_INPUT) {
+        return (uint64_t)transferred;
+    }
     serial_write_string("fd-read: pid ");
     serial_write_u64(process->pid);
     serial_write_string(" fd ");

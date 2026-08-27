@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """M36 real QMP -> PS/2 -> WM -> terminal -> PTY -> shell visual acceptance."""
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -15,30 +16,46 @@ ROOT = Path(__file__).resolve().parent.parent
 QMP = runpy.run_path(str(ROOT / "tests/qmp-input.py"))
 WM_ORACLE = runpy.run_path(str(ROOT / "tests/validate-wm-screenshot.py"))
 TERM_ORACLE = runpy.run_path(str(ROOT / "tests/validate-m36-terminal-screenshot.py"))
-def run(mode):
-    OUT = ROOT / ("build/m36-desktop-reference" if mode == "normal" else f"build/m36-{mode}")
+def run(mode, bundle_path=None):
+    OUT = ROOT / ("build/m36-bundle-reboot" if bundle_path else
+                  "build/m36-desktop-reference" if mode == "normal" else f"build/m36-{mode}")
     if OUT.exists():
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True)
     log_path = OUT / "serial.log"
     log_path.write_text("")
-    with (OUT / "bundle.log").open("w") as bundle:
-        subprocess.run(["sh", "tests/m36-bundle-test.sh"], cwd=ROOT,
-                       env=dict(os.environ, M36_TERMINAL_VARIANT=(
-                           "death" if mode == "terminal-death" else "normal")),
-                       stdout=bundle, stderr=subprocess.STDOUT, check=True)
-    for name in ("geometry.txt", "boringfsck.txt", "SHA256SUMS"):
-        shutil.copyfile(ROOT / "build/m36-bundle-test" / name, OUT / name)
-    root_image = ROOT / "build/m36-bundle-test/boringos-root.img"
-    with (OUT / "build.log").open("w") as build:
-        subprocess.run(["make", "TEST_MODE=m36-desktop"], cwd=ROOT,
-                       stdout=build, stderr=subprocess.STDOUT, check=True)
+    if bundle_path is None:
+        with (OUT / "bundle.log").open("w") as bundle:
+            subprocess.run(["sh", "tests/m36-bundle-test.sh"], cwd=ROOT,
+                           env=dict(os.environ, M36_TERMINAL_VARIANT=(
+                               "death" if mode == "terminal-death" else "normal")),
+                           stdout=bundle, stderr=subprocess.STDOUT, check=True)
+        for name in ("geometry.txt", "boringfsck.txt", "SHA256SUMS"):
+            shutil.copyfile(ROOT / "build/m36-bundle-test" / name, OUT / name)
+        root_image = ROOT / "build/m36-bundle-test/boringos-root.img"
+        iso = ROOT / "build/boringos.iso"
+        with (OUT / "build.log").open("w") as build:
+            subprocess.run(["make", "TEST_MODE=m36-desktop"], cwd=ROOT,
+                           stdout=build, stderr=subprocess.STDOUT, check=True)
+    else:
+        bundle_path = Path(bundle_path).resolve()
+        root_image = bundle_path / "boringos-root.img"
+        iso = bundle_path / "boringos.iso"
+        with (OUT / "bundle.log").open("w") as bundle:
+            subprocess.run(["sha256sum", "-c", "SHA256SUMS"], cwd=bundle_path,
+                           stdout=bundle, stderr=subprocess.STDOUT, check=True)
+        for name in ("M36-BORINGFS-GEOMETRY.txt", "SOURCE-COMMIT.txt", "SOURCE-TREE.txt", "SOURCE-STATUS.txt", "SHA256SUMS"):
+            shutil.copyfile(bundle_path / name, OUT / name)
+    (OUT / "image-hashes.json").write_text(json.dumps(dict(
+        rebuilt=bundle_path is None,
+        iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),
+        root_sha256=hashlib.sha256(root_image.read_bytes()).hexdigest()), indent=2) + "\n")
     qemu_log = (OUT / "qemu.log").open("w")
     vm = subprocess.Popen([
         os.environ.get("QEMU", "qemu-system-x86_64"), "-M", "q35", "-cpu",
         os.environ.get("QEMU_CPU", "qemu64,apic=off"), "-m", "128M",
-        "-cdrom", str(ROOT / "build/boringos.iso"), "-boot", "d", "-vga", "std",
-        "-drive", f"file={root_image},if=none,format=raw,id=boringdisk",
+        "-cdrom", str(iso), "-boot", "d", "-vga", "std",
+        "-drive", f"file={root_image},if=none,format=raw,id=boringdisk,readonly=on",
         "-device", "virtio-blk-pci,drive=boringdisk,disable-legacy=on",
         "-display", "none", "-serial", f"file:{log_path}", "-monitor", "none",
         "-qmp", "stdio", "-no-reboot", "-no-shutdown"],
@@ -289,4 +306,8 @@ def run(mode):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("normal", "terminal-death", "shell-death"), default="normal")
-    run(parser.parse_args().mode)
+    parser.add_argument("--bundle", type=Path, help="boot an existing bundle without rebuilding either image")
+    args = parser.parse_args()
+    if args.bundle and args.mode != "normal":
+        parser.error("immutable production bundle supports only normal acceptance")
+    run(args.mode, args.bundle)
