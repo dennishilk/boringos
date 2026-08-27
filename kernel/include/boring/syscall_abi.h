@@ -49,6 +49,8 @@
 #define BORING_SYS_FRAMEBUFFER_PRESENT 39
 #define BORING_SYS_FRAMEBUFFER_RELEASE 40
 #define BORING_SYS_EVENT_WAIT 41
+#define BORING_SYS_PTY_CREATE 42
+#define BORING_SYS_SPAWN 43
 
 #define BORING_SYSCALL_DEBUG_WRITE_MAX 64
 #define BORING_SYSCALL_CONSOLE_IO_MAX 64
@@ -59,6 +61,8 @@
 #define BORING_SYSCALL_FS_IO_MAX 4096
 #define BORING_SYSCALL_FD_IO_MAX 4096
 #define BORING_SYSCALL_CWD_MAX 1024
+#define BORING_SPAWN_FLAG_DETACHED (1U << 0)
+#define BORING_SPAWN_FLAG_MASK BORING_SPAWN_FLAG_DETACHED
 
 #define BORING_MEMORY_PAGE_SIZE 4096ULL
 #define BORING_MEMORY_ALLOC_MAX_BYTES (16ULL * 1024ULL * 1024ULL)
@@ -123,6 +127,18 @@
 #include <stdint.h>
 
 #include <boring/input_abi.h>
+
+struct boring_pty_create_result {
+    uint32_t master_fd;
+    uint32_t slave_fd;
+};
+
+struct boring_spawn_stdio {
+    uint32_t stdin_fd;
+    uint32_t stdout_fd;
+    uint32_t stderr_fd;
+    uint32_t flags;
+};
 
 struct boring_ipc_receive_result {
     uint64_t payload_length;
@@ -248,6 +264,16 @@ _Static_assert(BORING_SYS_FRAMEBUFFER_PRESENT == 39,
                "FRAMEBUFFER_PRESENT syscall number contract changed");
 _Static_assert(BORING_SYS_FRAMEBUFFER_RELEASE == 40,
                "FRAMEBUFFER_RELEASE syscall number contract changed");
+_Static_assert(BORING_SYS_EVENT_WAIT == 41,
+               "EVENT_WAIT syscall number contract changed");
+_Static_assert(BORING_SYS_PTY_CREATE == 42,
+               "PTY_CREATE syscall number contract changed");
+_Static_assert(BORING_SYS_SPAWN == 43,
+               "SPAWN syscall number contract changed");
+_Static_assert(sizeof(struct boring_pty_create_result) == 8U,
+               "M36 PTY create ABI size must remain fixed");
+_Static_assert(sizeof(struct boring_spawn_stdio) == 16U,
+               "M36 spawn stdio ABI size must remain fixed");
 _Static_assert(sizeof(struct boring_ipc_receive_result) == 16U,
                "M33 IPC receive ABI size must remain fixed");
 _Static_assert(sizeof(struct boring_system_info) == 256U,
