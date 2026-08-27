@@ -14,3 +14,11 @@ The semantically reconstructed blobs at this checkpoint are:
 - `user/boring-shell/main.c`: `097ce8ece116f7bcffeccf8204f033f7a5737a99`
 
 This checkpoint does **not** claim byte identity with lost commit `79e1fedcee2be57691d9b5576e633a54b2941f0c`. Its validity is established by the retained ABI contract, freestanding target builds, targeted host tests, real QEMU acceptance, historical regressions, and later permanent CI. The final M36 Semantic Freeze, not the lost intermediate commit, becomes the immutable source of truth.
+
+That final source of truth is now commit
+`6019d05bf266f049d36cf624753bfa82f4714984`, tree
+`15f8355cd19d5e951b7bb48508ab80b3bcd4b3d0`, accepted on PR #47 by exact-head
+pull-request CI Run #464 / `33078951287` / **SUCCESS** while the active version
+was `0.0.36-dev`. Its five published implementation snapshots reproduce the
+verified local trees exactly; the final reconciliation commit safely includes
+the intervening diagnostic head as a parent while retaining that frozen tree.

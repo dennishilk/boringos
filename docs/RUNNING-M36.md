@@ -1,5 +1,15 @@
 # Run the M36 graphical terminal in QEMU
 
+Status: M36 implementation complete and Semantic Frozen. This is the
+`0.0.37-dev` documentation/version closeout; final delivery verification is
+recorded in PR #47.
+
+Controlled base: `d8975a293a2518269a1cd38bee0b24fcdf2a3830`,
+BoringKernel `0.0.36-dev`. Semantic Freeze: commit
+`6019d05bf266f049d36cf624753bfa82f4714984`, tree
+`15f8355cd19d5e951b7bb48508ab80b3bcd4b3d0`, exact-head pull-request CI
+Run #464 / `33078951287` / **SUCCESS**.
+
 Requirements: QEMU x86_64 with a graphical backend. Extract the complete bundle,
 run `sha256sum -c SHA256SUMS`, then `./run-boringos.sh --gui`.
 
@@ -57,3 +67,21 @@ normal graphical acceptance. This also supports checking downloaded artifacts.
 The historical QMP scripts default to Unix sockets. In restricted local runtimes,
 set `BORING_QMP_TRANSPORT=pipe` to use QEMU's FIFO backend for the identical
 commands and assertions. The M35/M36 Python drivers use QMP over standard I/O.
+
+## M36 Semantic Freeze record
+
+- Base: `d8975a293a2518269a1cd38bee0b24fcdf2a3830`
+- Freeze SHA: `6019d05bf266f049d36cf624753bfa82f4714984`
+- Freeze tree: `15f8355cd19d5e951b7bb48508ab80b3bcd4b3d0`
+- Full exact-head CI: **Run #464 / 33078951287 / SUCCESS**
+- Event: `pull_request`; branch: `agent/native-boring-terminal`; version: `0.0.36-dev`
+- PR: [#47](https://github.com/dennishilk/boringos/pull/47)
+
+All intended M36 semantics and every inherited M0–M35 gate passed before this
+freeze. The permanent M36 sanitizer gate passed in GitHub CI; the separate local
+LSan attempt was unable to inspect `/proc/<pid>/task` under the runtime's ptrace
+restriction and did not produce a leak verdict. No sanitizer gate was weakened.
+The temporary source-snapshot, diagnostic and desktop-transport workflows and
+patch parts are absent. Closeout changes only active version witnesses to
+**BoringKernel 0.0.37-dev** and documentation; no terminal semantics and no M37
+work are included.

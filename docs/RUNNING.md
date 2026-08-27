@@ -37,8 +37,9 @@ keyboard and mouse events, but the shell's stdin/stdout remain on the serial
 console. From the shell, `/bin/input-test` claims the native input stream and
 blocks until real keyboard/mouse events arrive; its `--teardown` mode is used by
 the lifecycle acceptance. This historical shell boot mode does not start a cursor or display server.
-The separate M35 WM ISO has a real cursor and three managed apps; see
-RUNNING-M35.md. There is no graphical terminal.
+The separate M36 desktop ISO has a real cursor, native BoringWM and graphical
+PTY-backed terminals; see RUNNING-M36.md. This historical persistent-root mode
+continues to use the serial shell and does not start the desktop session.
 
 The root image is attached through modern VirtIO PCI. Writes are persistent;
 do not add QEMU snapshot options. Try:

@@ -15,11 +15,13 @@ It is **not a Linux distribution**, **not a BSD distribution**, and **not based 
 
 BoringKernel boots under **QEMU x86_64**. Limine remains the external bootloader. BoringKernel currently provides COM1 serial output, memory and address-space management, exceptions and PIT/PIC interrupts, kernel scheduling, real CPL3 ELF userspace, a checked native syscall boundary, VFS/RAMFS, VirtIO-backed writable BoringFS, PID 1 `boring-init`, an interactive native `boring-shell`, bounded VFS-backed static ELF launching, a 16-slot per-process native descriptor/stdio foundation used by standalone `/bin/boringfetch` and `/bin/cat` from persistent BoringFS, an optional validated native framebuffer graphics foundation with a one-shot kernel-rendered graphical boot dashboard, and a bounded native i8042/PS/2 keyboard-and-mouse input foundation exposed through exclusive blocking Ring-3 event syscalls and standalone `/bin/input-test`, plus M32 dynamic anonymous Ring-3 memory, a minimal userspace heap, and generic kernel-owned shared byte buffers with process-local capability handles and `/bin/memory-test`, the M33 bounded native service registry and blocking connection-oriented IPC with transactional M32 shared-buffer capability grants and `/bin/ipc-test`, and the M34 native Ring-3 `/bin/boring-display` service with two separate shared-buffer-backed test clients, deterministic software composition and a real M31-driven cursor.
 
+M35 adds native Ring3 BoringWM with bounded tiling, focus and lifecycle policy. M36 adds the native graphical `/bin/boring-terminal`, generation-safe PTY descriptor pairs and scheduler-owned `SPAWN` with explicit stdio. Real Super+Return launches independent graphical shells; two terminals prove focus/input isolation, graphical `boringfetch`, graceful Super+Q close and unexpected terminal/shell-death cleanup.
+
 Current serial output begins with:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.36-dev
+BoringKernel 0.0.37-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```
@@ -170,11 +172,11 @@ BoringKernel syscall verification passed.
 
 See [`docs/architecture.md`](docs/architecture.md), [`docs/interrupts.md`](docs/interrupts.md), [`docs/tasks.md`](docs/tasks.md), [`docs/processes.md`](docs/processes.md), [`docs/syscalls.md`](docs/syscalls.md), [`docs/userspace-exec.md`](docs/userspace-exec.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md), and [`docs/boringfs.md`](docs/boringfs.md).
 
-## Native BoringWM (M35)
+## Native graphical terminal (M36)
 
-M35 implements native **BoringWM in C** as a separate Ring3 `boring.wm` policy service above `boring.display`: bounded master/stack tiling, keyboard and mouse focus, adjacent reorder and graceful close. Three real Ring3 apps keep their pixels in app-owned M32 buffers; WM never maps them. The implementation is Semantic Frozen with all M0–M34 regressions retained. There is no X11, Wayland or terminal.
+M36 implements a native C Ring3 terminal above the frozen M35 display/WM stack. A real Super+Return path loads `/bin/boring-terminal` from measured BoringFS, connects it to a separately scheduled `boring-shell` through bounded PTY descriptors, and renders the real prompt and `/bin/boringfetch` output. Two live terminals prove focus and input isolation; Super+Q, terminal death and shell death prove deterministic peer cleanup without disturbing the survivor. Every M0–M35 gate remains permanent.
 
-Run `sh tests/wm-qemu.sh` for both native acceptance modes. See [architecture and proof](docs/native-boringwm.md) and [bundle instructions](docs/RUNNING-M35.md). M36 terminal and M37 desktop startup integration have not begun.
+See the [M36 bundle and acceptance instructions](docs/RUNNING-M36.md), the [generic startup-stack proof](docs/process-startup-stack.md), and the [Semantic Freeze record](docs/roadmap.md). M37 desktop startup integration has not begun.
 
 The existing [dennishilk/boringwm](https://github.com/dennishilk/boringwm) repository remains a separate Rust/X11 project and external behavioral reference. It is not a BoringOS code dependency or submodule.
 

@@ -37,6 +37,14 @@ before the replacement shell is used and that the historical four-slot table
 does not exhaust. M35 raises ordinary process capacity to eight, separate from
 PID 0, for the display/WM/client session.
 
+M36 keeps that eight-process/eight-task bound. Its minimum proven dual-terminal
+session uses display, WM, two terminals and two shells (six ordinary processes);
+one foreground command temporarily raises the live count to seven. `SPAWN`
+creates independently rooted scheduler-owned children with explicit stdio and
+the generic guarded two-page startup stack. Terminal and shell exit paths close
+PTY/FD/IPC/input/framebuffer/M32 ownership before slots are reused; M36 does not
+add PID 1 desktop supervision, process groups, sessions or signals.
+
 Slots are reusable only after successful reap. PID numbers remain
 monotonically allocated and are not reused in M27; there are no PID
 namespaces, process groups, signals, `fork`, general `exec`, asynchronous

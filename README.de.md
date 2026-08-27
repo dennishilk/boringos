@@ -15,11 +15,13 @@ Es ist **keine Linux-Distribution**, **keine BSD-Distribution** und **basiert we
 
 BoringKernel bootet unter **QEMU x86_64**. Limine bleibt der externe Bootloader. BoringKernel besitzt aktuell COM1-Seriellenausgabe, Speicher- und Adressraumverwaltung, Exceptions und PIT/PIC-Interrupts, Kernel-Scheduling, echten CPL3-ELF-Userspace, eine geprüfte native Syscall-Grenze, VFS/RAMFS, schreibbares VirtIO-gestütztes BoringFS, PID 1 `boring-init`, eine interaktive native `boring-shell`, VFS-gestützte statische ELF-Programme, eine prozesslokale native 16-Slot-Descriptor-/stdio-Schicht für die eigenständigen `/bin/boringfetch` und `/bin/cat` im persistenten BoringFS, eine optionale validierte native Framebuffer-Grafikgrundlage mit einem einmalig vom Kernel gerenderten grafischen Boot-Dashboard sowie eine begrenzte native i8042-/PS/2-Tastatur-und-Maus-Input-Grundlage mit exklusiven blockierenden Ring-3-Event-Syscalls und dem eigenständigen `/bin/input-test`, die dynamische anonyme Ring-3-Speicherverwaltung aus M32, einen minimalen Userspace-Heap und generische kernel-eigene Shared-Byte-Buffer mit prozesslokalen Capability-Handles und `/bin/memory-test`, die begrenzte native M33-Service-Registry und blockierendes verbindungsorientiertes IPC mit transaktionalen M32-Shared-Buffer-Capability-Grants und `/bin/ipc-test` sowie den nativen M34-Ring-3-Dienst `/bin/boring-display` mit zwei getrennten Shared-Buffer-Testclients, deterministischer Software-Komposition und einem durch den echten M31-Inputpfad gesteuerten Cursor.
 
+M35 ergänzt den nativen Ring3-BoringWM mit begrenztem Tiling, Fokus und Lifecycle-Policy. M36 ergänzt das native grafische `/bin/boring-terminal`, generationssichere PTY-Descriptor-Paare und Scheduler-gestütztes `SPAWN` mit explizitem stdio. Echtes Super+Return startet unabhängige grafische Shells; zwei Terminals beweisen Fokus-/Input-Isolation, grafisches `boringfetch`, kontrolliertes Schließen per Super+Q sowie Cleanup nach unerwartetem Terminal- oder Shell-Tod.
+
 Die aktuelle serielle Ausgabe beginnt mit:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.36-dev
+BoringKernel 0.0.37-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```
@@ -170,11 +172,11 @@ BoringKernel syscall verification passed.
 
 Siehe [`docs/architecture.md`](docs/architecture.md), [`docs/interrupts.md`](docs/interrupts.md), [`docs/tasks.md`](docs/tasks.md), [`docs/processes.md`](docs/processes.md), [`docs/syscalls.md`](docs/syscalls.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md) und [`docs/boringfs.md`](docs/boringfs.md).
 
-## Nativer BoringWM (M35)
+## Natives grafisches Terminal (M36)
 
-M35 implementiert den nativen **BoringWM in C** als separaten Ring3-Dienst `boring.wm` über `boring.display`: begrenztes Master/Stack-Tiling, Tastatur- und Mausfokus, Reorder und kontrolliertes Schließen. Drei echte Ring3-Anwendungen behalten ihre Pixel in eigenen M32-Buffern; der WM mappt keine Pixel. Die Implementierung ist Semantic Frozen; alle M0–M34-Regressionen bleiben erhalten. Es gibt kein X11, Wayland oder Terminal.
+M36 implementiert ein natives C-Ring3-Terminal oberhalb des eingefrorenen M35-Display-/WM-Stacks. Ein echter Super+Return-Pfad lädt `/bin/boring-terminal` aus dem vermessenen BoringFS, verbindet es über begrenzte PTY-Deskriptoren mit einer separat geschedulten `boring-shell` und rendert den echten Prompt sowie die Ausgabe von `/bin/boringfetch`. Zwei aktive Terminals beweisen Fokus- und Input-Isolation; Super+Q, Terminal-Tod und Shell-Tod beweisen deterministisches Peer-Cleanup, ohne den überlebenden Client zu stören. Alle M0–M35-Gates bleiben permanent.
 
-`sh tests/wm-qemu.sh` prüft beide nativen Acceptance-Modi. Siehe [Architektur und Nachweise](docs/native-boringwm.md) und [Paket-Startanleitung](docs/RUNNING-M35.md). M36-Terminal und M37-Desktop-Startintegration wurden nicht begonnen.
+Siehe [M36-Paket- und Acceptance-Anleitung](docs/RUNNING-M36.md), den [generischen Startup-Stack-Nachweis](docs/process-startup-stack.md) und den [Semantic-Freeze-Datensatz](docs/roadmap.md). Die M37-Desktop-Startintegration wurde nicht begonnen.
 
 Das bestehende Repository [dennishilk/boringwm](https://github.com/dennishilk/boringwm) bleibt ein separates Rust/X11-Projekt und eine externe Verhaltensreferenz. Es ist weder Code-Abhängigkeit noch Submodul von BoringOS.
 

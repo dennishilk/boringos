@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.36-dev
+BoringKernel 0.0.37-dev
 ```
 
 The current syscall ABI is exactly:
@@ -123,6 +123,8 @@ The current syscall ABI is exactly:
 39 FRAMEBUFFER_PRESENT
 40 FRAMEBUFFER_RELEASE
 41 EVENT_WAIT
+42 PTY_CREATE
+43 SPAWN
 ```
 
 VFS-backed executable loading and standalone `/bin/boringfetch` are real
@@ -139,8 +141,11 @@ native Ring-3 `boring-display` service, shared-buffer-backed surfaces, determini
 software composition, controlled kernel presentation and a real M31-driven cursor.
 M35 adds native Ring3 BoringWM, bounded master/stack tiling, focus, reorder and
 graceful close, with syscall 41 providing generic bounded readiness only.
-There is still no partition layer, networking, terminal graphics stack or
-general desktop supervision. M36 and M37 have not begun.
+M36 adds generation-safe bounded PTY descriptors, scheduler-owned VFS `SPAWN`
+with explicit stdio and guarded generic stacks, plus the native Ring3 graphical
+terminal launched by real BoringWM Super+Return. There is still no partition
+layer, networking, POSIX TTY/job-control model or general desktop supervision.
+M37 has not begun.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -1024,3 +1029,62 @@ The temporary workflow is absent. Closeout changes only active version
 witnesses to **BoringKernel 0.0.36-dev** and documentation; no WM semantics.
 Final-head CI, guarded squash, exact merged-main push CI and artifact hashes
 are recorded in the PR's post-freeze verification trail. No M36 work is included.
+
+
+---
+
+# Stage 20 — native graphical terminal
+
+## Milestone 36: native boring-terminal — implementation COMPLETE, Semantic Frozen
+
+M36 adds syscall 42 `PTY_CREATE` and syscall 43 `SPAWN` without changing slots
+0–41. Up to eight generation-checked PTY pairs each own two 4096-byte rings;
+blocking reads, HUP wakeup, queued-byte drain, EPIPE and teardown are bounded.
+`SPAWN` loads a VFS ELF into an independent address space, installs explicit
+stdin/stdout/stderr and publishes a scheduler task only after complete success.
+Every scheduled executable uses the same two-page RW/NX stack, one unmapped
+lower guard, 16-byte-aligned argc/argv, at most 16 arguments and at most 1024
+argument bytes. The original one-page terminal failure is reproduced at stack
+address `0x4000ffa8`; exhaustive host layout coverage and real Ring3 blocking
+wakeup prove the generic fix.
+
+The native C `/bin/boring-terminal` owns its parser/grid/renderer, M32 pixels,
+display surface and WM token. Real QMP -> PS/2 -> M31 -> WM Super+Return launches
+the BoringFS ELF, whose PTY slave starts a separate real `boring-shell`; that
+shell uses `SPAWN` for the real `/bin/boringfetch`. Full 800x600 pixel oracles
+prove the prompt, fetch output, two terminals, focus B/A/B/A and strict input
+isolation. Super+Q drains the focused terminal/shell pair and retiles the
+survivor. Separate test-only modes kill a terminal or issue shell `exit`; each
+requires an independently usable survivor and zero final PTY/process/task/IPC/
+input/framebuffer/M32 resources.
+
+The eight-process/eight-task limits are unchanged. Display + WM + two terminals
++ two shells use six ordinary slots; one foreground command peaks at seven.
+WM clients remain bounded at six, display surfaces at sixteen, descriptors at
+sixteen per process and PTYs at eight. The production BoringFS image contains
+only `boring-terminal` (27,232 bytes / 7 blocks), `boring-shell` (26,936 / 7)
+and `boringfetch` (15,288 / 4). Thirty-four filesystem blocks are sufficient
+and thirty-three are rejected; all historical fixture geometries remain intact.
+
+Permanent CI retains every M0–M35 gate and adds PTY/FD/shell/SPAWN host tests,
+generic stack exhaustion, real Scheduler/Ring3 PTY/SPAWN, terminal/shell/fetch
+ELF audits, measured M36 BoringFS, normal/dual/death graphical modes, corruption
+oracle, exact-bundle reboot and visual/bundle artifacts. See
+[RUNNING-M36.md](RUNNING-M36.md) and
+[process-startup-stack.md](process-startup-stack.md).
+
+
+## M36 Semantic Freeze record
+
+- Base: `d8975a293a2518269a1cd38bee0b24fcdf2a3830`
+- Freeze SHA: `6019d05bf266f049d36cf624753bfa82f4714984`
+- Freeze tree: `15f8355cd19d5e951b7bb48508ab80b3bcd4b3d0`
+- Full exact-head CI: **Run #464 / 33078951287 / SUCCESS**
+- Event: `pull_request`; branch: `agent/native-boring-terminal`; version: `0.0.36-dev`
+- PR: [#47](https://github.com/dennishilk/boringos/pull/47)
+
+All intended M36 semantics and every M0–M35 gate passed before this freeze.
+Temporary diagnostic/transport paths are absent. The GitHub sanitizer gate is
+green and unchanged; the local runtime's ptrace `/proc` restriction prevented
+LSan startup rather than reporting a leak. Closeout changes only active version
+witnesses to **BoringKernel 0.0.37-dev** and documentation. M37 is not included.
