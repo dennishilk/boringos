@@ -60,6 +60,7 @@ struct process_snapshot {
 bool process_init(void);
 struct process *process_bootstrap(void);
 struct process *process_current(void);
+struct process *process_find_pid(uint64_t pid);
 bool process_create(struct process **process_out);
 bool process_discard_unstarted(struct process *process);
 bool process_activate(struct process *process);
