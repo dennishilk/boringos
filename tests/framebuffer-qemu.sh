@@ -73,6 +73,7 @@ make -C "${ROOT}" boringfs-fixture boringfsck user-boringfetch user-cat
 make -C "${ROOT}" TEST_MODE=persistent-root
 
 mkfifo "${PIPE_BASE}.in" "${PIPE_BASE}.out"
+QMP_BACKEND=$(sh "${ROOT}/tests/qmp-backend.sh" "${QMP_SOCKET}")
 exec 3<> "${PIPE_BASE}.in"; FD_OPEN=1
 stdbuf -o0 tr -d '\r' < "${PIPE_BASE}.out" > "${LOG}" & CAT_PID=$!
 "${QEMU}" -M q35 -cpu "${QEMU_CPU}" -m 128M \
@@ -81,7 +82,7 @@ stdbuf -o0 tr -d '\r' < "${PIPE_BASE}.out" > "${LOG}" & CAT_PID=$!
     -device "virtio-blk-pci,drive=boringdisk,disable-legacy=on" \
     -vga std -display none \
     -serial "pipe:${PIPE_BASE}" -monitor none \
-    -qmp "unix:${QMP_SOCKET},server=on,wait=off" \
+    -qmp "${QMP_BACKEND}" \
     -no-reboot -no-shutdown >/dev/null 2> "${QEMU_LOG}" & PID=$!
 
 wait_prompt 1

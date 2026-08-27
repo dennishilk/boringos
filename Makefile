@@ -353,7 +353,7 @@ KERNEL_ASM_SOURCES := \
 KERNEL_C_OBJECTS := $(patsubst %.c,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_C_SOURCES))
 KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCES))
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
-MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
+MODE_STAMP := $(BUILD_DIR)/.test-mode
 
 .PHONY: all kernel user-elf user-runtime user-console user-init user-shell user-boringfetch user-cat user-input-test user-memory-test user-ipc-test user-m36-spawn user-boring-display user-display-clients elf-audit runtime-audit console-audit init-audit shell-audit boringfetch-audit cat-audit input-test-audit memory-test-audit ipc-test-audit display-audit shell-host-test fd-host-test pty-host-test framebuffer-host-test input-host-test memory-host-test ipc-host-test display-host-test boringfs-host-test boringfs-vfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test boringfs-fixture qemu-bundle run run-headless test clean distclean
 
@@ -576,10 +576,13 @@ $(MKBORINGFS_VERIFY): tests/mkboringfs-verify.c $(BORINGFS_CODEC) $(BORINGFS_VAL
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) \
 		tests/mkboringfs-verify.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) -o $@
 
-$(MODE_STAMP):
+.PHONY: check-test-mode
+check-test-mode:
+
+$(MODE_STAMP): check-test-mode
 	@mkdir -p $(BUILD_DIR)
-	@rm -f $(BUILD_DIR)/.test-mode-*
-	@touch $@
+	@printf '%s\n' '$(TEST_MODE)' > $@.tmp
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv $@.tmp $@; fi
 
 $(KERNEL_BUILD_DIR)/%.o: %.c $(MODE_STAMP)
 	@mkdir -p $(dir $@)

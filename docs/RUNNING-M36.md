@@ -27,6 +27,9 @@ eight-process/eight-task limits are unchanged. PTYs remain bounded to eight
 pairs, each with two 4096-byte rings. This milestone proves two terminals;
 additional windows are subject to these limits.
 
+The M35 WM client bound stays at six, the display surface bound at sixteen,
+and the descriptor bound at sixteen per process. No resource table was enlarged.
+
 The root image contains only the measured executable contents needed by this
 session: `boring-terminal`, `boring-shell` and `boringfetch`. See
 `M36-BORINGFS-GEOMETRY.txt` for the measured block count and rejected lower
@@ -38,3 +41,19 @@ Your host desktop may intercept Super shortcuts. Capture keyboard input in
 the QEMU window first. `--headless` only provides serial diagnostics and hides
 the graphical session. This production bundle never contains the F12 death
 test executable. Stop QEMU by closing its window or terminating it.
+
+## Repeat the acceptance tests
+
+`python3 tests/m36-desktop-qemu.py` builds and tests the normal session.
+`--mode terminal-death` builds a separate test-only terminal that exits on F12
+without cleanup; `--mode shell-death` exits the real shell while its terminal
+is open. Both tests require an independently usable survivor and zero remaining
+PTY, process, task, IPC, input, framebuffer and M32 resources after final close.
+
+`python3 tests/m36-desktop-qemu.py --bundle PATH` boots existing bundle images
+after SHA256SUMS verification and never rebuilds them. It repeats the complete
+normal graphical acceptance. This also supports checking downloaded artifacts.
+
+The historical QMP scripts default to Unix sockets. In restricted local runtimes,
+set `BORING_QMP_TRANSPORT=pipe` to use QEMU's FIFO backend for the identical
+commands and assertions. The M35/M36 Python drivers use QMP over standard I/O.
