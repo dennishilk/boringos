@@ -64,7 +64,7 @@ static bool shell_write(const char *buffer, size_t length) {
         if (chunk > (size_t)BORING_SYSCALL_CONSOLE_IO_MAX) {
             chunk = (size_t)BORING_SYSCALL_CONSOLE_IO_MAX;
         }
-        result = boring_console_write(&buffer[offset], chunk);
+        result = boring_fd_write(BORING_FD_STDOUT, &buffer[offset], chunk);
         if (result != (long)chunk) {
             return false;
         }
@@ -345,7 +345,7 @@ static bool shell_input_read(char *character_out) {
     if (character_out == NULL) {
         return false;
     }
-    result = boring_console_read(character_out, 1U);
+    result = boring_fd_read(BORING_FD_STDIN, character_out, 1U);
     return result == 1L;
 }
 
@@ -1479,6 +1479,9 @@ static bool shell_command_external(char *command, char *argument) {
     const char *argv[BORING_SYSCALL_ARG_MAX];
     size_t argc = 0U;
     char *cursor;
+    const struct boring_spawn_stdio stdio_config = {
+        BORING_FD_STDIN, BORING_FD_STDOUT, BORING_FD_STDERR, 0U
+    };
     long launch_result;
     long wait_result;
     int status = 0;
@@ -1511,8 +1514,9 @@ static bool shell_command_external(char *command, char *argument) {
         }
     }
 
-    launch_result = boring_launch_argv(
-        shell_exec_path, boring_strlen(shell_exec_path), argv, argc);
+    launch_result = boring_spawn(
+        shell_exec_path, boring_strlen(shell_exec_path), argv, argc,
+        &stdio_config);
     if (launch_result < 0L) {
         if (launch_result == -(long)BORING_SYSCALL_ENOENT) {
             return shell_write_text("command not found: ") &&

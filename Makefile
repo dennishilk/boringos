@@ -69,6 +69,7 @@ BORINGFS_FIXTURE := $(BUILD_DIR)/boringfs-fixture
 BORINGFS_VFS_HOST_TEST := $(BUILD_DIR)/boringfs-vfs-host-test
 SHELL_HOST_TEST := $(BUILD_DIR)/shell-host-test
 FD_HOST_TEST := $(BUILD_DIR)/fd-host-test
+PTY_HOST_TEST := $(BUILD_DIR)/pty-host-test
 FRAMEBUFFER_HOST_TEST := $(BUILD_DIR)/framebuffer-host-test
 INPUT_HOST_TEST := $(BUILD_DIR)/input-host-test
 MEMORY_HOST_TEST := $(BUILD_DIR)/memory-host-test
@@ -278,6 +279,7 @@ KERNEL_C_SOURCES := \
 	kernel/core/heap.c \
 	kernel/core/process.c \
 	kernel/core/fd.c \
+	kernel/core/pty.c \
 	kernel/core/input.c \
 	kernel/core/user_memory.c \
 	kernel/core/ipc.c \
@@ -298,6 +300,7 @@ KERNEL_C_SOURCES := \
 	kernel/core/process_test.c \
 	kernel/core/ring3_test.c \
 	kernel/core/syscall.c \
+	kernel/core/m36_syscall.c \
 	kernel/core/elf_boot.c \
 	kernel/core/elf_loader.c \
 	kernel/core/elf_vfs.c \
@@ -329,7 +332,7 @@ KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCE
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
 
-.PHONY: all kernel user-elf user-runtime user-console user-init user-shell user-boringfetch user-cat user-input-test user-memory-test user-ipc-test user-boring-display user-display-clients elf-audit runtime-audit console-audit init-audit shell-audit boringfetch-audit cat-audit input-test-audit memory-test-audit ipc-test-audit display-audit shell-host-test fd-host-test framebuffer-host-test input-host-test memory-host-test ipc-host-test display-host-test boringfs-host-test boringfs-vfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test boringfs-fixture qemu-bundle run run-headless test clean distclean
+.PHONY: all kernel user-elf user-runtime user-console user-init user-shell user-boringfetch user-cat user-input-test user-memory-test user-ipc-test user-boring-display user-display-clients elf-audit runtime-audit console-audit init-audit shell-audit boringfetch-audit cat-audit input-test-audit memory-test-audit ipc-test-audit display-audit shell-host-test fd-host-test pty-host-test framebuffer-host-test input-host-test memory-host-test ipc-host-test display-host-test boringfs-host-test boringfs-vfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test boringfs-fixture qemu-bundle run run-headless test clean distclean
 
 all: $(ISO)
 
@@ -397,6 +400,9 @@ shell-host-test: $(SHELL_HOST_TEST)
 
 fd-host-test: $(FD_HOST_TEST)
 	$(FD_HOST_TEST)
+
+pty-host-test: $(PTY_HOST_TEST)
+	$(PTY_HOST_TEST)
 
 framebuffer-host-test: $(FRAMEBUFFER_HOST_TEST)
 	$(FRAMEBUFFER_HOST_TEST)
@@ -482,11 +488,18 @@ $(SHELL_HOST_TEST): tests/shell-host-test.c user/boring-shell/main.c \
 	$(HOST_CC) -Iuser/runtime/include -Ikernel/include $(HOST_CFLAGS) \
 		tests/shell-host-test.c -o $@
 
-$(FD_HOST_TEST): tests/fd-host-test.c kernel/core/fd.c \
-		kernel/include/boring/fd.h kernel/include/boring/vfs.h
+$(FD_HOST_TEST): tests/fd-host-test.c kernel/core/fd.c kernel/core/pty.c \
+		kernel/include/boring/fd.h kernel/include/boring/vfs.h \
+		kernel/include/boring/pty.h
 	@mkdir -p $(dir $@)
 	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) \
-		tests/fd-host-test.c kernel/core/fd.c -o $@
+		tests/fd-host-test.c kernel/core/fd.c kernel/core/pty.c -o $@
+
+$(PTY_HOST_TEST): tests/pty-host-test.c kernel/core/pty.c \
+		kernel/include/boring/pty.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) \
+		tests/pty-host-test.c kernel/core/pty.c -o $@
 
 $(FRAMEBUFFER_HOST_TEST): tests/framebuffer-host-test.c \
 		kernel/core/framebuffer.c kernel/core/graphics.c kernel/core/pixel_font.c \
@@ -792,6 +805,7 @@ test:
 	sh ./tests/display-build-audit.sh
 	$(MAKE) shell-host-test
 	$(MAKE) fd-host-test
+	$(MAKE) pty-host-test
 	$(MAKE) framebuffer-host-test
 	$(MAKE) input-host-test
 	$(MAKE) memory-host-test

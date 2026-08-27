@@ -828,6 +828,61 @@ bool task_finished_stacks_valid(void) {
     return valid;
 }
 
+bool task_reap_finished_process(struct process *process) {
+    size_t index;
+    bool found = false;
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+
+    x86_64_interrupts_disable();
+    if ((!task_initialized) || preemption_enabled || (process == NULL) ||
+        (process == process_current()) ||
+        (process->state != PROCESS_FINISHED)) {
+        if (interrupts_were_enabled) {
+            x86_64_interrupts_enable();
+        }
+        return false;
+    }
+
+    for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
+        if (tasks[index].slot_used && (tasks[index].process == process)) {
+            found = true;
+            if ((&tasks[index] == current_task) ||
+                (tasks[index].state != KERNEL_TASK_FINISHED) ||
+                !task_stack_storage_is_valid(&tasks[index], NULL, NULL)) {
+                if (interrupts_were_enabled) {
+                    x86_64_interrupts_enable();
+                }
+                return false;
+            }
+        }
+    }
+    if (!found) {
+        if (interrupts_were_enabled) {
+            x86_64_interrupts_enable();
+        }
+        return false;
+    }
+
+    for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
+        if (tasks[index].slot_used && (tasks[index].process == process)) {
+            void *const stack = tasks[index].stack_base;
+
+            if (!kfree(stack)) {
+                if (interrupts_were_enabled) {
+                    x86_64_interrupts_enable();
+                }
+                return false;
+            }
+            task_clear(&tasks[index]);
+        }
+    }
+
+    if (interrupts_were_enabled) {
+        x86_64_interrupts_enable();
+    }
+    return true;
+}
+
 bool task_cleanup_finished(uint64_t *freed_stacks) {
     uint64_t freed = 0ULL;
     size_t index;

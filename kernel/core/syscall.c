@@ -1668,6 +1668,47 @@ static uint64_t syscall_fd_read(uint64_t raw_fd,
         if (result != VFS_RESULT_OK) {
             return syscall_error(syscall_vfs_error(result));
         }
+    } else if (kind == KERNEL_FD_PTY) {
+        for (;;) {
+            enum pty_result pty_result;
+
+            pty_result = kernel_fd_read_pty(&process->fd_table, fd, buffer,
+                                            safe_capacity, &transferred);
+            if (pty_result == PTY_RESULT_OK) {
+                break;
+            }
+            if (pty_result == PTY_RESULT_HUP) {
+                transferred = 0U;
+                break;
+            }
+            if (pty_result != PTY_RESULT_WOULD_BLOCK) {
+                return syscall_error(BORING_SYSCALL_EINVAL);
+            }
+            if (kernel_fd_arm_pty_waiter(&process->fd_table, fd,
+                                         process->pid) != PTY_RESULT_OK) {
+                return syscall_error(BORING_SYSCALL_EINVAL);
+            }
+            pty_result = kernel_fd_read_pty(&process->fd_table, fd, buffer,
+                                            safe_capacity, &transferred);
+            if (pty_result != PTY_RESULT_WOULD_BLOCK) {
+                kernel_fd_cancel_pty_waiter(&process->fd_table, fd,
+                                            process->pid);
+                if (pty_result == PTY_RESULT_OK) {
+                    break;
+                }
+                if (pty_result == PTY_RESULT_HUP) {
+                    transferred = 0U;
+                    break;
+                }
+                return syscall_error(BORING_SYSCALL_EINVAL);
+            }
+            if (!task_block_current()) {
+                kernel_fd_cancel_pty_waiter(&process->fd_table, fd,
+                                            process->pid);
+                return syscall_error(BORING_SYSCALL_EBUSY);
+            }
+            kernel_fd_cancel_pty_waiter(&process->fd_table, fd, process->pid);
+        }
     } else {
         return syscall_error(BORING_SYSCALL_EACCES);
     }
@@ -1733,13 +1774,28 @@ static uint64_t syscall_fd_write(uint64_t raw_fd,
         serial_write_bytes((const char *)buffer, transferred);
         return (uint64_t)transferred;
     }
-    if (kind != KERNEL_FD_REGULAR) {
+    if (kind == KERNEL_FD_PTY) {
+        const enum pty_result pty_result =
+            kernel_fd_write_pty(&process->fd_table, fd, buffer, safe_length,
+                                &transferred);
+
+        if (pty_result == PTY_RESULT_HUP) {
+            return syscall_error(BORING_SYSCALL_EPIPE);
+        }
+        if (pty_result == PTY_RESULT_WOULD_BLOCK) {
+            return syscall_error(BORING_SYSCALL_EBUSY);
+        }
+        if (pty_result != PTY_RESULT_OK) {
+            return syscall_error(BORING_SYSCALL_EINVAL);
+        }
+    } else if (kind == KERNEL_FD_REGULAR) {
+        result = kernel_fd_write_regular(&process->fd_table, fd, buffer,
+                                         safe_length, &transferred);
+        if (result != VFS_RESULT_OK) {
+            return syscall_error(syscall_vfs_error(result));
+        }
+    } else {
         return syscall_error(BORING_SYSCALL_EACCES);
-    }
-    result = kernel_fd_write_regular(&process->fd_table, fd, buffer,
-                                     safe_length, &transferred);
-    if (result != VFS_RESULT_OK) {
-        return syscall_error(syscall_vfs_error(result));
     }
     serial_write_string("fd-write: pid ");
     serial_write_u64(process->pid);
