@@ -19,7 +19,7 @@ Current serial output begins with:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.35-dev
+BoringKernel 0.0.36-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```
@@ -170,9 +170,11 @@ BoringKernel syscall verification passed.
 
 See [`docs/architecture.md`](docs/architecture.md), [`docs/interrupts.md`](docs/interrupts.md), [`docs/tasks.md`](docs/tasks.md), [`docs/processes.md`](docs/processes.md), [`docs/syscalls.md`](docs/syscalls.md), [`docs/userspace-exec.md`](docs/userspace-exec.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md), and [`docs/boringfs.md`](docs/boringfs.md).
 
-## Native desktop direction
+## Native BoringWM (M35)
 
-BoringOS is not intended to require X11 or Wayland for its native desktop. A later milestone will define a deliberately small BoringOS-native display/window protocol and service. The native BoringOS version of **BoringWM will be written in C**.
+M35 implements native **BoringWM in C** as a separate Ring3 `boring.wm` policy service above `boring.display`: bounded master/stack tiling, keyboard and mouse focus, adjacent reorder and graceful close. Three real Ring3 apps keep their pixels in app-owned M32 buffers; WM never maps them. The implementation is Semantic Frozen with all M0–M34 regressions retained. There is no X11, Wayland or terminal.
+
+Run `sh tests/wm-qemu.sh` for both native acceptance modes. See [architecture and proof](docs/native-boringwm.md) and [bundle instructions](docs/RUNNING-M35.md). M36 terminal and M37 desktop startup integration have not begun.
 
 The existing [dennishilk/boringwm](https://github.com/dennishilk/boringwm) repository remains a separate Rust/X11 project and external behavioral reference. It is not a BoringOS code dependency or submodule.
 

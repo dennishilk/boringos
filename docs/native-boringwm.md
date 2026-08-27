@@ -1,7 +1,8 @@
 # M35 native BoringWM
 
-Status: implementation and local acceptance complete; awaiting exact-head semantic freeze.
-No milestone-completion claim until closeout, merged-main CI and artifact verification.
+Status: M35 implementation complete and Semantic Frozen. This is the
+0.0.36-dev documentation/version closeout; final delivery verification is
+recorded in PR #46.
 
 Controlled base: `e7ac44c437624386cb4a5666cfe1e446a696c643`, tree
 `1d92fa3e4345beb2c334c4d324d324256b6a6fc0`, BoringKernel `0.0.35-dev`.
@@ -57,8 +58,8 @@ input is required. Host policy/protocol tests, ELF audits, BoringFS byte checks,
 full framebuffer validation and all historical CI remain required.
 
 No workspace system, alternate layout, bar, launcher UI, configuration parser,
-terminal, PTY, M36 or M37 work is included. Version remains `0.0.35-dev` until
-a successful exact-head semantic freeze.
+terminal, PTY, M36 or M37 work is included. The successful semantic freeze used
+`0.0.35-dev`; only the subsequent closeout changes the banner to `0.0.36-dev`.
 
 
 ## Protocol, authority and bounds
@@ -148,3 +149,19 @@ preserved persistent-shell ISOs. The WM uses Limine module startup; it does not
 claim M37 root-backed desktop supervision. Permanent CI retains every M0–M34
 gate and adds host/ELF/oracle tests, both real WM QEMU modes, five framebuffer
 references, M35 exact BoringFS contents and the verified human QEMU bundle.
+
+
+## M35 Semantic Freeze record
+
+- Base: `e7ac44c437624386cb4a5666cfe1e446a696c643`
+- Freeze SHA: `154344d2bc4e136b7e53c473b35b42dcb7a41348`
+- Freeze tree: `36504b61c61c46fb2c438e868ca4050b0527fa6e`
+- Full exact-head CI: **Run #425 / 33039917519 / SUCCESS**
+- Event: `pull_request`; branch: `agent/native-boringwm`; version: `0.0.35-dev`
+- PR: [#46](https://github.com/dennishilk/boringos/pull/46)
+
+All intended M35 semantics and all M0–M34 gates passed before this freeze.
+The temporary workflow is absent. Closeout changes only active version
+witnesses to **BoringKernel 0.0.36-dev** and documentation; no WM semantics.
+Final-head CI, guarded squash, exact merged-main push CI and artifact hashes
+are recorded in the PR's post-freeze verification trail. No M36 work is included.

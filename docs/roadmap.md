@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.35-dev
+BoringKernel 0.0.36-dev
 ```
 
 The current syscall ABI is exactly:
@@ -122,6 +122,7 @@ The current syscall ABI is exactly:
 38 FRAMEBUFFER_CLAIM
 39 FRAMEBUFFER_PRESENT
 40 FRAMEBUFFER_RELEASE
+41 EVENT_WAIT
 ```
 
 VFS-backed executable loading and standalone `/bin/boringfetch` are real
@@ -136,8 +137,10 @@ native service registry, blocking connection-oriented IPC and transactional gran
 of existing M32 shared-buffer capabilities between processes. Milestone 34 adds the
 native Ring-3 `boring-display` service, shared-buffer-backed surfaces, deterministic
 software composition, controlled kernel presentation and a real M31-driven cursor.
-There is still no partition layer, networking, window-placement/focus/tiling policy,
-terminal graphics stack, BoringWM or general GUI/window system.
+M35 adds native Ring3 BoringWM, bounded master/stack tiling, focus, reorder and
+graceful close, with syscall 41 providing generic bounded readiness only.
+There is still no partition layer, networking, terminal graphics stack or
+general desktop supervision. M36 and M37 have not begun.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -980,3 +983,44 @@ final version after closeout: BoringKernel 0.0.35-dev
 M34 does **not** add BoringWM, window placement, focus or tiling policy,
 workspaces, terminal graphics, X11, Wayland, GPU acceleration or a general
 window-system ABI. Those remain outside the M34 Semantic Freeze.
+
+
+---
+
+# Stage 19 — native window-management policy
+
+## Milestone 35: native BoringWM — implementation COMPLETE, Semantic Frozen
+
+Native C Ring3 `boring.wm` manages six generation-safe, endpoint-owned clients.
+The display retains all pixel composition and the real cursor; apps retain M32
+buffers. The master receives 3/5 of usable width, with deterministic stack
+remainders, gaps 4/8 and borders 3. New-client, keyboard and real mouse focus,
+adjacent reorder, graceful close and unsolicited exit all retile deterministically.
+Super+Return only records terminal unavailable. No terminal, workspace system,
+floating, bar, alternate layout or M37 startup integration is included.
+
+Five real CPL3 processes with distinct address spaces prove actual M33/M32/M34
+operation and QMP -> PS/2 -> i8042 -> M31 -> Ring3 input. Five independently
+validated 800x600 frames cover focus, reorder, close and exit. A separate WM-death
+acceptance proves display/app survival and kernel resource cleanup. Host tests
+perform 1,115,824 checks. Strict freestanding ELF audits and all inherited gates
+remain. The exact 13-program BoringFS superset uses 96 blocks, with 20 free;
+all older fixtures and the original M34 service/acceptance are retained.
+
+See [native-boringwm.md](native-boringwm.md) and [RUNNING-M35.md](RUNNING-M35.md).
+
+
+## M35 Semantic Freeze record
+
+- Base: `e7ac44c437624386cb4a5666cfe1e446a696c643`
+- Freeze SHA: `154344d2bc4e136b7e53c473b35b42dcb7a41348`
+- Freeze tree: `36504b61c61c46fb2c438e868ca4050b0527fa6e`
+- Full exact-head CI: **Run #425 / 33039917519 / SUCCESS**
+- Event: `pull_request`; branch: `agent/native-boringwm`; version: `0.0.35-dev`
+- PR: [#46](https://github.com/dennishilk/boringos/pull/46)
+
+All intended M35 semantics and all M0–M34 gates passed before this freeze.
+The temporary workflow is absent. Closeout changes only active version
+witnesses to **BoringKernel 0.0.36-dev** and documentation; no WM semantics.
+Final-head CI, guarded squash, exact merged-main push CI and artifact hashes
+are recorded in the PR's post-freeze verification trail. No M36 work is included.

@@ -64,11 +64,13 @@ The IRQ stub preserves all 15 general-purpose registers plus the interrupt-retur
 
 ## Task model
 
-The bounded task table still supports at most four ordinary kernel tasks. States remain:
+M35 raises the bounded task table to eight ordinary kernel tasks, separate
+from the bootstrap task, so display, WM and three apps can coexist. States remain:
 
 ```text
 READY
 RUNNING
+BLOCKED
 FINISHED
 ```
 
