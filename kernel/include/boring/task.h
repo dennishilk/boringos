@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 #define KERNEL_TASK_STACK_SIZE 16384U
-#define KERNEL_TASK_MAX 4U
+#define KERNEL_TASK_MAX 8U
 #define KERNEL_BOOTSTRAP_TASK_ID 0ULL
 
 enum kernel_task_state {
@@ -49,6 +49,7 @@ bool task_create_preemptive_for_process(struct process *process,
 void task_yield(void);
 bool task_block_current(void);
 bool task_wake_process(struct process *process);
+bool task_wake_pid(uint64_t pid);
 void task_exit_current_process(void) __attribute__((noreturn));
 uint64_t task_current_id(void);
 uint64_t task_current_process_id(void);

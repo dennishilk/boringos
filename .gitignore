@@ -27,6 +27,8 @@
 # Tooling
 compile_commands.json
 .cache/
+__pycache__/
+*.pyc
 
 # Editors / OS
 .vscode/

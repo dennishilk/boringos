@@ -16,7 +16,7 @@ compositor behavior remain regression gates.
 
 M35 adds a bounded display control extension for explicit placement, clipping,
 solid borders and forwarding normalized M31 events. Display does not decide
-focus, tiling, ordering or keybindings. The WM selects decides those values.
+focus, tiling, ordering or keybindings. The WM decides those values.
 
 The existing four process/task slots cannot hold display + WM + three apps.
 M35 will explicitly raise this finite capacity. Blocking on only one IPC

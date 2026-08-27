@@ -18,6 +18,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential binutils curl xorriso qemu-system-x86
 
+      - name: M35 native BoringWM host ELF input lifecycle and visual acceptance
+        run: sh ./tests/wm-qemu.sh
+
+      - name: Upload M35 real framebuffer and lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boringos-m35-wm-reference
+          path: |
+            build/m35-wm-reference/
+            build/m35-wm-death/
+          if-no-files-found: error
+
       - name: Audit generated ELF userspace artifact
         run: sh ./tests/elf-build-audit.sh
 

@@ -67,6 +67,17 @@ def main():
             elif operation == "super-q":
                 events = [key_event("meta_l", True), key_event("q", True),
                           key_event("q", False), key_event("meta_l", False)]
+            elif operation in ("super", "super-shift"):
+                if len(sys.argv) != 4:
+                    raise RuntimeError("super chord requires qcode")
+                code = sys.argv[3]
+                events = [key_event("meta_l", True)]
+                if operation == "super-shift":
+                    events.append(key_event("shift", True))
+                events += [key_event(code, True), key_event(code, False)]
+                if operation == "super-shift":
+                    events.append(key_event("shift", False))
+                events.append(key_event("meta_l", False))
             elif operation == "super-enter":
                 events = [key_event("meta_l", True), key_event("ret", True),
                           key_event("ret", False), key_event("meta_l", False)]

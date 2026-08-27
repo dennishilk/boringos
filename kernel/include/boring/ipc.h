@@ -79,6 +79,9 @@ enum boring_ipc_result boring_ipc_close(struct process *process,
                                         uint32_t handle);
 void boring_ipc_process_cleanup(struct process *process);
 bool boring_ipc_get_stats(struct boring_ipc_stats *stats);
+enum boring_ipc_result boring_ipc_poll(struct process *process,
+                                     uint32_t handle, uint32_t *events,
+                                     uint64_t *peer_pid);
 
 /* Host-test hook resets only when no live IPC object remains. */
 bool boring_ipc_host_reset(void);

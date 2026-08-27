@@ -3,7 +3,7 @@
 
 .extern x86_64_syscall_stack
 .extern x86_64_syscall_user_rsp_scratch
-.extern x86_64_syscall_dispatch_m34
+.extern x86_64_syscall_dispatch_events
 .extern x86_64_syscall_active_stack_top
 
 .globl x86_64_syscall_entry
@@ -57,7 +57,7 @@ x86_64_syscall_entry:
     /* FMASK clears DF, but CLD is deliberate defense at the C boundary. */
     cld
     movq %rsp, %rdi
-    call x86_64_syscall_dispatch_m34
+    call x86_64_syscall_dispatch_events
 
     /*
      * The C dispatcher has validated/sanitized user RIP/RSP/RFLAGS and set

@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include <boring/ipc.h>
+#include <boring/event_abi.h>
 #include <boring/process.h>
 #include <boring/task.h>
 #include <boring/user_memory.h>
@@ -282,12 +283,41 @@ static void test_attachment_retry_and_cleanup(void) {
             "IPC resources survived cleanup");
 }
 
+static void test_readiness_and_peer_identity(void) {
+    struct process server, client, foreign;
+    uint32_t listener, endpoint, accepted, events;
+    uint64_t peer;
+    uint8_t byte = 42U, output = 0U;
+    struct boring_ipc_receive_kernel_result received;
+    reset_process(&server, 1ULL); reset_process(&client, 2ULL); reset_process(&foreign, 3ULL);
+    require(boring_ipc_service_register(&server, "poll", 4U, &listener) == BORING_IPC_RESULT_OK, "poll register");
+    require(boring_ipc_poll(&server, listener, &events, &peer) == BORING_IPC_RESULT_OK && events == 0U && peer == 0ULL, "empty listener readiness");
+    require(boring_ipc_service_connect(&client, "poll", 4U, &endpoint) == BORING_IPC_RESULT_OK, "poll connect");
+    require(boring_ipc_poll(&server, listener, &events, &peer) == BORING_IPC_RESULT_OK && events == BORING_EVENT_READ, "pending listener readiness");
+    require(boring_ipc_service_accept(&server, listener, &accepted) == BORING_IPC_RESULT_OK, "poll accept");
+    require(boring_ipc_poll(&server, accepted, &events, &peer) == BORING_IPC_RESULT_OK && events == 0U && peer == 2ULL, "authenticated client peer");
+    require(boring_ipc_poll(&client, endpoint, &events, &peer) == BORING_IPC_RESULT_OK && peer == 1ULL, "authenticated service peer");
+    require(boring_ipc_poll(&foreign, accepted, &events, &peer) == BORING_IPC_RESULT_INVALID, "foreign process handle poll");
+    require(boring_ipc_send(&client, endpoint, &byte, 1U, 0U) == BORING_IPC_RESULT_OK, "poll send");
+    require(boring_ipc_poll(&server, accepted, &events, &peer) == BORING_IPC_RESULT_OK && events == BORING_EVENT_READ, "readable queue");
+    require(boring_ipc_poll(&server, accepted, &events, &peer) == BORING_IPC_RESULT_OK && events == BORING_EVENT_READ, "poll does not consume");
+    require(boring_ipc_close(&client, endpoint) == BORING_IPC_RESULT_OK, "poll close");
+    require(boring_ipc_poll(&server, accepted, &events, &peer) == BORING_IPC_RESULT_OK && events == (BORING_EVENT_READ | BORING_EVENT_HUP) && peer == 0ULL, "queued message plus HUP");
+    require(boring_ipc_receive(&server, accepted, &output, 1U, &received) == BORING_IPC_RESULT_OK && output == byte, "poll retains queued bytes");
+    require(boring_ipc_poll(&server, accepted, &events, &peer) == BORING_IPC_RESULT_OK && events == BORING_EVENT_HUP, "drained HUP");
+    require(boring_ipc_close(&server, accepted) == BORING_IPC_RESULT_OK, "poll close accepted");
+    require(boring_ipc_poll(&server, accepted, &events, &peer) == BORING_IPC_RESULT_INVALID, "stale poll handle");
+    boring_ipc_process_cleanup(&server); boring_ipc_process_cleanup(&client);
+}
+
 int main(void) {
     require(boring_ipc_system_init(), "IPC init failed");
     test_registry_and_fifo();
     require(boring_ipc_host_reset(), "host reset after FIFO failed");
     test_attachment_retry_and_cleanup();
     require(boring_ipc_host_reset(), "host reset after cleanup failed");
+    test_readiness_and_peer_identity();
+    require(boring_ipc_host_reset(), "host reset after readiness failed");
     (void)puts("ipc-host-test: all bounded registry/FIFO/grant tests passed.");
     return 0;
 }
