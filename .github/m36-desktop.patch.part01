@@ -1,0 +1,340 @@
+*frame) {
++    (void)frame;
++    serial_write_string("M36 desktop FAILED: unexpected exception\n");
++    x86_64_halt_forever();
++}
+diff --git a/kernel/core/syscall.c b/kernel/core/syscall.c
+index 5f86891..8f4b3a2 100644
+--- a/kernel/core/syscall.c
++++ b/kernel/core/syscall.c
+@@ -256,7 +256,7 @@ static uint64_t syscall_system_info(uint64_t user_info) {
+                               "memory")) {
+         return syscall_error(BORING_SYSCALL_EIO);
+     }
+-#elif BORING_TEST_MODE == 15
++#elif (BORING_TEST_MODE == 15) || defined(BORING_M36_DESKTOP_ACCEPTANCE)
+     if (!syscall_copy_literal(info.root_fs, sizeof(info.root_fs), "BoringFS") ||
+         !syscall_copy_literal(info.root_device, sizeof(info.root_device),
+                               "virtio-blk")) {
+diff --git a/kernel/include/boring/m36_desktop_test.h b/kernel/include/boring/m36_desktop_test.h
+new file mode 100644
+index 0000000..f0dc2ca
+--- /dev/null
++++ b/kernel/include/boring/m36_desktop_test.h
+@@ -0,0 +1,8 @@
++#ifndef BORING_M36_DESKTOP_TEST_H
++#define BORING_M36_DESKTOP_TEST_H
++
++struct boring_limine_module_response;
++void m36_desktop_test_run(const struct boring_limine_module_response *modules)
++    __attribute__((noreturn));
++
++#endif
+diff --git a/limine-m36-desktop.conf b/limine-m36-desktop.conf
+new file mode 100644
+index 0000000..fda4c00
+--- /dev/null
++++ b/limine-m36-desktop.conf
+@@ -0,0 +1,10 @@
++timeout: 0
++
++/BoringOS M36 graphical terminal
++    protocol: limine
++    path: boot():/boot/kernel.elf
++    resolution: 800x600x32
++    module_path: boot():/boot/user/boring-display.elf
++    module_string: boringos-boring-display
++    module_path: boot():/boot/user/boringwm.elf
++    module_string: boringos-boringwm
+diff --git a/tests/m36-desktop-qemu.py b/tests/m36-desktop-qemu.py
+new file mode 100755
+index 0000000..301aac5
+--- /dev/null
++++ b/tests/m36-desktop-qemu.py
+@@ -0,0 +1,177 @@
++#!/usr/bin/env python3
++"""M36 real QMP -> PS/2 -> WM -> terminal -> PTY -> shell visual acceptance."""
++import json
++import os
++import re
++import runpy
++import select
++import shutil
++import subprocess
++import time
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parent.parent
++QMP = runpy.run_path(str(ROOT / "tests/qmp-input.py"))
++WM_ORACLE = runpy.run_path(str(ROOT / "tests/validate-wm-screenshot.py"))
++TERM_ORACLE = runpy.run_path(str(ROOT / "tests/validate-m36-terminal-screenshot.py"))
++OUT = ROOT / "build/m36-desktop-reference"
++
++
++def run():
++    if OUT.exists():
++        shutil.rmtree(OUT)
++    OUT.mkdir(parents=True)
++    log_path = OUT / "serial.log"
++    log_path.write_text("")
++    with (OUT / "bundle.log").open("w") as bundle:
++        subprocess.run(["sh", "tests/m36-bundle-test.sh"], cwd=ROOT,
++                       stdout=bundle, stderr=subprocess.STDOUT, check=True)
++    root_image = ROOT / "build/m36-bundle-test/boringos-root.img"
++    with (OUT / "build.log").open("w") as build:
++        subprocess.run(["make", "TEST_MODE=m36-desktop"], cwd=ROOT,
++                       stdout=build, stderr=subprocess.STDOUT, check=True)
++    qemu_log = (OUT / "qemu.log").open("w")
++    vm = subprocess.Popen([
++        os.environ.get("QEMU", "qemu-system-x86_64"), "-M", "q35", "-cpu",
++        os.environ.get("QEMU_CPU", "qemu64,apic=off"), "-m", "128M",
++        "-cdrom", str(ROOT / "build/boringos.iso"), "-boot", "d", "-vga", "std",
++        "-drive", f"file={root_image},if=none,format=raw,id=boringdisk",
++        "-device", "virtio-blk-pci,drive=boringdisk,disable-legacy=on",
++        "-display", "none", "-serial", f"file:{log_path}", "-monitor", "none",
++        "-qmp", "stdio", "-no-reboot", "-no-shutdown"],
++        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=qemu_log, bufsize=0)
++    qmp_ready = False
++
++    class QmpPipes:
++        def readline(self):
++            if not select.select([vm.stdout], [], [], 10)[0]:
++                raise RuntimeError("QMP pipe response timeout")
++            return vm.stdout.readline()
++        def write(self, data): return vm.stdin.write(data)
++        def flush(self): return vm.stdin.flush()
++    pipes = QmpPipes()
++
++    def log(): return log_path.read_text(errors="replace")
++    def wait(predicate, description, timeout=60):
++        end = time.monotonic() + timeout
++        while time.monotonic() < end:
++            text = log()
++            if "M36 desktop FAILED" in text or "M36 terminal FAILED" in text or "Fatal exception" in text or "syscall fatal" in text:
++                raise RuntimeError(f"guest failure while waiting for {description}\n{text[-9000:]}")
++            if vm.poll() is not None:
++                raise RuntimeError(f"QEMU exited ({vm.returncode}) while waiting for {description}")
++            value = predicate(text)
++            if value: return value
++            time.sleep(0.04)
++        raise RuntimeError(f"first missing witness: {description}\n{log()[-9000:]}")
++    def witness(text, count=1): return wait(lambda output: output.count(text) >= count, f"{text} x{count}")
++    def command(name, arguments=None):
++        nonlocal qmp_ready
++        if not qmp_ready:
++            QMP["receive_message"](pipes)
++            QMP["execute"](pipes, "qmp_capabilities")
++            qmp_ready = True
++        result = QMP["execute"](pipes, name, arguments)
++        with (OUT / "qmp.log").open("a") as record:
++            record.write(json.dumps({"command": name, "arguments": arguments, "result": result}) + "\n")
++        return result
++    def key(code, super_key=False):
++        events = []
++        if super_key: events.append(QMP["key_event"]("meta_l", True))
++        events += [QMP["key_event"](code, True), QMP["key_event"](code, False)]
++        if super_key: events.append(QMP["key_event"]("meta_l", False))
++        command("input-send-event", {"events": events})
++        time.sleep(0.025)
++    def type_text(text):
++        for ch in text:
++            if not ("a" <= ch <= "z"):
++                raise RuntimeError(f"unsupported test character {ch!r}")
++            key(ch)
++    def latest_frame(count=None, after=0):
++        def match(text):
++            frames = WM_ORACLE["frames"](text)
++            frames = [f for f in frames if f["frame"] > after and (count is None or f["count"] == count)]
++            return frames[-1] if frames else None
++        return wait(match, f"WM frame count={count} after={after}")
++    def capture(name, frame, mode):
++        match = re.search(r"boring-framebuffer: (\d+)x(\d+)x(?:24|32)", log())
++        if not match: raise RuntimeError("missing framebuffer geometry")
++        width, height = map(int, match.groups())
++        command("stop")
++        try:
++            ppm = OUT / f"{name}.ppm"
++            command("screendump", {"filename": str(ppm)})
++            meta = dict(frame, width=width, height=height)
++            (OUT / f"{name}.json").write_text(json.dumps(meta, indent=2) + "\n")
++            decoded = TERM_ORACLE["validate"](ppm, meta, mode)
++            (OUT / f"{name}.txt").write_text("\n".join(
++                f"pid {pid}\n" + "\n".join(rows) for pid, rows in sorted(decoded.items())) + "\n")
++        finally:
++            command("cont")
++
++    try:
++        witness("m36-desktop: display+wm scheduler tasks ready")
++        witness("m36-desktop: real BoringFS root mounted")
++        witness("display: M35 service and M31 input ready")
++        witness("wm: boring.wm Ring3 policy ready; no pixel mappings")
++
++        key("ret", super_key=True)
++        witness("wm: Super+Return spawned /bin/boring-terminal")
++        witness("boring-spawn: VFS executable source /bin/boring-terminal")
++        witness("boring-terminal: Ring3 managed client + PTY + boring-shell ready")
++        witness("boring-spawn: VFS executable source /bin/boring-shell")
++        prompt_frame = latest_frame(1)
++        time.sleep(0.25)
++        capture("prompt", prompt_frame, "prompt")
++
++        type_text("boringfetch")
++        key("ret")
++        witness("boring-spawn: VFS executable source /bin/boringfetch")
++        witness("exited status 0")
++        time.sleep(0.35)
++        fetch_frame = latest_frame(1, prompt_frame["frame"] - 1)
++        capture("boringfetch", fetch_frame, "fetch")
++
++        key("ret", super_key=True)
++        witness("wm: Super+Return spawned /bin/boring-terminal", 2)
++        witness("boring-terminal: Ring3 managed client + PTY + boring-shell ready", 2)
++        dual = latest_frame(2, fetch_frame["frame"])
++        time.sleep(0.25)
++
++        type_text("terminalb")
++        time.sleep(0.2)
++        capture("dual-focused-b", dual, "dual-b")
++        key("j", super_key=True)
++        switched = latest_frame(2, dual["frame"])
++        type_text("terminala")
++        time.sleep(0.2)
++        capture("dual-focused-a", switched, "dual-a")
++
++        key("q", super_key=True)
++        witness("boring-terminal: CLOSE received")
++        witness("boring-terminal: PTY master closed")
++        witness("boring-terminal: graceful cleanup complete")
++        single = latest_frame(1, switched["frame"])
++        time.sleep(0.2)
++        capture("after-super-q", single, "single-after-close")
++
++        key("q", super_key=True)
++        witness("boring-terminal: CLOSE received", 2)
++        witness("boring-terminal: graceful cleanup complete", 2)
++        witness("M36 graphical terminal desktop acceptance passed.")
++        (OUT / "SUCCESS.txt").write_text(
++            "M36 graphical desktop SUCCESS\nReal QMP->PS/2->M31->WM->SPAWN->terminal->PTY->shell->boringfetch pixels; dual isolation; Super+Q cleanup.\n")
++        print(f"M36 graphical desktop acceptance passed; evidence: {OUT}")
++    except Exception as exc:
++        (OUT / "FAILURE.txt").write_text(str(exc) + "\n")
++        raise
++    finally:
++        vm.terminate()
++        try: vm.wait(timeout=5)
++        except subprocess.TimeoutExpired:
++            vm.kill(); vm.wait()
++        qemu_log.close()
++        vm.stdin.close(); vm.stdout.close()
++
++
++if __name__ == "__main__": run()
+diff --git a/tests/validate-m36-terminal-screenshot.py b/tests/validate-m36-terminal-screenshot.py
+new file mode 100755
+index 0000000..853b55b
+--- /dev/null
++++ b/tests/validate-m36-terminal-screenshot.py
+@@ -0,0 +1,134 @@
++#!/usr/bin/env python3
++"""Decode the real M36 terminal bitmap font from a QEMU screendump."""
++import ast
++import json
++import re
++import runpy
++import sys
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parent.parent
++parse_ppm = runpy.run_path(str(ROOT / "tests/validate-display-screenshot.py"))["parse_ppm"]
++TERM_BG = bytes((0x1D, 0x20, 0x21))
++TERM_FG = bytes((0xEB, 0xDB, 0xB2))
++MARGIN_X, MARGIN_Y, CELL_W, CELL_H = 4, 4, 6, 8
++MAX_COLS, MAX_ROWS = 128, 64
++
++
++def glyphs():
++    text = (ROOT / "user/boring-terminal/render.c").read_text()
++    result = {}
++    for literal, values in re.findall(r"case\s+('(?:\\.|[^'])+'):\s+GLYPH\(([^)]*)\);", text):
++        try:
++            ch = ast.literal_eval(literal)
++        except (SyntaxError, ValueError):
++            continue
++        nums = tuple(int(item.strip(), 0) for item in values.split(','))
++        if len(ch) == 1 and len(nums) == 7:
++            result[nums] = ch
++    return result
++
++
++GLYPHS = glyphs()
++
++
++def pixel(data, width, x, y):
++    off = (y * width + x) * 3
++    return data[off:off + 3]
++
++
++def decode_tile(data, width, height, tile):
++    x0 = tile["x"] + tile["border"]
++    y0 = tile["y"] + tile["border"]
++    view_w = tile["width"] - 2 * tile["border"]
++    view_h = tile["height"] - 2 * tile["border"]
++    cols = min(MAX_COLS, (view_w - 2 * MARGIN_X) // CELL_W)
++    rows = min(MAX_ROWS, (view_h - 2 * MARGIN_Y) // CELL_H)
++    decoded = []
++    for row in range(rows):
++        chars = []
++        for col in range(cols):
++            gx = x0 + MARGIN_X + col * CELL_W
++            gy = y0 + MARGIN_Y + row * CELL_H
++            bits = []
++            valid = True
++            for yy in range(7):
++                value = 0
++                for xx in range(5):
++                    if gx + xx >= width or gy + yy >= height:
++                        valid = False
++                        break
++                    rgb = pixel(data, width, gx + xx, gy + yy)
++                    if rgb == TERM_FG:
++                        value |= 1 << (4 - xx)
++                    elif rgb != TERM_BG:
++                        valid = False
++                        break
++                if not valid:
++                    break
++                bits.append(value)
++            chars.append(GLYPHS.get(tuple(bits), "?") if valid else "?")
++        decoded.append("".join(chars).rstrip())
++    return decoded
++
++
++def decode(ppm, metadata):
++    width, height, data = parse_ppm(Path(ppm))
++    if (width, height) != (metadata["width"], metadata["height"]):
++        raise ValueError("framebuffer geometry differs from serial witness")
++    return {tile["pid"]: decode_tile(data, width, height, tile)
++            for tile in metadata["tiles"]}
++
++
++def contains(rows, text):
++    return any(text in row for row in rows)
++
++
++def validate(ppm, metadata, mode):
++    screens = decode(ppm, metadata)
++    if mode == "prompt":
++        if len(screens) != 1 or not any(contains(rows, "boring@boringos:/$") for rows in screens.values()):
++            raise ValueError(f"graphical shell prompt missing: {screens}")
++    elif mode == "fetch":
++        if len(screens) != 1:
++            raise ValueError("fetch proof requires exactly one terminal")
++        rows = next(iter(screens.values()))
++        for text in ("BoringOS", "Kernel: BoringKernel 0.0.36-dev", "Root FS: BoringFS"):
++            if not contains(rows, text):
++                raise ValueError(f"graphical boringfetch text missing: {text}: {rows}")
++    elif mode == "dual-b":
++        focus = metadata["focus"]
++        focused = next((tile["pid"] for tile in metadata["tiles"] if tile["token"] == focus), None)
++        if len(screens) != 2 or focused is None or not contains(screens[focused], "terminalb"):
++            raise ValueError(f"focuse
