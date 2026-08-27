@@ -21,7 +21,12 @@ ACCENT = (0xB8BB26, 0x83A598, 0xD3869B)
 def frames(log):
     result = []
     current = None
-    for line in log.splitlines():
+    # Serial files are sampled while QEMU is still writing. An unterminated
+    # final line is incomplete input, not a malformed completed witness.
+    for line in log.splitlines(keepends=True):
+        if not line.endswith("\n"):
+            break
+        line = line.rstrip("\r\n")
         match = re.search(r"wm: frame=(\d+) count=(\d+) focus=(\d+)$", line)
         if match:
             current = dict(zip(("frame", "count", "focus"), map(int, match.groups())))

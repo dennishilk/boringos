@@ -134,7 +134,7 @@ static void request(uint32_t endpoint) {
     }
     reply.version = BORING_WM_VERSION; reply.type = BORING_WM_REPLY; reply.status = status;
     reply.token = status == BORING_WM_OK ? token : 0U;
-    (void)app_send(endpoint, &reply);
+    if (!app_send(endpoint, &reply)) { changed = true; }
     if (changed) { desktop_say("wm: action registration\n"); sync_layout(); }
 }
 
@@ -148,7 +148,8 @@ static void handle_input(const struct display_event *message) {
         const struct wm_client *client = wm_lookup(&wm, wm.focus);
         struct boring_wm_message close = {0};
         close.version = BORING_WM_VERSION; close.type = BORING_WM_CLOSE; close.token = client->token;
-        desktop_say("wm: graceful close requested\n"); (void)app_send(client->endpoint, &close);
+        desktop_say("wm: graceful close requested\n");
+        if (!app_send(client->endpoint, &close)) { sync_layout(); }
     } else if (action == WM_NO_LAUNCHER) {
         desktop_say("wm: terminal unavailable; no configured launcher\n");
 #ifdef BORING_WM_DEATH_ACCEPTANCE
@@ -161,7 +162,7 @@ static void handle_input(const struct display_event *message) {
             key.version = BORING_WM_VERSION; key.type = BORING_WM_KEY; key.token = client->token;
             key.surface = message->input.code; key.x = (uint32_t)message->input.value1;
             key.y = message->input.modifiers;
-            (void)app_send(client->endpoint, &key);
+            if (!app_send(client->endpoint, &key)) { sync_layout(); }
         }
     }
     {

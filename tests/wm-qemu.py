@@ -125,7 +125,9 @@ def run(mode):
         for client in "abc":
             witness(f"wm-client-{client}: managed ready")
         witness("wm-client-a: malformed requests rejected")
+        witness("wm-client-a: event wait validation and ownership passed")
         witness("wm-client-c: foreign client token rejected")
+        witness("wm-client-c: foreign display authority rejected")
         match = re.search(r"boring-framebuffer: (\d+)x(\d+)x(?:24|32)", log())
         if not match:
             raise RuntimeError("missing geometry witness")

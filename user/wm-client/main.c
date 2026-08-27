@@ -99,6 +99,34 @@ static void malformed_tests(void) {
     witness("malformed requests rejected\n");
 }
 
+static void wait_tests(void) {
+    struct boring_event_watch watch = {BORING_EVENT_IPC, manager, 0U, 0U, 0ULL};
+    if ((boring_event_wait(&watch, 0U, BORING_EVENT_QUERY) != -(long)BORING_SYSCALL_EINVAL) ||
+        (boring_event_wait(&watch, BORING_EVENT_MAX + 1U, BORING_EVENT_QUERY) != -(long)BORING_SYSCALL_EINVAL) ||
+        (boring_event_wait(&watch, 1U, 2U) != -(long)BORING_SYSCALL_EINVAL) ||
+        (boring_event_wait(NULL, 1U, BORING_EVENT_QUERY) != -(long)BORING_SYSCALL_EFAULT)) {
+        desktop_fail("wait count flags pointer validation");
+    }
+    watch.reserved = 1U;
+    if (boring_event_wait(&watch, 1U, BORING_EVENT_QUERY) != -(long)BORING_SYSCALL_EINVAL) {
+        desktop_fail("wait reserved validation");
+    }
+    watch.reserved = 0U; watch.kind = 99U;
+    if (boring_event_wait(&watch, 1U, BORING_EVENT_QUERY) != -(long)BORING_SYSCALL_EINVAL) {
+        desktop_fail("wait kind validation");
+    }
+    watch.kind = BORING_EVENT_IPC; watch.handle = UINT32_MAX;
+    if (boring_event_wait(&watch, 1U, BORING_EVENT_QUERY) != -(long)BORING_SYSCALL_EINVAL) {
+        desktop_fail("wait foreign handle validation");
+    }
+    watch.kind = BORING_EVENT_INPUT; watch.handle = 0U;
+    if (boring_event_wait(&watch, 1U, BORING_EVENT_QUERY) != -(long)BORING_SYSCALL_EACCES) {
+        desktop_fail("wait input ownership validation");
+    }
+    if (boring_endpoint_peer(manager) != 2L) { desktop_fail("wait authenticated peer"); }
+    witness("event wait validation and ownership passed\n");
+}
+
 int boring_main(void) {
     long ep;
     struct display_control request = {0}; struct display_event info;
@@ -133,6 +161,7 @@ int boring_main(void) {
     if (wm_rpc(&registration, sizeof(registration)).status != BORING_WM_INVALID) { desktop_fail("stale token"); }
     if (WM_CLIENT_ID == 1) {
         uint32_t saved = manager;
+        wait_tests();
         ep = boring_service_connect(BORING_WM_SERVICE, BORING_WM_SERVICE_LENGTH);
         if (ep <= 0L) { desktop_fail("hostile probe connection"); }
         manager = (uint32_t)ep; malformed_tests();
@@ -142,6 +171,16 @@ int boring_main(void) {
         registration.token = 257U;
         if (wm_rpc(&registration, sizeof(registration)).status != BORING_WM_ACCESS) { desktop_fail("foreign WM identity"); }
         witness("foreign client token rejected\n");
+        request = (struct display_control){0}; request.version = BORING_DISPLAY_CONTROL_VERSION;
+        request.type = DISPLAY_DELEGATE; request.surface = 257U;
+        if (control_rpc(&request).status != BORING_DISPLAY_STATUS_ACCESS) {
+            desktop_fail("foreign display surface delegation");
+        }
+        request.type = DISPLAY_MANAGER; request.surface = 0U;
+        if (control_rpc(&request).status != BORING_DISPLAY_STATUS_ACCESS) {
+            desktop_fail("foreign display manager authority");
+        }
+        witness("foreign display authority rejected\n");
     }
     witness("managed ready\n");
     for (;;) {

@@ -514,3 +514,20 @@ Still missing deliberately:
 - FPU/SIMD ownership/context switching.
 
 The next roadmap milestone remains separate. This implementation must not be interpreted as having started the ELF userspace loader.
+
+
+## Milestone 35 generic event readiness
+
+M35 adds syscall **41 EVENT_WAIT(watches, count, flags)**; slots 0–40 are unchanged.
+`kernel/include/boring/event_abi.h` defines 1–32 watches, each 24 bytes:
+`kind`, `handle`, returned `events`, zero `reserved`, returned `peer_pid`.
+The entire array must be writable userspace memory. Unknown flags, kinds,
+nonzero reserved fields, invalid handles and invalid counts fail. Input watches
+require the existing exclusive M31 input owner; no ownership is transferred.
+
+IPC watches report READ/HUP without consuming messages and authenticated peer
+PID for the caller's own endpoint. QUERY returns the number of ready watches
+immediately, including zero. With zero flags a nonempty valid set blocks until
+ready; the existing scheduler and input IRQ wakeup provide progress. No window,
+focus, tiling or Super-key policy exists in this syscall. See
+[native-boringwm.md](native-boringwm.md) for the userspace consumer and bounds.

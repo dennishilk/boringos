@@ -225,6 +225,9 @@ jobs:
       - name: Build human-runnable M34 QEMU bundle
         run: sh ./tests/build-m34-qemu-bundle.sh
 
+      - name: M35 BoringFS geometry exact contents and dual QEMU bundle
+        run: sh ./tests/build-m35-qemu-bundle.sh
+
       - name: Upload human-runnable QEMU bundle
         uses: actions/upload-artifact@v4
         with:
