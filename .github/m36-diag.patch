@@ -1,0 +1,87 @@
+diff --git a/user/boring-display/server.c b/user/boring-display/server.c
+index 54034ac..07e6868 100644
+--- a/user/boring-display/server.c
++++ b/user/boring-display/server.c
+@@ -105,6 +105,7 @@ static void control(uint32_t endpoint, const struct display_control *r) {
+             }
+             if (probe > 0L) { (void)boring_ipc_close((uint32_t)probe); }
+         } else if (r->type == DISPLAY_INPUT_ACK) {
++            desktop_say("display: INPUT_ACK receive\n");
+             if ((endpoint == managed.manager_endpoint) && input_pending) {
+                 input_pending = false;
+                 return; /* ACK itself has no reply. */
+@@ -112,12 +113,16 @@ static void control(uint32_t endpoint, const struct display_control *r) {
+             }
+             status = BORING_DISPLAY_STATUS_ACCESS;
+         } else {
++            if (r->type == DISPLAY_PLACE) { desktop_say("display: PLACE receive\n"); }
++            if (r->type == DISPLAY_PRESENT) { desktop_say("display: PRESENT receive\n"); }
+             status = display_managed_control(&managed, &core, endpoint, (uint64_t)peer, r);
+             if ((status == BORING_DISPLAY_STATUS_OK) && (r->type == DISPLAY_PRESENT)) { present(); }
+         }
+     }
+     control_reply(endpoint, status, r->surface);
++    if (r->type == DISPLAY_PLACE) { desktop_say("display: PLACE replied\n"); }
++    if (r->type == DISPLAY_PRESENT) { desktop_say("display: PRESENT replied\n"); }
+ }
+ 
+ static void receive(uint32_t endpoint) {
+diff --git a/user/boring-terminal/main.c b/user/boring-terminal/main.c
+index e011b83..17af493 100644
+--- a/user/boring-terminal/main.c
++++ b/user/boring-terminal/main.c
+@@ -397,6 +397,7 @@ int boring_main(void) {
+         if (ready <= 0L) {
+             term_fail("EVENT_WAIT");
+         }
++        desktop_say("boring-terminal: EVENT_WAIT ready\n");
+         if (watches[0].events != 0U) {
+             struct boring_wm_message event;
+             struct boring_ipc_receive_result received;
+@@ -412,6 +413,7 @@ int boring_main(void) {
+                 term_fail("WM event envelope");
+             }
+             if (event.type == BORING_WM_CONFIGURE) {
++                desktop_say("boring-terminal: CONFIGURE receive\n");
+                 configure(&event);
+             } else if (event.type == BORING_WM_KEY) {
+                 handle_key(&event);
+@@ -424,6 +426,7 @@ int boring_main(void) {
+         }
+         if (watches[1].events != 0U) {
+             if ((watches[1].events & BORING_EVENT_READ) != 0U) {
++                desktop_say("boring-terminal: PTY READ ready\n");
+                 (void)read_pty_output();
+             }
+             if ((watches[1].events & BORING_EVENT_HUP) != 0U) {
+diff --git a/user/boringwm/main.c b/user/boringwm/main.c
+index c2e08ab..d7446b5 100644
+--- a/user/boringwm/main.c
++++ b/user/boringwm/main.c
+@@ -77,7 +77,9 @@ static void sync_layout(void) {
+         place.x = c->rect.x; place.y = c->rect.y; place.width = c->rect.width;
+         place.height = c->rect.height; place.border = c->rect.border; place.order = index;
+         place.color = wm.focus == c->token ? BORING_WM_FOCUSED : BORING_WM_UNFOCUSED;
++        desktop_say("wm: sync PLACE send\n");
+         reply = display_rpc(&place);
++        desktop_say("wm: sync PLACE reply\n");
+         if (reply.status != BORING_DISPLAY_STATUS_OK) { drop(c->endpoint); index = 0U; continue; }
+         configure.version = BORING_WM_VERSION; configure.type = BORING_WM_CONFIGURE;
+         configure.token = c->token; configure.surface = c->surface;
+@@ -85,12 +87,15 @@ static void sync_layout(void) {
+         configure.height = place.height; configure.border = place.border;
+         configure.focused = wm.focus == c->token ? 1U : 0U;
+         if (!app_send(c->endpoint, &configure)) { index = 0U; continue; }
++        desktop_say("wm: sync CONFIGURE sent\n");
+         ++index;
+     }
+     {
+         struct display_control present = {0};
+         present.version = BORING_DISPLAY_CONTROL_VERSION; present.type = DISPLAY_PRESENT;
+         present.background = BORING_WM_BACKGROUND;
++        desktop_say("wm: sync PRESENT send\n");
+         if (display_rpc(&present).status != BORING_DISPLAY_STATUS_OK) { desktop_fail("WM present"); }
++        desktop_say("wm: sync PRESENT reply\n");
+     }
+     snapshot();
+ }
