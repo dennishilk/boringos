@@ -33,6 +33,7 @@ static size_t shell_history_start;
 static size_t shell_history_count;
 static uint64_t shell_history_total;
 static char shell_prompt[BORING_SHELL_PROMPT_CAPACITY];
+static bool shell_input_eof;
 static char shell_completion_path[BORING_SHELL_LINE_MAX + 1U];
 static char shell_completion_name[BORING_DIRENT_NAME_CAPACITY];
 static char shell_write_buffer[BORING_SHELL_LINE_MAX + 1U];
@@ -44,11 +45,10 @@ static const char shell_command_names[BORING_SHELL_COMMAND_COUNT]
     "ps", "history", "exit", "logout"
 };
 
-static void shell_idle_forever(void) __attribute__((noreturn));
-static void shell_idle_forever(void) {
-    for (;;) {
-        __asm__ volatile ("pause");
-    }
+static void shell_exit_failure(void) __attribute__((noreturn));
+static void shell_exit_failure(void) {
+    /* A failed client must release its PTY and scheduler task. */
+    boring_exit(1);
 }
 
 static bool shell_write(const char *buffer, size_t length) {
@@ -64,7 +64,7 @@ static bool shell_write(const char *buffer, size_t length) {
         if (chunk > (size_t)BORING_SYSCALL_CONSOLE_IO_MAX) {
             chunk = (size_t)BORING_SYSCALL_CONSOLE_IO_MAX;
         }
-        result = boring_console_write(&buffer[offset], chunk);
+        result = boring_fd_write(BORING_FD_STDOUT, &buffer[offset], chunk);
         if (result != (long)chunk) {
             return false;
         }
@@ -272,10 +272,10 @@ static bool shell_syscall_safety(void) {
             -(long)BORING_SYSCALL_ENAMETOOLONG) &&
            (boring_fs_mkdir(embedded_nul, sizeof(embedded_nul)) ==
             -(long)BORING_SYSCALL_EINVAL) &&
-           (boring_fs_rmdir(missing, sizeof(missing) - 1U) ==
-            -(long)BORING_SYSCALL_ENOENT) &&
-           (boring_fs_chdir(missing, sizeof(missing) - 1U) ==
-            -(long)BORING_SYSCALL_ENOENT) &&
+           /* Probe invalid inputs, never names in a user's actual root.
+            * Read-only filesystems may reject mutation before lookup. */
+           (boring_fs_rmdir(NULL, 1U) == -(long)BORING_SYSCALL_EFAULT) &&
+           (boring_fs_chdir(NULL, 1U) == -(long)BORING_SYSCALL_EFAULT) &&
            (boring_fs_readdir(dot, sizeof(dot) - 1U, 0ULL, NULL) ==
             -(long)BORING_SYSCALL_EFAULT) &&
            (boring_fs_touch(NULL, 1U) ==
@@ -286,8 +286,7 @@ static bool shell_syscall_safety(void) {
             -(long)BORING_SYSCALL_EFAULT) &&
            (boring_fs_write(missing, sizeof(missing) - 1U, NULL, 1U) ==
             -(long)BORING_SYSCALL_EFAULT) &&
-           (boring_fs_unlink(missing, sizeof(missing) - 1U) ==
-            -(long)BORING_SYSCALL_ENOENT);
+           (boring_fs_unlink(NULL, 1U) == -(long)BORING_SYSCALL_EFAULT);
 }
 
 static size_t shell_history_slot(size_t logical_index) {
@@ -345,7 +344,10 @@ static bool shell_input_read(char *character_out) {
     if (character_out == NULL) {
         return false;
     }
-    result = boring_console_read(character_out, 1U);
+    result = boring_fd_read(BORING_FD_STDIN, character_out, 1U);
+    if (result == 0L) {
+        shell_input_eof = true;
+    }
     return result == 1L;
 }
 
@@ -1479,6 +1481,9 @@ static bool shell_command_external(char *command, char *argument) {
     const char *argv[BORING_SYSCALL_ARG_MAX];
     size_t argc = 0U;
     char *cursor;
+    const struct boring_spawn_stdio stdio_config = {
+        BORING_FD_STDIN, BORING_FD_STDOUT, BORING_FD_STDERR, 0U
+    };
     long launch_result;
     long wait_result;
     int status = 0;
@@ -1511,8 +1516,13 @@ static bool shell_command_external(char *command, char *argument) {
         }
     }
 
-    launch_result = boring_launch_argv(
-        shell_exec_path, boring_strlen(shell_exec_path), argv, argc);
+    launch_result = boring_spawn(
+        shell_exec_path, boring_strlen(shell_exec_path), argv, argc,
+        &stdio_config);
+    if (launch_result == -(long)BORING_SYSCALL_ENOTSUP) {
+        launch_result = boring_launch_argv(
+            shell_exec_path, boring_strlen(shell_exec_path), argv, argc);
+    }
     if (launch_result < 0L) {
         if (launch_result == -(long)BORING_SYSCALL_ENOENT) {
             return shell_write_text("command not found: ") &&
@@ -1636,23 +1646,32 @@ int boring_main(void) {
         !shell_write_u64(pid) || !shell_write("\r\n", 2U) ||
         !shell_syscall_safety()) {
         (void)shell_write(failed, sizeof(failed) - 1U);
-        shell_idle_forever();
+        shell_exit_failure();
     }
 
     shell_state = 1ULL;
     if ((shell_state != 1ULL) ||
         !shell_write(ready, sizeof(ready) - 1U)) {
         (void)shell_write(failed, sizeof(failed) - 1U);
-        shell_idle_forever();
+        shell_exit_failure();
     }
 
     for (;;) {
-        if (!shell_build_prompt() || !shell_write_text(shell_prompt) ||
-            !shell_read_line(shell_prompt, line, sizeof(line)) ||
-            !shell_history_add(line) ||
-            !shell_execute_line(line)) {
+        if (!shell_build_prompt() || !shell_write_text(shell_prompt)) {
             (void)shell_write(failed, sizeof(failed) - 1U);
-            shell_idle_forever();
+            shell_exit_failure();
+        }
+        shell_input_eof = false;
+        if (!shell_read_line(shell_prompt, line, sizeof(line))) {
+            if (shell_input_eof) {
+                boring_exit(0);
+            }
+            (void)shell_write(failed, sizeof(failed) - 1U);
+            shell_exit_failure();
+        }
+        if (!shell_history_add(line) || !shell_execute_line(line)) {
+            (void)shell_write(failed, sizeof(failed) - 1U);
+            shell_exit_failure();
         }
     }
 }

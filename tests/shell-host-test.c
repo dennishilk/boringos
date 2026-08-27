@@ -36,6 +36,10 @@ static char mock_launch_path[BORING_SYSCALL_EXEC_PATH_MAX + 1U];
 static char mock_launch_argv[BORING_SYSCALL_ARG_MAX][BORING_SHELL_LINE_MAX + 1U];
 static size_t mock_launch_argc;
 static uint64_t mock_wait_pid;
+static struct boring_spawn_stdio mock_spawn_stdio;
+static long mock_spawn_error;
+static size_t mock_legacy_launches;
+static size_t mock_named_deletions;
 
 static void test_fail(const char *message) {
     (void)fprintf(stderr, "shell host test failed: %s\n", message);
@@ -100,6 +104,21 @@ long boring_console_read(void *buffer, size_t length) {
     return 1L;
 }
 
+
+long boring_fd_write(uint32_t fd, const void *buffer, size_t length) {
+    if ((fd != BORING_FD_STDOUT) && (fd != BORING_FD_STDERR)) {
+        return -(long)BORING_SYSCALL_EACCES;
+    }
+    return boring_console_write(buffer, length);
+}
+
+long boring_fd_read(uint32_t fd, void *buffer, size_t length) {
+    if (fd != BORING_FD_STDIN) {
+        return -(long)BORING_SYSCALL_EACCES;
+    }
+    return boring_console_read(buffer, length);
+}
+
 long boring_fs_readdir(const char *path,
                        size_t path_length,
                        uint64_t index,
@@ -107,7 +126,8 @@ long boring_fs_readdir(const char *path,
     uint64_t logical = 0ULL;
     size_t candidate;
 
-    if ((path == NULL) || (entry == NULL) ||
+    if (entry == NULL) { return -(long)BORING_SYSCALL_EFAULT; }
+    if ((path == NULL) ||
         (strlen(path) != path_length)) {
         return -(long)BORING_SYSCALL_EINVAL;
     }
@@ -134,20 +154,29 @@ long boring_fs_readdir(const char *path,
 }
 
 long boring_fs_mkdir(const char *name, size_t length) {
-    (void)name;
-    (void)length;
+    if (length == 0U) { return -(long)BORING_SYSCALL_EINVAL; }
+    if (length > 255U) { return -(long)BORING_SYSCALL_ENAMETOOLONG; }
+    if ((name == NULL) || ((uintptr_t)name >= 0xffff800000000000ULL)) {
+        return -(long)BORING_SYSCALL_EFAULT;
+    }
+    if ((memchr(name, '\0', length) != NULL) || (memchr(name, '/', length) != NULL) ||
+        ((length == 1U) && name[0] == '.') ||
+        ((length == 2U) && name[0] == '.' && name[1] == '.')) {
+        return -(long)BORING_SYSCALL_EINVAL;
+    }
     return 0L;
 }
 
 long boring_fs_rmdir(const char *name, size_t length) {
-    (void)name;
     (void)length;
-    return 0L;
+    if (name == NULL) { return -(long)BORING_SYSCALL_EFAULT; }
+    ++mock_named_deletions;
+    return -(long)BORING_SYSCALL_EACCES;
 }
 
 long boring_fs_chdir(const char *path, size_t length) {
-    (void)path;
     (void)length;
+    if (path == NULL) { return -(long)BORING_SYSCALL_EFAULT; }
     return 0L;
 }
 
@@ -159,14 +188,14 @@ long boring_fs_read(const char *path,
     (void)path;
     (void)path_length;
     (void)offset;
-    (void)buffer;
+    if (buffer == NULL) { return -(long)BORING_SYSCALL_EFAULT; }
     (void)capacity;
     return 0L;
 }
 
 long boring_fs_touch(const char *path, size_t length) {
-    (void)path;
-    (void)length;
+    if (path == NULL) { return -(long)BORING_SYSCALL_EFAULT; }
+    if (length == 1U && path[0] == '.') { return -(long)BORING_SYSCALL_EINVAL; }
     return 0L;
 }
 
@@ -174,7 +203,8 @@ long boring_fs_write(const char *path,
                      size_t path_length,
                      const void *buffer,
                      size_t length) {
-    if ((path == NULL) || (buffer == NULL) ||
+    if (buffer == NULL) { return -(long)BORING_SYSCALL_EFAULT; }
+    if ((path == NULL) ||
         (strlen(path) != path_length) ||
         (path_length >= sizeof(mock_written_path)) ||
         (length > sizeof(mock_written_bytes))) {
@@ -187,15 +217,14 @@ long boring_fs_write(const char *path,
 }
 
 long boring_fs_unlink(const char *path, size_t length) {
-    (void)path;
     (void)length;
-    return 0L;
+    if (path == NULL) { return -(long)BORING_SYSCALL_EFAULT; }
+    ++mock_named_deletions;
+    return -(long)BORING_SYSCALL_EACCES;
 }
 
-long boring_launch_argv(const char *path,
-                        size_t path_length,
-                        const char *const argv[],
-                        size_t argc) {
+static long mock_record_command(const char *path, size_t path_length,
+                                const char *const argv[], size_t argc) {
     size_t index;
 
     if ((path == NULL) || (argv == NULL) ||
@@ -219,6 +248,27 @@ long boring_launch_argv(const char *path,
     return 3L;
 }
 
+long boring_launch_argv(const char *path, size_t path_length,
+                        const char *const argv[], size_t argc) {
+    ++mock_legacy_launches;
+    return mock_record_command(path, path_length, argv, argc);
+}
+
+long boring_spawn(const char *path, size_t path_length,
+                  const char *const argv[], size_t argc,
+                  const struct boring_spawn_stdio *stdio_config) {
+    long result;
+
+    if (mock_spawn_error != 0L) { return mock_spawn_error; }
+    result = mock_record_command(path, path_length, argv, argc);
+
+    if ((result < 0L) || (stdio_config == NULL)) {
+        return (result < 0L) ? result : -(long)BORING_SYSCALL_EINVAL;
+    }
+    mock_spawn_stdio = *stdio_config;
+    return result;
+}
+
 long boring_waitpid(uint64_t pid, int *status) {
     if ((pid != 3ULL) || (status == NULL)) {
         return -(long)BORING_SYSCALL_EINVAL;
@@ -238,7 +288,7 @@ long boring_system_info(struct boring_system_info *info) {
     (void)strcpy(info->username, "boring");
     (void)strcpy(info->os_name, "BoringOS");
     (void)strcpy(info->kernel_name, "BoringKernel");
-    (void)strcpy(info->kernel_version, "0.0.36-dev");
+    (void)strcpy(info->kernel_version, "0.0.37-dev");
     (void)strcpy(info->arch, "x86_64");
     (void)strcpy(info->root_fs, "RAMFS");
     (void)strcpy(info->root_device, "memory");
@@ -280,6 +330,10 @@ int main(void) {
     char external_fetch[] = "boringfetch";
     char external_fetch_arg[] = "boringfetch extra";
     char external_cat[] = "cat README.txt";
+
+    test_require(shell_syscall_safety(), "startup safety works on a read-only root");
+    test_require(mock_named_deletions == 0U,
+                 "startup safety must never delete a real filesystem name");
 
     shell_history_reset();
     expect_line("plain text\n", sizeof(shell_history_draft), "plain text",
@@ -382,6 +436,11 @@ int main(void) {
                  "external command argv0");
     test_require(mock_wait_pid == 3ULL,
                  "external command waitpid");
+    test_require(mock_spawn_stdio.stdin_fd == BORING_FD_STDIN &&
+                 mock_spawn_stdio.stdout_fd == BORING_FD_STDOUT &&
+                 mock_spawn_stdio.stderr_fd == BORING_FD_STDERR &&
+                 mock_spawn_stdio.flags == 0U,
+                 "external command exact stdio binding");
 
     mock_launch_path[0] = '\0';
     mock_launch_argc = 0U;
@@ -411,6 +470,24 @@ int main(void) {
                  "cat argv is forwarded to the standalone program");
     test_require(mock_wait_pid == 3ULL,
                  "external cat waitpid");
+
+    test_require(mock_legacy_launches == 0U,
+                 "scheduler commands never use legacy LAUNCH");
+    {
+        char legacy_command[] = "boringfetch";
+        char denied_command[] = "boringfetch";
+        mock_spawn_error = -(long)BORING_SYSCALL_ENOTSUP;
+        mock_wait_pid = 0ULL;
+        test_require(shell_execute_line(legacy_command) &&
+                     mock_legacy_launches == 1U && mock_wait_pid == 3ULL,
+                     "unsupported scheduler falls back to historical ABI");
+        mock_spawn_error = -(long)BORING_SYSCALL_EACCES;
+        mock_wait_pid = 0ULL;
+        test_require(shell_execute_line(denied_command) &&
+                     mock_legacy_launches == 1U && mock_wait_pid == 0ULL,
+                     "SPAWN denial is never retried through legacy LAUNCH");
+        mock_spawn_error = 0L;
+    }
 
     (void)puts("BoringOS shell host editor/completion tests passed.");
     return 0;

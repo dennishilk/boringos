@@ -164,12 +164,13 @@ if ! {
     fail 'M34 display build/audit failed'
 fi
 cat "${BUILD_LOG}"
+QMP_BACKEND=$(sh "${ROOT}/tests/qmp-backend.sh" "${QMP}")
 
 "${QEMU}" -M q35 -cpu "${QEMU_CPU}" -m 128M \
     -cdrom "${ROOT}/build/boringos.iso" -boot d \
     -vga std -display none \
     -serial "file:${LOG}" -monitor none \
-    -qmp "unix:${QMP},server=on,wait=off" \
+    -qmp "${QMP_BACKEND}" \
     -no-reboot -no-shutdown >/dev/null 2> "${QEMU_LOG}" &
 PID=$!
 

@@ -12,6 +12,7 @@ struct process;
 #define BORING_ELF_MAX_LOAD_SEGMENTS 4U
 #define BORING_ELF_MAX_IMAGE_PAGES 16U
 #define BORING_ELF_STACK_PAGES 1U
+#define BORING_ELF_MAX_STACK_PAGES 2U
 #define BORING_ELF_PAGE_SIZE 4096ULL
 
 #define BORING_ELF_PF_X 0x1U
@@ -70,7 +71,7 @@ struct boring_elf_image {
     uint16_t owned_page_count;
     struct boring_elf_segment segments[BORING_ELF_MAX_LOAD_SEGMENTS];
     struct boring_elf_owned_page pages[BORING_ELF_MAX_IMAGE_PAGES +
-                                       BORING_ELF_STACK_PAGES];
+                                       BORING_ELF_MAX_STACK_PAGES];
 };
 
 bool boring_elf_memory_source_init(struct boring_elf_memory_source *memory,

@@ -151,11 +151,29 @@ static void handle_input(const struct display_event *message) {
         desktop_say("wm: graceful close requested\n");
         if (!app_send(client->endpoint, &close)) { sync_layout(); }
     } else if (action == WM_NO_LAUNCHER) {
-        desktop_say("wm: terminal unavailable; no configured launcher\n");
 #ifdef BORING_WM_DEATH_ACCEPTANCE
+        desktop_say("wm: terminal unavailable; no configured launcher\n");
         desktop_say("wm: dedicated negative acceptance exits WM\n"); boring_exit(0);
+#else
+        static const char terminal_path[] = "/bin/boring-terminal";
+        const char *terminal_argv[1] = { terminal_path };
+        const struct boring_spawn_stdio stdio_config = {
+            BORING_FD_STDIN, BORING_FD_STDOUT, BORING_FD_STDERR,
+            BORING_SPAWN_FLAG_DETACHED
+        };
+        const long terminal_pid = boring_spawn(terminal_path,
+            sizeof(terminal_path) - 1U, terminal_argv, 1U, &stdio_config);
+        if (terminal_pid <= 0L) {
+            /* Preserves the historical M35 no-launcher acceptance root. */
+            desktop_say("wm: terminal unavailable; no configured launcher\n");
+        } else {
+            desktop_say("wm: Super+Return spawned /bin/boring-terminal\n");
+        }
 #endif
-    } else if (message->input.type == BORING_INPUT_EVENT_KEY) {
+    } else if ((message->input.type == BORING_INPUT_EVENT_KEY) &&
+               ((message->input.modifiers & BORING_MOD_SUPER) == 0U) &&
+               (message->input.code != BORING_KEY_LEFT_SUPER) &&
+               (message->input.code != BORING_KEY_RIGHT_SUPER)) {
         const struct wm_client *client = wm_lookup(&wm, wm.focus);
         if (client != NULL) {
             struct boring_wm_message key = {0};

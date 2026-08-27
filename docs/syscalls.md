@@ -2,11 +2,11 @@
 
 This remains a deliberately narrow, QEMU-verified bootstrap interface, **not
 a stable public ABI and not a general userspace runtime**. The original
-0.0.11-dev boundary is retained below; this section records the current M32
-extensions that supersede its two-call inventory and process-lifecycle
+0.0.11-dev boundary is retained below; this section records the current M36
+surface that supersedes its two-call inventory and process-lifecycle
 non-goals.
 
-## Current M32 syscall surface
+## Current M36 syscall surface
 
 ```text
  0 GETPID
@@ -40,6 +40,19 @@ non-goals.
 28 BUFFER_MAP
 29 BUFFER_UNMAP
 30 BUFFER_CLOSE
+31 SERVICE_REGISTER
+32 SERVICE_CONNECT
+33 SERVICE_ACCEPT
+34 IPC_SEND
+35 IPC_RECEIVE
+36 IPC_CLOSE
+37 BUFFER_INFO
+38 FRAMEBUFFER_CLAIM
+39 FRAMEBUFFER_PRESENT
+40 FRAMEBUFFER_RELEASE
+41 EVENT_WAIT
+42 PTY_CREATE
+43 SPAWN
 ```
 
 All pointer-bearing calls retain the established complete-range validation
@@ -531,3 +544,30 @@ immediately, including zero. With zero flags a nonempty valid set blocks until
 ready; the existing scheduler and input IRQ wakeup provide progress. No window,
 focus, tiling or Super-key policy exists in this syscall. See
 [native-boringwm.md](native-boringwm.md) for the userspace consumer and bounds.
+
+
+## Milestone 36 PTY and scheduled spawn
+
+M36 adds syscall **42 PTY_CREATE(result)** and syscall
+**43 SPAWN(path, path_length, argv, argc, stdio)**; slots 0–41 are unchanged.
+`PTY_CREATE` validates the writable eight-byte result first, then transactionally
+installs a read/write master and slave in the caller's existing 16-slot FD table.
+The kernel owns at most eight generation-checked PTY pairs. Each direction has a
+4096-byte ring; reads block through the scheduler, peer close wakes waiters with
+HUP, queued bytes remain readable before EOF, and writes to a closed peer fail
+with EPIPE. Process teardown closes remaining endpoint references.
+
+`SPAWN` accepts 1–16 arguments with at most 1024 aggregate bytes including NULs,
+loads a VFS-backed static ELF in a distinct process address space and explicitly
+clones caller-selected stdin/stdout/stderr descriptors into child slots 0/1/2.
+Unknown flags and inaccessible descriptor modes fail before publication. The
+optional `DETACHED` flag selects scheduler-owned reaping; foreground children use
+the existing WAITPID result path. Every scheduled child receives the same two-page
+RW/NX stack with one unmapped lower guard and a 16-byte-aligned argc/argv block;
+see [process-startup-stack.md](process-startup-stack.md). Any partial FD, ELF,
+mapping, task or argument failure rolls back without publishing a runnable child.
+
+These calls provide the bounded process/stdio transport needed by the native
+terminal. They do not add a TTY line discipline, POSIX sessions/process groups,
+signals, `fork`, dynamic linking, job control, unbounded pipes or M37 desktop
+supervision.

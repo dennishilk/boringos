@@ -249,7 +249,7 @@ static void image_clear(struct boring_elf_image *image) {
     }
 
     for (index = 0U;
-         index < (size_t)(BORING_ELF_MAX_IMAGE_PAGES + BORING_ELF_STACK_PAGES);
+         index < (size_t)(BORING_ELF_MAX_IMAGE_PAGES + BORING_ELF_MAX_STACK_PAGES);
          ++index) {
         image->pages[index].virtual_address = 0U;
         image->pages[index].physical_address = 0ULL;
@@ -276,7 +276,9 @@ bool boring_elf_validate_source(const struct boring_elf_source *source,
         (source->size < (uint64_t)ELF64_EHDR_SIZE) ||
         (source->size > (uint64_t)BORING_ELF_MODULE_MAX_SIZE) ||
         ((stack_base & (uintptr_t)(BORING_ELF_PAGE_SIZE - 1ULL)) != 0U) ||
+        (stack_base < (uintptr_t)BORING_ELF_PAGE_SIZE) ||
         (stack_size == 0U) ||
+        (stack_size > (size_t)(BORING_ELF_MAX_STACK_PAGES * BORING_ELF_PAGE_SIZE)) ||
         (((uint64_t)stack_size & (BORING_ELF_PAGE_SIZE - 1ULL)) != 0ULL) ||
         !ring3_user_range_valid(stack_base, stack_size) ||
         !read_object(source, 0ULL, &header, sizeof(header))) {
@@ -363,7 +365,8 @@ bool boring_elf_validate_source(const struct boring_elf_source *source,
         if (!mul_u64(page_count, BORING_ELF_PAGE_SIZE, &page_end) ||
             !add_u64(program_header.vaddr, page_end, &page_end) ||
             ranges_overlap(program_header.vaddr, page_end,
-                           (uint64_t)stack_base, stack_end)) {
+                           (uint64_t)stack_base - BORING_ELF_PAGE_SIZE,
+                           stack_end)) {
             return false;
         }
 
@@ -428,7 +431,7 @@ static bool add_owned_page(struct boring_elf_image *image,
 
     if ((image == NULL) ||
         (image->owned_page_count >=
-         (uint16_t)(BORING_ELF_MAX_IMAGE_PAGES + BORING_ELF_STACK_PAGES))) {
+         (uint16_t)(BORING_ELF_MAX_IMAGE_PAGES + BORING_ELF_MAX_STACK_PAGES))) {
         return false;
     }
 
@@ -521,8 +524,10 @@ bool boring_elf_load_source(struct process *process,
     if ((image == NULL) || (process == NULL) ||
         !process_is_alive(process) || process->address_space.bootstrap ||
         (process_current() == process) ||
-        (stack_size != (size_t)(BORING_ELF_STACK_PAGES *
-                                BORING_ELF_PAGE_SIZE)) ||
+        (stack_size < (size_t)BORING_ELF_PAGE_SIZE) ||
+        (stack_size > (size_t)(BORING_ELF_MAX_STACK_PAGES *
+                               BORING_ELF_PAGE_SIZE)) ||
+        ((stack_size & ((size_t)BORING_ELF_PAGE_SIZE - 1U)) != 0U) ||
         !boring_elf_validate_source(source, stack_base, stack_size,
                                     &validation)) {
         return false;
@@ -586,12 +591,23 @@ bool boring_elf_load_source(struct process *process,
     }
 
     {
-        uint8_t *stack_page = NULL;
-        if (!map_owned_page(image, stack_base, true, false, &stack_page)) {
-            (void)boring_elf_unload(image);
-            return false;
+        size_t stack_page_index;
+
+        for (stack_page_index = 0U;
+             stack_page_index < stack_size / (size_t)BORING_ELF_PAGE_SIZE;
+             ++stack_page_index) {
+            uint8_t *stack_page = NULL;
+            const uintptr_t stack_virtual =
+                stack_base +
+                (uintptr_t)(stack_page_index * (size_t)BORING_ELF_PAGE_SIZE);
+
+            if (!map_owned_page(image, stack_virtual, true, false,
+                                &stack_page)) {
+                (void)boring_elf_unload(image);
+                return false;
+            }
+            (void)stack_page;
         }
-        (void)stack_page;
     }
 
     if (!ring3_user_query_mapping(&process->address_space, image->entry,

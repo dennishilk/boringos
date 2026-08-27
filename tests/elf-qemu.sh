@@ -46,7 +46,7 @@ done
 
 status=0
 for line in \
-    'BoringKernel 0.0.36-dev' \
+    'BoringKernel 0.0.37-dev' \
     'BoringKernel physical memory test passed.' \
     'BoringKernel virtual memory test passed.' \
     'BoringKernel heap test passed.' \
@@ -73,6 +73,7 @@ for line in \
     '  malformed-no-allocation: PASS' \
     '  nx-enabled: PASS' \
     '  process-created: PASS' \
+    '  bounded-stack-mapping: PASS' \
     '  load-segments: PASS' \
     '  segment-permissions: PASS' \
     '  entry-executable: PASS' \

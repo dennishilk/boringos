@@ -1,32 +1,14 @@
 #!/usr/bin/env python3
 import json
-import socket
+import runpy
+from pathlib import Path
 import sys
 
 
-def receive_message(stream):
-    while True:
-        line = stream.readline()
-        if not line:
-            raise RuntimeError("QMP connection closed")
-        message = json.loads(line.decode("utf-8"))
-        if "return" in message or "error" in message or "QMP" in message:
-            return message
-
-
-def execute(stream, command, arguments=None):
-    payload = {"execute": command}
-    if arguments is not None:
-        payload["arguments"] = arguments
-    stream.write((json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8"))
-    stream.flush()
-    while True:
-        message = receive_message(stream)
-        if "event" in message or "QMP" in message:
-            continue
-        if "error" in message:
-            raise RuntimeError(f"QMP {command} failed: {message['error']}")
-        return message.get("return")
+QMP_CONNECTION = runpy.run_path(str(Path(__file__).with_name("qmp-connection.py")))
+receive_message = QMP_CONNECTION["receive_message"]
+execute = QMP_CONNECTION["execute"]
+connect = QMP_CONNECTION["connect"]
 
 
 def key_event(code, down):
@@ -48,52 +30,46 @@ def main():
     socket_path = sys.argv[1]
     operation = sys.argv[2]
 
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.connect(socket_path)
-        with client.makefile("rwb", buffering=0) as stream:
-            greeting = receive_message(stream)
-            if "QMP" not in greeting:
-                raise RuntimeError("missing QMP greeting")
-            execute(stream, "qmp_capabilities")
-            commands = execute(stream, "query-commands")
-            if not any(item.get("name") == "input-send-event" for item in commands):
-                raise RuntimeError("QMP input-send-event unavailable")
+    with connect(socket_path) as stream:
+        commands = execute(stream, "query-commands")
+        if not any(item.get("name") == "input-send-event" for item in commands):
+            raise RuntimeError("QMP input-send-event unavailable")
 
-            if operation == "key":
-                if len(sys.argv) != 4:
-                    raise RuntimeError("key requires qcode")
-                code = sys.argv[3]
-                events = [key_event(code, True), key_event(code, False)]
-            elif operation == "super-q":
-                events = [key_event("meta_l", True), key_event("q", True),
-                          key_event("q", False), key_event("meta_l", False)]
-            elif operation in ("super", "super-shift"):
-                if len(sys.argv) != 4:
-                    raise RuntimeError("super chord requires qcode")
-                code = sys.argv[3]
-                events = [key_event("meta_l", True)]
-                if operation == "super-shift":
-                    events.append(key_event("shift", True))
-                events += [key_event(code, True), key_event(code, False)]
-                if operation == "super-shift":
-                    events.append(key_event("shift", False))
-                events.append(key_event("meta_l", False))
-            elif operation == "super-enter":
-                events = [key_event("meta_l", True), key_event("ret", True),
-                          key_event("ret", False), key_event("meta_l", False)]
-            elif operation == "move":
-                if len(sys.argv) != 5:
-                    raise RuntimeError("move requires dx dy")
-                dx = int(sys.argv[3], 10)
-                dy = int(sys.argv[4], 10)
-                events = [rel_event("x", dx), rel_event("y", dy)]
-            elif operation == "button":
-                if len(sys.argv) != 5 or sys.argv[4] not in ("down", "up"):
-                    raise RuntimeError("button requires name down|up")
-                events = [button_event(sys.argv[3], sys.argv[4] == "down")]
-            else:
-                raise RuntimeError(f"unknown operation: {operation}")
-            execute(stream, "input-send-event", {"events": events})
+        if operation == "key":
+            if len(sys.argv) != 4:
+                raise RuntimeError("key requires qcode")
+            code = sys.argv[3]
+            events = [key_event(code, True), key_event(code, False)]
+        elif operation == "super-q":
+            events = [key_event("meta_l", True), key_event("q", True),
+                      key_event("q", False), key_event("meta_l", False)]
+        elif operation in ("super", "super-shift"):
+            if len(sys.argv) != 4:
+                raise RuntimeError("super chord requires qcode")
+            code = sys.argv[3]
+            events = [key_event("meta_l", True)]
+            if operation == "super-shift":
+                events.append(key_event("shift", True))
+            events += [key_event(code, True), key_event(code, False)]
+            if operation == "super-shift":
+                events.append(key_event("shift", False))
+            events.append(key_event("meta_l", False))
+        elif operation == "super-enter":
+            events = [key_event("meta_l", True), key_event("ret", True),
+                      key_event("ret", False), key_event("meta_l", False)]
+        elif operation == "move":
+            if len(sys.argv) != 5:
+                raise RuntimeError("move requires dx dy")
+            dx = int(sys.argv[3], 10)
+            dy = int(sys.argv[4], 10)
+            events = [rel_event("x", dx), rel_event("y", dy)]
+        elif operation == "button":
+            if len(sys.argv) != 5 or sys.argv[4] not in ("down", "up"):
+                raise RuntimeError("button requires name down|up")
+            events = [button_event(sys.argv[3], sys.argv[4] == "down")]
+        else:
+            raise RuntimeError(f"unknown operation: {operation}")
+        execute(stream, "input-send-event", {"events": events})
 
 
 if __name__ == "__main__":

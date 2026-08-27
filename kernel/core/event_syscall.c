@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <boring/cpu.h>
 #include <boring/display_syscall.h>
+#include <boring/fd.h>
 #include <boring/event_abi.h>
 #include <boring/event_syscall.h>
 #include <boring/input.h>
@@ -92,6 +93,17 @@ static long poll_watches(struct process *process,
                 return -(long)BORING_SYSCALL_EACCES;
             }
             watch->events = (input.queued_events != 0U) ? BORING_EVENT_READ : 0U;
+        } else if (watch->kind == BORING_EVENT_FD) {
+            enum kernel_fd_kind kind;
+            uint32_t access;
+            struct pty_poll_state pty_state;
+            if (!kernel_fd_describe(&process->fd_table, watch->handle, &kind, &access) ||
+                (kind != KERNEL_FD_PTY) || ((access & VFS_ACCESS_READ) == 0U) ||
+                (kernel_fd_poll_pty(&process->fd_table, watch->handle, &pty_state) != PTY_RESULT_OK)) {
+                return -(long)BORING_SYSCALL_EINVAL;
+            }
+            if (pty_state.readable) { watch->events |= BORING_EVENT_READ; }
+            if (pty_state.hup) { watch->events |= BORING_EVENT_HUP; }
         } else {
             return -(long)BORING_SYSCALL_EINVAL;
         }
@@ -100,6 +112,36 @@ static long poll_watches(struct process *process,
         }
     }
     return ready;
+}
+
+static bool arm_fd_watches(struct process *process,
+                           const struct boring_event_watch *watches,
+                           size_t count) {
+    size_t index;
+    if ((process == NULL) || !process_is_alive(process)) {
+        return false;
+    }
+    for (index = 0U; index < count; ++index) {
+        if ((watches[index].kind == BORING_EVENT_FD) &&
+            (kernel_fd_arm_pty_waiter(&process->fd_table, watches[index].handle,
+                                      process->pid) != PTY_RESULT_OK)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void cancel_fd_watches(struct process *process,
+                              const struct boring_event_watch *watches,
+                              size_t count) {
+    size_t index;
+    if (process == NULL) { return; }
+    for (index = 0U; index < count; ++index) {
+        if (watches[index].kind == BORING_EVENT_FD) {
+            kernel_fd_cancel_pty_waiter(&process->fd_table, watches[index].handle,
+                                        process->pid);
+        }
+    }
 }
 
 void boring_event_input_irq(void) {
@@ -138,13 +180,19 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
         if ((result != 0L) || (frame->rdx == BORING_EVENT_QUERY)) {
             break;
         }
+        if (!arm_fd_watches(process, watches, count)) {
+            result = -(long)BORING_SYSCALL_EINVAL;
+            break;
+        }
         if (!task_block_current()) {
             /* Last runnable task: sleep until hardware wakes any waiter. */
             x86_64_enable_and_halt();
             x86_64_interrupts_disable();
             task_yield();
         }
+        cancel_fd_watches(process, watches, count);
     }
+    cancel_fd_watches(process, watches, count);
     if ((result >= 0L) &&
         !user_copy((uintptr_t)frame->rdi, watches, count * sizeof(watches[0]), true)) {
         result = -(long)BORING_SYSCALL_EFAULT;

@@ -40,6 +40,10 @@ long boring_fd_open(const char *path, size_t path_length, uint32_t flags);
 long boring_fd_read(uint32_t fd, void *buffer, size_t capacity);
 long boring_fd_write(uint32_t fd, const void *buffer, size_t length);
 long boring_fd_close(uint32_t fd);
+long boring_pty_create(struct boring_pty_create_result *result);
+long boring_spawn(const char *path, size_t path_length,
+                  const char *const argv[], size_t argc,
+                  const struct boring_spawn_stdio *stdio_config);
 long boring_input_claim(void);
 long boring_input_read(struct boring_input_event *events, size_t max_events);
 long boring_input_release(void);

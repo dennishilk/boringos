@@ -246,7 +246,7 @@ static uint64_t syscall_system_info(uint64_t user_info) {
         !syscall_copy_literal(info.kernel_name, sizeof(info.kernel_name),
                               "BoringKernel") ||
         !syscall_copy_literal(info.kernel_version, sizeof(info.kernel_version),
-                              "0.0.36-dev") ||
+                              "0.0.37-dev") ||
         !syscall_copy_literal(info.arch, sizeof(info.arch), "x86_64")) {
         return syscall_error(BORING_SYSCALL_EIO);
     }
@@ -256,7 +256,7 @@ static uint64_t syscall_system_info(uint64_t user_info) {
                               "memory")) {
         return syscall_error(BORING_SYSCALL_EIO);
     }
-#elif BORING_TEST_MODE == 15
+#elif (BORING_TEST_MODE == 15) || defined(BORING_M36_DESKTOP_ACCEPTANCE)
     if (!syscall_copy_literal(info.root_fs, sizeof(info.root_fs), "BoringFS") ||
         !syscall_copy_literal(info.root_device, sizeof(info.root_device),
                               "virtio-blk")) {
@@ -1668,12 +1668,58 @@ static uint64_t syscall_fd_read(uint64_t raw_fd,
         if (result != VFS_RESULT_OK) {
             return syscall_error(syscall_vfs_error(result));
         }
+    } else if (kind == KERNEL_FD_PTY) {
+        for (;;) {
+            enum pty_result pty_result;
+
+            pty_result = kernel_fd_read_pty(&process->fd_table, fd, buffer,
+                                            safe_capacity, &transferred);
+            if (pty_result == PTY_RESULT_OK) {
+                break;
+            }
+            if (pty_result == PTY_RESULT_HUP) {
+                transferred = 0U;
+                break;
+            }
+            if (pty_result != PTY_RESULT_WOULD_BLOCK) {
+                return syscall_error(BORING_SYSCALL_EINVAL);
+            }
+            if (kernel_fd_arm_pty_waiter(&process->fd_table, fd,
+                                         process->pid) != PTY_RESULT_OK) {
+                return syscall_error(BORING_SYSCALL_EINVAL);
+            }
+            pty_result = kernel_fd_read_pty(&process->fd_table, fd, buffer,
+                                            safe_capacity, &transferred);
+            if (pty_result != PTY_RESULT_WOULD_BLOCK) {
+                kernel_fd_cancel_pty_waiter(&process->fd_table, fd,
+                                            process->pid);
+                if (pty_result == PTY_RESULT_OK) {
+                    break;
+                }
+                if (pty_result == PTY_RESULT_HUP) {
+                    transferred = 0U;
+                    break;
+                }
+                return syscall_error(BORING_SYSCALL_EINVAL);
+            }
+            if (!task_block_current()) {
+                kernel_fd_cancel_pty_waiter(&process->fd_table, fd,
+                                            process->pid);
+                return syscall_error(BORING_SYSCALL_EBUSY);
+            }
+            kernel_fd_cancel_pty_waiter(&process->fd_table, fd, process->pid);
+        }
     } else {
         return syscall_error(BORING_SYSCALL_EACCES);
     }
     if ((transferred != 0U) &&
         !syscall_copy_to_user((uintptr_t)user_buffer, buffer, transferred)) {
         return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+    /* Input tracing must not insert diagnostic newlines into the same serial
+     * stream that carries the console editor's prompts and ANSI redraws. */
+    if (kind == KERNEL_FD_CONSOLE_INPUT) {
+        return (uint64_t)transferred;
     }
     serial_write_string("fd-read: pid ");
     serial_write_u64(process->pid);
@@ -1723,6 +1769,12 @@ static uint64_t syscall_fd_write(uint64_t raw_fd,
     }
     if (kind == KERNEL_FD_CONSOLE_OUTPUT) {
         transferred = safe_length;
+        /* Do not insert diagnostics inside fragmented user lines/prompts.
+         * Keep the existing FD witness after writes ending at a line boundary. */
+        serial_write_bytes((const char *)buffer, transferred);
+        if (buffer[transferred - 1U] != (uint8_t)'\n') {
+            return (uint64_t)transferred;
+        }
         serial_write_string("fd-write: pid ");
         serial_write_u64(process->pid);
         serial_write_string(" fd ");
@@ -1730,16 +1782,30 @@ static uint64_t syscall_fd_write(uint64_t raw_fd,
         serial_write_string(" bytes ");
         serial_write_u64((uint64_t)transferred);
         serial_write_string("\n");
-        serial_write_bytes((const char *)buffer, transferred);
         return (uint64_t)transferred;
     }
-    if (kind != KERNEL_FD_REGULAR) {
+    if (kind == KERNEL_FD_PTY) {
+        const enum pty_result pty_result =
+            kernel_fd_write_pty(&process->fd_table, fd, buffer, safe_length,
+                                &transferred);
+
+        if (pty_result == PTY_RESULT_HUP) {
+            return syscall_error(BORING_SYSCALL_EPIPE);
+        }
+        if (pty_result == PTY_RESULT_WOULD_BLOCK) {
+            return syscall_error(BORING_SYSCALL_EBUSY);
+        }
+        if (pty_result != PTY_RESULT_OK) {
+            return syscall_error(BORING_SYSCALL_EINVAL);
+        }
+    } else if (kind == KERNEL_FD_REGULAR) {
+        result = kernel_fd_write_regular(&process->fd_table, fd, buffer,
+                                         safe_length, &transferred);
+        if (result != VFS_RESULT_OK) {
+            return syscall_error(syscall_vfs_error(result));
+        }
+    } else {
         return syscall_error(BORING_SYSCALL_EACCES);
-    }
-    result = kernel_fd_write_regular(&process->fd_table, fd, buffer,
-                                     safe_length, &transferred);
-    if (result != VFS_RESULT_OK) {
-        return syscall_error(syscall_vfs_error(result));
     }
     serial_write_string("fd-write: pid ");
     serial_write_u64(process->pid);

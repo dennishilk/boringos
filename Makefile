@@ -51,6 +51,12 @@ MEMORY_TEST_ELF := $(USER_BUILD_DIR)/memory-test.elf
 IPC_TEST_MAIN_OBJECT := $(USER_BUILD_DIR)/ipc-test/main.o
 IPC_TEST_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(IPC_RUNTIME_OBJECT) $(IPC_TEST_MAIN_OBJECT)
 IPC_TEST_ELF := $(USER_BUILD_DIR)/ipc-test.elf
+M36_SPAWN_PARENT_MAIN_OBJECT := $(USER_BUILD_DIR)/m36-spawn-parent/main.o
+M36_SPAWN_PARENT_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(M36_SPAWN_PARENT_MAIN_OBJECT)
+M36_SPAWN_PARENT_ELF := $(USER_BUILD_DIR)/m36-spawn-parent.elf
+M36_SPAWN_CHILD_MAIN_OBJECT := $(USER_BUILD_DIR)/m36-spawn-child/main.o
+M36_SPAWN_CHILD_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(M36_SPAWN_CHILD_MAIN_OBJECT)
+M36_SPAWN_CHILD_ELF := $(USER_BUILD_DIR)/m36-spawn-child.elf
 BORING_DISPLAY_CORE_OBJECT := $(USER_BUILD_DIR)/boring-display/core.o
 BORING_DISPLAY_MAIN_OBJECT := $(USER_BUILD_DIR)/boring-display/main.o
 BORING_DISPLAY_OBJECTS := $(RUNTIME_COMMON_OBJECTS) $(IPC_RUNTIME_OBJECT) \
@@ -69,6 +75,7 @@ BORINGFS_FIXTURE := $(BUILD_DIR)/boringfs-fixture
 BORINGFS_VFS_HOST_TEST := $(BUILD_DIR)/boringfs-vfs-host-test
 SHELL_HOST_TEST := $(BUILD_DIR)/shell-host-test
 FD_HOST_TEST := $(BUILD_DIR)/fd-host-test
+PTY_HOST_TEST := $(BUILD_DIR)/pty-host-test
 FRAMEBUFFER_HOST_TEST := $(BUILD_DIR)/framebuffer-host-test
 INPUT_HOST_TEST := $(BUILD_DIR)/input-host-test
 MEMORY_HOST_TEST := $(BUILD_DIR)/memory-host-test
@@ -104,6 +111,7 @@ BOOT_EXTRA4_USER_ELF :=
 BOOT_LIMINE_CONF := limine.conf
 
 TEST_MODE ?= normal
+TEST_CPPFLAGS :=
 ifeq ($(TEST_MODE),normal)
 TEST_MODE_VALUE := 0
 TEST_HARNESS_C := kernel/core/syscall_test.c
@@ -192,6 +200,21 @@ TEST_HARNESS_C := kernel/core/syscall_test.c
 BOOT_USER_ELF := $(IPC_TEST_ELF)
 BOOT_USER_NAME := ipc-test.elf
 BOOT_LIMINE_CONF := limine-ipc.conf
+else ifeq ($(TEST_MODE),m36-spawn)
+TEST_MODE_VALUE := 5
+TEST_HARNESS_C := kernel/core/m36_spawn_test.c kernel/core/m36_spawn_test_adapter.c
+BOOT_USER_ELF := $(M36_SPAWN_PARENT_ELF)
+BOOT_USER_NAME := m36-spawn-parent.elf
+BOOT_LIMINE_CONF := limine-m36-spawn.conf
+else ifeq ($(TEST_MODE),m36-desktop)
+TEST_MODE_VALUE := 5
+TEST_CPPFLAGS := -DBORING_M36_DESKTOP_ACCEPTANCE=1
+TEST_HARNESS_C := kernel/core/m36_desktop_test.c kernel/core/m36_desktop_test_adapter.c
+BOOT_USER_ELF := $(DISPLAY_WM_ELF)
+BOOT_USER_NAME := boring-display.elf
+BOOT_EXTRA_USER_ELF := $(WM_ELF)
+BOOT_EXTRA_USER_NAME := boringwm.elf
+BOOT_LIMINE_CONF := limine-m36-desktop.conf
 else ifeq ($(TEST_MODE),m34-display)
 # Reuse the established special-test entry seam (value 5); the adapter below
 # routes it to the dedicated three-process display_test_run() harness.
@@ -220,7 +243,7 @@ BOOT_EXTRA3_USER_ELF := $(USER_BUILD_DIR)/wm-client-b.elf
 BOOT_EXTRA4_USER_ELF := $(USER_BUILD_DIR)/wm-client-c.elf
 BOOT_LIMINE_CONF := limine-wm.conf
 else
-$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, block, virtio-block, boringfs-ro, boringfs-rw, persistent-root, m33-ipc, or m34-display)
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, block, virtio-block, boringfs-ro, boringfs-rw, persistent-root, m33-ipc, or m34-display, m35-wm, m35-wm-death, m36-spawn, or m36-desktop)
 endif
 
 LIMINE_VERSION := 12.5.2
@@ -229,7 +252,7 @@ LIMINE_DIR := $(BUILD_DIR)/deps/limine-binary
 LIMINE_SHA256 := 4c760c09c53560d859b362319a3dc63b79cca3d47f35d69ab0106a13b8057055
 LIMINE_URL := https://github.com/Limine-Bootloader/Limine/releases/download/v$(LIMINE_VERSION)/limine-binary.tar.gz
 
-CPPFLAGS := -Ikernel/include -Ilibs/boringfs/include -DBORING_TEST_MODE=$(TEST_MODE_VALUE)
+CPPFLAGS := -Ikernel/include -Ilibs/boringfs/include -DBORING_TEST_MODE=$(TEST_MODE_VALUE) $(TEST_CPPFLAGS)
 CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
 	-m64 -mno-80387 -mno-mmx -mno-sse -mno-sse2 \
 	-mno-red-zone -mcmodel=kernel -O2 -g \
@@ -278,6 +301,7 @@ KERNEL_C_SOURCES := \
 	kernel/core/heap.c \
 	kernel/core/process.c \
 	kernel/core/fd.c \
+	kernel/core/pty.c \
 	kernel/core/input.c \
 	kernel/core/user_memory.c \
 	kernel/core/ipc.c \
@@ -298,6 +322,8 @@ KERNEL_C_SOURCES := \
 	kernel/core/process_test.c \
 	kernel/core/ring3_test.c \
 	kernel/core/syscall.c \
+	kernel/core/m36_syscall.c \
+	kernel/core/spawn_stack.c \
 	kernel/core/elf_boot.c \
 	kernel/core/elf_loader.c \
 	kernel/core/elf_vfs.c \
@@ -327,9 +353,9 @@ KERNEL_ASM_SOURCES := \
 KERNEL_C_OBJECTS := $(patsubst %.c,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_C_SOURCES))
 KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCES))
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
-MODE_STAMP := $(BUILD_DIR)/.test-mode-$(TEST_MODE)
+MODE_STAMP := $(BUILD_DIR)/.test-mode
 
-.PHONY: all kernel user-elf user-runtime user-console user-init user-shell user-boringfetch user-cat user-input-test user-memory-test user-ipc-test user-boring-display user-display-clients elf-audit runtime-audit console-audit init-audit shell-audit boringfetch-audit cat-audit input-test-audit memory-test-audit ipc-test-audit display-audit shell-host-test fd-host-test framebuffer-host-test input-host-test memory-host-test ipc-host-test display-host-test boringfs-host-test boringfs-vfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test boringfs-fixture qemu-bundle run run-headless test clean distclean
+.PHONY: all kernel user-elf user-runtime user-console user-init user-shell user-boringfetch user-cat user-input-test user-memory-test user-ipc-test user-m36-spawn user-boring-display user-display-clients elf-audit runtime-audit console-audit init-audit shell-audit boringfetch-audit cat-audit input-test-audit memory-test-audit ipc-test-audit display-audit shell-host-test fd-host-test pty-host-test framebuffer-host-test input-host-test memory-host-test ipc-host-test display-host-test boringfs-host-test boringfs-vfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test boringfs-fixture qemu-bundle run run-headless test clean distclean
 
 all: $(ISO)
 
@@ -354,6 +380,8 @@ user-input-test: $(INPUT_TEST_ELF)
 user-memory-test: $(MEMORY_TEST_ELF)
 
 user-ipc-test: $(IPC_TEST_ELF)
+
+user-m36-spawn: $(M36_SPAWN_PARENT_ELF) $(M36_SPAWN_CHILD_ELF)
 
 user-boring-display: $(BORING_DISPLAY_ELF)
 
@@ -397,6 +425,9 @@ shell-host-test: $(SHELL_HOST_TEST)
 
 fd-host-test: $(FD_HOST_TEST)
 	$(FD_HOST_TEST)
+
+pty-host-test: $(PTY_HOST_TEST)
+	$(PTY_HOST_TEST)
 
 framebuffer-host-test: $(FRAMEBUFFER_HOST_TEST)
 	$(FRAMEBUFFER_HOST_TEST)
@@ -482,11 +513,18 @@ $(SHELL_HOST_TEST): tests/shell-host-test.c user/boring-shell/main.c \
 	$(HOST_CC) -Iuser/runtime/include -Ikernel/include $(HOST_CFLAGS) \
 		tests/shell-host-test.c -o $@
 
-$(FD_HOST_TEST): tests/fd-host-test.c kernel/core/fd.c \
-		kernel/include/boring/fd.h kernel/include/boring/vfs.h
+$(FD_HOST_TEST): tests/fd-host-test.c kernel/core/fd.c kernel/core/pty.c \
+		kernel/include/boring/fd.h kernel/include/boring/vfs.h \
+		kernel/include/boring/pty.h
 	@mkdir -p $(dir $@)
 	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) \
-		tests/fd-host-test.c kernel/core/fd.c -o $@
+		tests/fd-host-test.c kernel/core/fd.c kernel/core/pty.c -o $@
+
+$(PTY_HOST_TEST): tests/pty-host-test.c kernel/core/pty.c \
+		kernel/include/boring/pty.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) \
+		tests/pty-host-test.c kernel/core/pty.c -o $@
 
 $(FRAMEBUFFER_HOST_TEST): tests/framebuffer-host-test.c \
 		kernel/core/framebuffer.c kernel/core/graphics.c kernel/core/pixel_font.c \
@@ -538,10 +576,13 @@ $(MKBORINGFS_VERIFY): tests/mkboringfs-verify.c $(BORINGFS_CODEC) $(BORINGFS_VAL
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) \
 		tests/mkboringfs-verify.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) -o $@
 
-$(MODE_STAMP):
+.PHONY: check-test-mode
+check-test-mode:
+
+$(MODE_STAMP): check-test-mode
 	@mkdir -p $(BUILD_DIR)
-	@rm -f $(BUILD_DIR)/.test-mode-*
-	@touch $@
+	@printf '%s\n' '$(TEST_MODE)' > $@.tmp
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv $@.tmp $@; fi
 
 $(KERNEL_BUILD_DIR)/%.o: %.c $(MODE_STAMP)
 	@mkdir -p $(dir $@)
@@ -688,6 +729,22 @@ $(IPC_TEST_ELF): $(IPC_TEST_OBJECTS) user/memory-test/linker.ld
 	@mkdir -p $(dir $@)
 	$(LD) $(IPC_TEST_LDFLAGS) $(IPC_TEST_OBJECTS) -o $@
 
+$(M36_SPAWN_PARENT_MAIN_OBJECT): user/m36-spawn-parent/main.c user/runtime/include/boring/syscall.h kernel/include/boring/syscall_abi.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(M36_SPAWN_PARENT_ELF): $(M36_SPAWN_PARENT_OBJECTS) user/m36-spawn-parent/linker.ld
+	@mkdir -p $(dir $@)
+	$(LD) -nostdlib -static --build-id=none -z max-page-size=0x1000 -T user/m36-spawn-parent/linker.ld $(M36_SPAWN_PARENT_OBJECTS) -o $@
+
+$(M36_SPAWN_CHILD_MAIN_OBJECT): user/m36-spawn-child/main.c user/runtime/include/boring/syscall.h user/runtime/include/boring/string.h kernel/include/boring/syscall_abi.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(M36_SPAWN_CHILD_ELF): $(M36_SPAWN_CHILD_OBJECTS) user/m36-spawn-child/linker.ld
+	@mkdir -p $(dir $@)
+	$(LD) -nostdlib -static --build-id=none -z max-page-size=0x1000 -T user/m36-spawn-child/linker.ld $(M36_SPAWN_CHILD_OBJECTS) -o $@
+
 $(BORING_DISPLAY_CORE_OBJECT): user/boring-display/core.c user/boring-display/core.h kernel/include/boring/display_abi.h
 	@mkdir -p $(dir $@)
 	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
@@ -792,6 +849,7 @@ test:
 	sh ./tests/display-build-audit.sh
 	$(MAKE) shell-host-test
 	$(MAKE) fd-host-test
+	$(MAKE) pty-host-test
 	$(MAKE) framebuffer-host-test
 	$(MAKE) input-host-test
 	$(MAKE) memory-host-test
@@ -870,3 +928,55 @@ wm-host-test: $(BUILD_DIR)/wm-host-test
 	$(BUILD_DIR)/wm-host-test
 wm-audit: user-boringwm
 	sh tests/wm-build-audit.sh
+
+# M36 native managed terminal client and deterministic parser/renderer.
+TERMINAL_MAIN_OBJECT := $(USER_BUILD_DIR)/boring-terminal/main.o
+TERMINAL_ENGINE_OBJECT := $(USER_BUILD_DIR)/boring-terminal/terminal.o
+TERMINAL_RENDER_OBJECT := $(USER_BUILD_DIR)/boring-terminal/render.o
+TERMINAL_INPUT_OBJECT := $(USER_BUILD_DIR)/boring-terminal/input.o
+TERMINAL_ELF := $(USER_BUILD_DIR)/boring-terminal.elf
+TERMINAL_DEATH_ELF := $(USER_BUILD_DIR)/boring-terminal-death.elf
+TERMINAL_HOST_TEST := $(BUILD_DIR)/terminal-host-test
+TERMINAL_RENDER_HOST_TEST := $(BUILD_DIR)/terminal-render-host-test
+
+.PHONY: user-boring-terminal user-boring-terminal-death terminal-host-test terminal-render-host-test terminal-audit
+user-boring-terminal: $(TERMINAL_ELF)
+user-boring-terminal-death: $(TERMINAL_DEATH_ELF)
+
+$(USER_BUILD_DIR)/boring-terminal/%.o: user/boring-terminal/%.c user/boring-terminal/terminal.h user/boring-terminal/render.h user/boring-terminal/input.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(TERMINAL_ELF): $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(TERMINAL_ENGINE_OBJECT) $(TERMINAL_RENDER_OBJECT) $(TERMINAL_INPUT_OBJECT) $(TERMINAL_MAIN_OBJECT)
+	$(LD) $(DISPLAY_LDFLAGS) $^ -o $@
+
+$(USER_BUILD_DIR)/boring-terminal-death/main.o: user/boring-terminal/main.c user/boring-terminal/input.h user/boring-terminal/terminal.h user/boring-terminal/render.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -DBORING_TERMINAL_DEATH_ACCEPTANCE -c $< -o $@
+
+$(TERMINAL_DEATH_ELF): $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(TERMINAL_ENGINE_OBJECT) $(TERMINAL_RENDER_OBJECT) $(TERMINAL_INPUT_OBJECT) $(USER_BUILD_DIR)/boring-terminal-death/main.o
+	$(LD) $(DISPLAY_LDFLAGS) $^ -o $@
+
+$(TERMINAL_HOST_TEST): tests/terminal-host-test.c user/boring-terminal/terminal.c user/boring-terminal/input.c user/boring-terminal/terminal.h user/boring-terminal/input.h kernel/include/boring/input_abi.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Iuser/boring-terminal -Ikernel/include $(HOST_CFLAGS) tests/terminal-host-test.c user/boring-terminal/terminal.c user/boring-terminal/input.c -o $@
+
+$(TERMINAL_RENDER_HOST_TEST): tests/terminal-render-host-test.c user/boring-terminal/terminal.c user/boring-terminal/render.c user/boring-terminal/terminal.h user/boring-terminal/render.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Iuser/boring-terminal $(HOST_CFLAGS) tests/terminal-render-host-test.c user/boring-terminal/terminal.c user/boring-terminal/render.c -o $@
+
+terminal-host-test: $(TERMINAL_HOST_TEST)
+	$(TERMINAL_HOST_TEST)
+
+terminal-render-host-test: $(TERMINAL_RENDER_HOST_TEST)
+	$(TERMINAL_RENDER_HOST_TEST)
+
+terminal-audit: $(TERMINAL_ELF)
+	sh ./tests/terminal-build-audit.sh
+
+.PHONY: spawn-stack-host-test
+spawn-stack-host-test: $(BUILD_DIR)/spawn-stack-host-test
+	$<
+$(BUILD_DIR)/spawn-stack-host-test: tests/spawn-stack-host-test.c kernel/core/spawn_stack.c kernel/include/boring/spawn_stack.h kernel/include/boring/elf_loader.h kernel/include/boring/syscall_abi.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) tests/spawn-stack-host-test.c kernel/core/spawn_stack.c -o $@

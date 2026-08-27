@@ -74,6 +74,12 @@ BLOCKED
 FINISHED
 ```
 
+M36 keeps the eight-task limit and uses the existing BLOCKED/wakeup machinery
+for PTY reads plus scheduler-owned `SPAWN` children. A dual-terminal session
+uses six ordinary tasks and a foreground command peaks at seven; no limit is
+expanded. HUP and child exit wake the exact blocked peer, while teardown removes
+the finished task before its process slot is reclaimed.
+
 Each task records, as applicable:
 
 ```text

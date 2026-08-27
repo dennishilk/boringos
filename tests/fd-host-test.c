@@ -15,6 +15,12 @@ static struct vfs_node directory_node;
 static struct vfs_path regular_path;
 static struct vfs_path directory_path;
 
+bool task_wake_pid(uint64_t pid);
+bool task_wake_pid(uint64_t pid) {
+    (void)pid;
+    return true;
+}
+
 static int fail(const char *message) {
     (void)fprintf(stderr, "fd-host-test: %s\n", message);
     return 1;

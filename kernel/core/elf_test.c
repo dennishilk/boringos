@@ -438,6 +438,53 @@ static bool permissions_valid(const struct boring_elf_image *image) {
            stack_info.writable && !stack_info.executable;
 }
 
+static void bounded_stack_mapping(struct process *process,
+                                   const uint8_t *module, size_t module_size) {
+    const uintptr_t base = (uintptr_t)BORING_ELF_SMOKE_STACK_BASE;
+    struct boring_elf_image image;
+    struct boring_elf_validation validation;
+    struct ring3_user_mapping_info mapping;
+    size_t page;
+    if (boring_elf_load(process, module, module_size, base,
+                         3U * (size_t)BORING_ELF_PAGE_SIZE, &image) ||
+        boring_elf_load(process, module, module_size, base,
+                         (size_t)BORING_ELF_PAGE_SIZE + 1U, &image) ||
+        !boring_elf_validate(module, module_size, base,
+                             2U * (size_t)BORING_ELF_PAGE_SIZE, &validation) ||
+        !boring_elf_load(process, module, module_size, base,
+                         2U * (size_t)BORING_ELF_PAGE_SIZE, &image) ||
+        (image.owned_page_count != validation.total_image_pages + 2U) ||
+        (image.stack_top != base + 2U * BORING_ELF_PAGE_SIZE) ||
+        ring3_user_query_mapping(&process->address_space,
+                                 base - BORING_ELF_PAGE_SIZE, &mapping)) {
+        elf_fail("bounded-stack-mapping");
+    }
+    for (page = 0U; page < 2U; ++page) {
+        const uintptr_t address = base + page * BORING_ELF_PAGE_SIZE;
+        uint8_t boundary[2] = {1U, 1U};
+        if (!ring3_user_query_mapping(&process->address_space, address, &mapping) ||
+            !mapping.writable || mapping.executable ||
+            !read_user_bytes(process, address, &boundary[0], 1U) ||
+            !read_user_bytes(process, address + BORING_ELF_PAGE_SIZE - 1U,
+                              &boundary[1], 1U) || boundary[0] || boundary[1]) {
+            elf_fail("stack-pages-zero-rw-nx");
+        }
+    }
+    if (!boring_elf_unload(&image) || image.owned_page_count != 0U ||
+        ring3_user_query_mapping(&process->address_space, base, &mapping) ||
+        ring3_user_query_mapping(&process->address_space,
+                                 base + BORING_ELF_PAGE_SIZE, &mapping)) {
+        elf_fail("stack-pages-unload");
+    }
+    /* A PT_LOAD ending at stack_base would occupy the lower guard page. */
+    if (boring_elf_validate(module, module_size,
+                            (uintptr_t)BORING_ELF_SMOKE_DATA_VA + BORING_ELF_PAGE_SIZE,
+                            (size_t)BORING_ELF_PAGE_SIZE, &validation)) {
+        elf_fail("stack-guard-overlap-rejected");
+    }
+    serial_write_string("  bounded-stack-mapping: PASS\n");
+}
+
 static void print_segment(uint16_t index,
                           const struct boring_elf_segment *segment) {
     uint64_t end = segment->virtual_address + segment->memory_size;
@@ -528,6 +575,8 @@ void elf_test_run(const struct boring_limine_module_response *modules) {
     }
     elf_state.process = process;
     serial_write_string("  process-created: PASS\n");
+
+    bounded_stack_mapping(process, module, module_size);
 
     if (!boring_elf_load(process, module, module_size,
                          (uintptr_t)BORING_ELF_SMOKE_STACK_BASE,

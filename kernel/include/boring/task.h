@@ -58,6 +58,7 @@ bool task_current_stack_contains(const void *address);
 bool task_get_stats(struct task_stats *stats);
 bool task_finished_stacks_valid(void);
 bool task_cleanup_finished(uint64_t *freed_stacks);
+bool task_reap_finished_process(struct process *process);
 bool task_preemption_start(void);
 bool task_preemption_stop(void);
 struct x86_64_trap_frame *task_scheduler_tick(

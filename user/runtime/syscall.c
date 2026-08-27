@@ -279,6 +279,33 @@ long boring_fd_close(uint32_t fd) {
     return result;
 }
 
+long boring_pty_create(struct boring_pty_create_result *result_out) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_PTY_CREATE), "D"(result_out)
+        : "rcx", "r11", "cc", "memory");
+    return result;
+}
+
+long boring_spawn(const char *path, size_t path_length,
+                  const char *const argv[], size_t argc,
+                  const struct boring_spawn_stdio *stdio_config) {
+    long result;
+    register size_t argc_argument __asm__("r10") = argc;
+    register const struct boring_spawn_stdio *stdio_argument __asm__("r8") = stdio_config;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_SPAWN), "D"(path), "S"(path_length),
+          "d"(argv), "r"(argc_argument), "r"(stdio_argument)
+        : "rcx", "r11", "cc", "memory");
+    return result;
+}
+
 long boring_input_claim(void) {
     long result;
 
