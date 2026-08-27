@@ -914,3 +914,38 @@ wm-host-test: $(BUILD_DIR)/wm-host-test
 	$(BUILD_DIR)/wm-host-test
 wm-audit: user-boringwm
 	sh tests/wm-build-audit.sh
+
+# M36 native managed terminal client and deterministic parser/renderer.
+TERMINAL_MAIN_OBJECT := $(USER_BUILD_DIR)/boring-terminal/main.o
+TERMINAL_ENGINE_OBJECT := $(USER_BUILD_DIR)/boring-terminal/terminal.o
+TERMINAL_RENDER_OBJECT := $(USER_BUILD_DIR)/boring-terminal/render.o
+TERMINAL_ELF := $(USER_BUILD_DIR)/boring-terminal.elf
+TERMINAL_HOST_TEST := $(BUILD_DIR)/terminal-host-test
+TERMINAL_RENDER_HOST_TEST := $(BUILD_DIR)/terminal-render-host-test
+
+.PHONY: user-boring-terminal terminal-host-test terminal-render-host-test terminal-audit
+user-boring-terminal: $(TERMINAL_ELF)
+
+$(USER_BUILD_DIR)/boring-terminal/%.o: user/boring-terminal/%.c user/boring-terminal/terminal.h user/boring-terminal/render.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(TERMINAL_ELF): $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(TERMINAL_ENGINE_OBJECT) $(TERMINAL_RENDER_OBJECT) $(TERMINAL_MAIN_OBJECT)
+	$(LD) $(DISPLAY_LDFLAGS) $^ -o $@
+
+$(TERMINAL_HOST_TEST): tests/terminal-host-test.c user/boring-terminal/terminal.c user/boring-terminal/terminal.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Iuser/boring-terminal $(HOST_CFLAGS) tests/terminal-host-test.c user/boring-terminal/terminal.c -o $@
+
+$(TERMINAL_RENDER_HOST_TEST): tests/terminal-render-host-test.c user/boring-terminal/terminal.c user/boring-terminal/render.c user/boring-terminal/terminal.h user/boring-terminal/render.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Iuser/boring-terminal $(HOST_CFLAGS) tests/terminal-render-host-test.c user/boring-terminal/terminal.c user/boring-terminal/render.c -o $@
+
+terminal-host-test: $(TERMINAL_HOST_TEST)
+	$(TERMINAL_HOST_TEST)
+
+terminal-render-host-test: $(TERMINAL_RENDER_HOST_TEST)
+	$(TERMINAL_RENDER_HOST_TEST)
+
+terminal-audit: $(TERMINAL_ELF)
+	sh ./tests/terminal-build-audit.sh

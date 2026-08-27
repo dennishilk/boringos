@@ -33,6 +33,7 @@ static size_t shell_history_start;
 static size_t shell_history_count;
 static uint64_t shell_history_total;
 static char shell_prompt[BORING_SHELL_PROMPT_CAPACITY];
+static bool shell_input_eof;
 static char shell_completion_path[BORING_SHELL_LINE_MAX + 1U];
 static char shell_completion_name[BORING_DIRENT_NAME_CAPACITY];
 static char shell_write_buffer[BORING_SHELL_LINE_MAX + 1U];
@@ -346,6 +347,9 @@ static bool shell_input_read(char *character_out) {
         return false;
     }
     result = boring_fd_read(BORING_FD_STDIN, character_out, 1U);
+    if (result == 0L) {
+        shell_input_eof = true;
+    }
     return result == 1L;
 }
 
@@ -1651,10 +1655,19 @@ int boring_main(void) {
     }
 
     for (;;) {
-        if (!shell_build_prompt() || !shell_write_text(shell_prompt) ||
-            !shell_read_line(shell_prompt, line, sizeof(line)) ||
-            !shell_history_add(line) ||
-            !shell_execute_line(line)) {
+        if (!shell_build_prompt() || !shell_write_text(shell_prompt)) {
+            (void)shell_write(failed, sizeof(failed) - 1U);
+            shell_idle_forever();
+        }
+        shell_input_eof = false;
+        if (!shell_read_line(shell_prompt, line, sizeof(line))) {
+            if (shell_input_eof) {
+                boring_exit(0);
+            }
+            (void)shell_write(failed, sizeof(failed) - 1U);
+            shell_idle_forever();
+        }
+        if (!shell_history_add(line) || !shell_execute_line(line)) {
             (void)shell_write(failed, sizeof(failed) - 1U);
             shell_idle_forever();
         }
