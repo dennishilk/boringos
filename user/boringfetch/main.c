@@ -24,10 +24,10 @@ static bool boringfetch_write(const char *buffer, size_t length) {
         size_t chunk = length - offset;
         long result;
 
-        if (chunk > (size_t)BORING_SYSCALL_CONSOLE_IO_MAX) {
-            chunk = (size_t)BORING_SYSCALL_CONSOLE_IO_MAX;
+        if (chunk > (size_t)BORING_SYSCALL_FD_IO_MAX) {
+            chunk = (size_t)BORING_SYSCALL_FD_IO_MAX;
         }
-        result = boring_console_write(&buffer[offset], chunk);
+        result = boring_fd_write(BORING_FD_STDOUT, &buffer[offset], chunk);
         if (result != (long)chunk) {
             return false;
         }
