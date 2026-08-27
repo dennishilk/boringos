@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   reconstruct:
-    if: contains(github.event.head_commit.message, 'M36: stage semantic reconstruction transport')
+    if: "${{ contains(github.event.head_commit.message, 'M36: stage semantic reconstruction transport') }}"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
