@@ -45,11 +45,10 @@ static const char shell_command_names[BORING_SHELL_COMMAND_COUNT]
     "ps", "history", "exit", "logout"
 };
 
-static void shell_idle_forever(void) __attribute__((noreturn));
-static void shell_idle_forever(void) {
-    for (;;) {
-        __asm__ volatile ("pause");
-    }
+static void shell_exit_failure(void) __attribute__((noreturn));
+static void shell_exit_failure(void) {
+    /* A failed client must release its PTY and scheduler task. */
+    boring_exit(1);
 }
 
 static bool shell_write(const char *buffer, size_t length) {
@@ -273,10 +272,10 @@ static bool shell_syscall_safety(void) {
             -(long)BORING_SYSCALL_ENAMETOOLONG) &&
            (boring_fs_mkdir(embedded_nul, sizeof(embedded_nul)) ==
             -(long)BORING_SYSCALL_EINVAL) &&
-           (boring_fs_rmdir(missing, sizeof(missing) - 1U) ==
-            -(long)BORING_SYSCALL_ENOENT) &&
-           (boring_fs_chdir(missing, sizeof(missing) - 1U) ==
-            -(long)BORING_SYSCALL_ENOENT) &&
+           /* Probe invalid inputs, never names in a user's actual root.
+            * Read-only filesystems may reject mutation before lookup. */
+           (boring_fs_rmdir(NULL, 1U) == -(long)BORING_SYSCALL_EFAULT) &&
+           (boring_fs_chdir(NULL, 1U) == -(long)BORING_SYSCALL_EFAULT) &&
            (boring_fs_readdir(dot, sizeof(dot) - 1U, 0ULL, NULL) ==
             -(long)BORING_SYSCALL_EFAULT) &&
            (boring_fs_touch(NULL, 1U) ==
@@ -287,8 +286,7 @@ static bool shell_syscall_safety(void) {
             -(long)BORING_SYSCALL_EFAULT) &&
            (boring_fs_write(missing, sizeof(missing) - 1U, NULL, 1U) ==
             -(long)BORING_SYSCALL_EFAULT) &&
-           (boring_fs_unlink(missing, sizeof(missing) - 1U) ==
-            -(long)BORING_SYSCALL_ENOENT);
+           (boring_fs_unlink(NULL, 1U) == -(long)BORING_SYSCALL_EFAULT);
 }
 
 static size_t shell_history_slot(size_t logical_index) {
@@ -1644,20 +1642,20 @@ int boring_main(void) {
         !shell_write_u64(pid) || !shell_write("\r\n", 2U) ||
         !shell_syscall_safety()) {
         (void)shell_write(failed, sizeof(failed) - 1U);
-        shell_idle_forever();
+        shell_exit_failure();
     }
 
     shell_state = 1ULL;
     if ((shell_state != 1ULL) ||
         !shell_write(ready, sizeof(ready) - 1U)) {
         (void)shell_write(failed, sizeof(failed) - 1U);
-        shell_idle_forever();
+        shell_exit_failure();
     }
 
     for (;;) {
         if (!shell_build_prompt() || !shell_write_text(shell_prompt)) {
             (void)shell_write(failed, sizeof(failed) - 1U);
-            shell_idle_forever();
+            shell_exit_failure();
         }
         shell_input_eof = false;
         if (!shell_read_line(shell_prompt, line, sizeof(line))) {
@@ -1665,11 +1663,11 @@ int boring_main(void) {
                 boring_exit(0);
             }
             (void)shell_write(failed, sizeof(failed) - 1U);
-            shell_idle_forever();
+            shell_exit_failure();
         }
         if (!shell_history_add(line) || !shell_execute_line(line)) {
             (void)shell_write(failed, sizeof(failed) - 1U);
-            shell_idle_forever();
+            shell_exit_failure();
         }
     }
 }

@@ -86,7 +86,15 @@ def run():
         for ch in text:
             if not ("a" <= ch <= "z"):
                 raise RuntimeError(f"unsupported test character {ch!r}")
+            frame = WM_ORACLE["frames"](log())[-1]
+            terminal_pid = next(t["pid"] for t in frame["tiles"] if t["token"] == frame["focus"])
+            children = re.findall(rf"boring-spawn: parent pid {terminal_pid} child pid (\d+) task \d+ detached", log())
+            if len(children) != 1:
+                raise RuntimeError("focused terminal does not have exactly one shell")
+            read_marker = f"fd-read: pid {children[0]} fd 0 bytes 1"
+            before = log().count(read_marker)
             key(ch)
+            witness(read_marker, before + 1)
     def latest_frame(count=None, after=0):
         def match(text):
             frames = WM_ORACLE["frames"](text)
@@ -109,6 +117,19 @@ def run():
         finally:
             command("cont")
 
+    def settled_capture(name, frame, mode):
+        # A returned QMP keyboard command only queues device events; it does not
+        # mean the shell, parser and compositor have finished their work.
+        deadline = time.monotonic() + 20
+        while True:
+            try:
+                capture(name, frame, mode)
+                return
+            except ValueError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.1)
+
     try:
         witness("m36-desktop: display+wm scheduler tasks ready")
         witness("m36-desktop: real BoringFS root mounted")
@@ -122,7 +143,7 @@ def run():
         witness("boring-spawn: VFS executable source /bin/boring-shell")
         prompt_frame = latest_frame(1)
         time.sleep(0.25)
-        capture("prompt", prompt_frame, "prompt")
+        settled_capture("prompt", prompt_frame, "prompt")
 
         type_text("boringfetch")
         key("ret")
@@ -130,7 +151,7 @@ def run():
         witness("exited status 0")
         time.sleep(0.35)
         fetch_frame = latest_frame(1, prompt_frame["frame"] - 1)
-        capture("boringfetch", fetch_frame, "fetch")
+        settled_capture("boringfetch", fetch_frame, "fetch")
 
         key("ret", super_key=True)
         witness("wm: Super+Return spawned /bin/boring-terminal", 2)
@@ -140,12 +161,12 @@ def run():
 
         type_text("terminalb")
         time.sleep(0.2)
-        capture("dual-focused-b", dual, "dual-b")
+        settled_capture("dual-focused-b", dual, "dual-b")
         key("j", super_key=True)
         switched = latest_frame(2, dual["frame"])
         type_text("terminala")
         time.sleep(0.2)
-        capture("dual-focused-a", switched, "dual-a")
+        settled_capture("dual-focused-a", switched, "dual-a")
 
         key("q", super_key=True)
         witness("boring-terminal: CLOSE received")
@@ -153,7 +174,7 @@ def run():
         witness("boring-terminal: graceful cleanup complete")
         single = latest_frame(1, switched["frame"])
         time.sleep(0.2)
-        capture("after-super-q", single, "single-after-close")
+        settled_capture("after-super-q", single, "single-after-close")
 
         key("q", super_key=True)
         witness("boring-terminal: CLOSE received", 2)
@@ -163,6 +184,14 @@ def run():
             "M36 graphical desktop SUCCESS\nReal QMP->PS/2->M31->WM->SPAWN->terminal->PTY->shell->boringfetch pixels; dual isolation; Super+Q cleanup.\n")
         print(f"M36 graphical desktop acceptance passed; evidence: {OUT}")
     except Exception as exc:
+        if vm.poll() is None:
+            try:
+                command("stop")
+                (OUT / "registers.txt").write_text(command(
+                    "human-monitor-command", {"command-line": "info registers"}))
+                command("screendump", {"filename": str(OUT / "failure.ppm")})
+            except Exception as diagnostic_error:
+                (OUT / "diagnostic-error.txt").write_text(str(diagnostic_error))
         (OUT / "FAILURE.txt").write_text(str(exc) + "\n")
         raise
     finally:

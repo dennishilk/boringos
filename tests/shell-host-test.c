@@ -37,6 +37,7 @@ static char mock_launch_argv[BORING_SYSCALL_ARG_MAX][BORING_SHELL_LINE_MAX + 1U]
 static size_t mock_launch_argc;
 static uint64_t mock_wait_pid;
 static struct boring_spawn_stdio mock_spawn_stdio;
+static size_t mock_named_deletions;
 
 static void test_fail(const char *message) {
     (void)fprintf(stderr, "shell host test failed: %s\n", message);
@@ -123,7 +124,8 @@ long boring_fs_readdir(const char *path,
     uint64_t logical = 0ULL;
     size_t candidate;
 
-    if ((path == NULL) || (entry == NULL) ||
+    if (entry == NULL) { return -(long)BORING_SYSCALL_EFAULT; }
+    if ((path == NULL) ||
         (strlen(path) != path_length)) {
         return -(long)BORING_SYSCALL_EINVAL;
     }
@@ -150,20 +152,29 @@ long boring_fs_readdir(const char *path,
 }
 
 long boring_fs_mkdir(const char *name, size_t length) {
-    (void)name;
-    (void)length;
+    if (length == 0U) { return -(long)BORING_SYSCALL_EINVAL; }
+    if (length > 255U) { return -(long)BORING_SYSCALL_ENAMETOOLONG; }
+    if ((name == NULL) || ((uintptr_t)name >= 0xffff800000000000ULL)) {
+        return -(long)BORING_SYSCALL_EFAULT;
+    }
+    if ((memchr(name, '\0', length) != NULL) || (memchr(name, '/', length) != NULL) ||
+        ((length == 1U) && name[0] == '.') ||
+        ((length == 2U) && name[0] == '.' && name[1] == '.')) {
+        return -(long)BORING_SYSCALL_EINVAL;
+    }
     return 0L;
 }
 
 long boring_fs_rmdir(const char *name, size_t length) {
-    (void)name;
     (void)length;
-    return 0L;
+    if (name == NULL) { return -(long)BORING_SYSCALL_EFAULT; }
+    ++mock_named_deletions;
+    return -(long)BORING_SYSCALL_EACCES;
 }
 
 long boring_fs_chdir(const char *path, size_t length) {
-    (void)path;
     (void)length;
+    if (path == NULL) { return -(long)BORING_SYSCALL_EFAULT; }
     return 0L;
 }
 
@@ -175,14 +186,14 @@ long boring_fs_read(const char *path,
     (void)path;
     (void)path_length;
     (void)offset;
-    (void)buffer;
+    if (buffer == NULL) { return -(long)BORING_SYSCALL_EFAULT; }
     (void)capacity;
     return 0L;
 }
 
 long boring_fs_touch(const char *path, size_t length) {
-    (void)path;
-    (void)length;
+    if (path == NULL) { return -(long)BORING_SYSCALL_EFAULT; }
+    if (length == 1U && path[0] == '.') { return -(long)BORING_SYSCALL_EINVAL; }
     return 0L;
 }
 
@@ -190,7 +201,8 @@ long boring_fs_write(const char *path,
                      size_t path_length,
                      const void *buffer,
                      size_t length) {
-    if ((path == NULL) || (buffer == NULL) ||
+    if (buffer == NULL) { return -(long)BORING_SYSCALL_EFAULT; }
+    if ((path == NULL) ||
         (strlen(path) != path_length) ||
         (path_length >= sizeof(mock_written_path)) ||
         (length > sizeof(mock_written_bytes))) {
@@ -203,9 +215,10 @@ long boring_fs_write(const char *path,
 }
 
 long boring_fs_unlink(const char *path, size_t length) {
-    (void)path;
     (void)length;
-    return 0L;
+    if (path == NULL) { return -(long)BORING_SYSCALL_EFAULT; }
+    ++mock_named_deletions;
+    return -(long)BORING_SYSCALL_EACCES;
 }
 
 long boring_launch_argv(const char *path,
@@ -309,6 +322,10 @@ int main(void) {
     char external_fetch[] = "boringfetch";
     char external_fetch_arg[] = "boringfetch extra";
     char external_cat[] = "cat README.txt";
+
+    test_require(shell_syscall_safety(), "startup safety works on a read-only root");
+    test_require(mock_named_deletions == 0U,
+                 "startup safety must never delete a real filesystem name");
 
     shell_history_reset();
     expect_line("plain text\n", sizeof(shell_history_draft), "plain text",

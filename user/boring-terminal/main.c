@@ -85,7 +85,9 @@ static struct boring_wm_message wm_rpc(const struct boring_wm_message *request) 
         if (reply.type == BORING_WM_REPLY) {
             return reply;
         }
-        if (reply.type != BORING_WM_CONFIGURE) {
+        if ((reply.type != BORING_WM_CONFIGURE) &&
+            !((request->type == BORING_WM_UNREGISTER) &&
+              ((reply.type == BORING_WM_KEY) || (reply.type == BORING_WM_CLOSE)))) {
             term_fail("unexpected WM RPC event");
         }
     }
