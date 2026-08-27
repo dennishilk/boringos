@@ -1519,6 +1519,10 @@ static bool shell_command_external(char *command, char *argument) {
     launch_result = boring_spawn(
         shell_exec_path, boring_strlen(shell_exec_path), argv, argc,
         &stdio_config);
+    if (launch_result == -(long)BORING_SYSCALL_ENOTSUP) {
+        launch_result = boring_launch_argv(
+            shell_exec_path, boring_strlen(shell_exec_path), argv, argc);
+    }
     if (launch_result < 0L) {
         if (launch_result == -(long)BORING_SYSCALL_ENOENT) {
             return shell_write_text("command not found: ") &&

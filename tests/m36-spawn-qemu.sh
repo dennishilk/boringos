@@ -4,6 +4,8 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 QEMU=${QEMU:-qemu-system-x86_64}
 QEMU_CPU=${QEMU_CPU:-qemu64,apic=off}
+EVIDENCE="${ROOT}/build/m36-spawn-reference"
+mkdir -p "${EVIDENCE}"
 TMPDIR_PATH=$(mktemp -d)
 IMAGE="${TMPDIR_PATH}/boringos-m36-root.img"
 LOG="${TMPDIR_PATH}/serial.log"
@@ -15,6 +17,8 @@ cleanup() {
         kill "${PID}" 2>/dev/null || true
         wait "${PID}" 2>/dev/null || true
     fi
+    if [ -f "${LOG}" ]; then cp "${LOG}" "${EVIDENCE}/serial.log"; fi
+    if [ -f "${QEMU_LOG}" ]; then cp "${QEMU_LOG}" "${EVIDENCE}/qemu.log"; fi
     rm -rf "${TMPDIR_PATH}"
 }
 trap cleanup EXIT INT TERM
@@ -105,4 +109,5 @@ grep -Eq '^boring-spawn: parent pid 1 child pid 3 task [1-9][0-9]* detached$' "$
 kill "${PID}" 2>/dev/null || true
 wait "${PID}" 2>/dev/null || true
 PID=
+printf '%s\n' 'M36 real Scheduler/Ring3/BoringFS/PTY/SPAWN QEMU acceptance passed.' > "${EVIDENCE}/SUCCESS.txt"
 echo 'M36 real Scheduler/Ring3/BoringFS/PTY/SPAWN QEMU acceptance passed.'

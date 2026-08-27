@@ -1,8 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <boring/input_abi.h>
 
 #include "../user/boring-terminal/terminal.h"
+#include "../user/boring-terminal/input.h"
 
 static void require(int condition, const char *message) {
     if (!condition) {
@@ -15,10 +17,71 @@ static void feed(struct boring_terminal *terminal, const char *text) {
     boring_terminal_feed(terminal, text, strlen(text));
 }
 
+static void test_input(void) {
+    static const struct {
+        uint32_t code;
+        const char *plain;
+        const char *shifted;
+    } cases[] = {
+        {BORING_KEY_ESCAPE, "\x1b", "\x1b"},
+        {BORING_KEY_TAB, "\t", "\t"},
+        {BORING_KEY_ENTER, "\r", "\r"},
+        {BORING_KEY_BACKSPACE, "\x7f", "\x7f"},
+        {BORING_KEY_SPACE, " ", " "},
+        {BORING_KEY_MINUS, "-", "_"}, {BORING_KEY_EQUAL, "=", "+"},
+        {BORING_KEY_LEFT_BRACKET, "[", "{"}, {BORING_KEY_RIGHT_BRACKET, "]", "}"},
+        {BORING_KEY_BACKSLASH, "\\", "|"}, {BORING_KEY_SEMICOLON, ";", ":"},
+        {BORING_KEY_APOSTROPHE, "'", "\""}, {BORING_KEY_GRAVE, "`", "~"},
+        {BORING_KEY_COMMA, ",", "<"}, {BORING_KEY_DOT, ".", ">"},
+        {BORING_KEY_SLASH, "/", "?"},
+        {BORING_KEY_LEFT, "\x1b[D", "\x1b[D"}, {BORING_KEY_RIGHT, "\x1b[C", "\x1b[C"},
+        {BORING_KEY_UP, "\x1b[A", "\x1b[A"}, {BORING_KEY_DOWN, "\x1b[B", "\x1b[B"},
+        {BORING_KEY_HOME, "\x1b[H", "\x1b[H"}, {BORING_KEY_END, "\x1b[F", "\x1b[F"},
+        {BORING_KEY_DELETE, "\x1b[3~", "\x1b[3~"}
+    };
+    char bytes[BORING_TERMINAL_KEY_BYTES_MAX + 1U];
+    size_t index;
+    uint32_t code;
+    for (code = BORING_KEY_A; code <= BORING_KEY_Z; ++code) {
+        require(boring_terminal_key_bytes(code, 0U, bytes) == 1U &&
+                bytes[0] == (char)('a' + code - BORING_KEY_A), "lowercase key");
+        require(boring_terminal_key_bytes(code, BORING_MOD_SHIFT, bytes) == 1U &&
+                bytes[0] == (char)('A' + code - BORING_KEY_A), "uppercase key");
+        require(boring_terminal_key_bytes(code, BORING_MOD_CTRL, bytes) == 1U &&
+                bytes[0] == (char)(1U + code - BORING_KEY_A), "control letter");
+    }
+    for (code = BORING_KEY_0; code <= BORING_KEY_9; ++code) {
+        require(boring_terminal_key_bytes(code, 0U, bytes) == 1U &&
+                bytes[0] == (char)('0' + code - BORING_KEY_0), "digit key");
+        require(boring_terminal_key_bytes(code, BORING_MOD_SHIFT, bytes) == 1U &&
+                bytes[0] == ")!@#$%^&*("[code - BORING_KEY_0], "shifted digit");
+    }
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        uint32_t shifted;
+        for (shifted = 0U; shifted < 2U; ++shifted) {
+            const char *text = shifted != 0U ? cases[index].shifted : cases[index].plain;
+            const size_t length = strlen(text);
+            memset(bytes, 0x55, sizeof(bytes));
+            require(boring_terminal_key_bytes(cases[index].code,
+                    shifted != 0U ? BORING_MOD_SHIFT : 0U, bytes) == length &&
+                    memcmp(bytes, text, length) == 0 && bytes[length] == 0x55,
+                    "editing/punctuation exact bounded sequence");
+        }
+    }
+    require(boring_terminal_key_bytes(BORING_KEY_ENTER, BORING_MOD_SUPER, bytes) == 0U &&
+            boring_terminal_key_bytes(BORING_KEY_Q, BORING_MOD_SUPER, bytes) == 0U &&
+            boring_terminal_key_bytes(BORING_KEY_A, BORING_MOD_ALT, bytes) == 0U,
+            "window manager shortcuts never enter the PTY");
+    require(boring_terminal_key_bytes(UINT32_MAX, 0U, bytes) == 0U &&
+            boring_terminal_key_bytes(BORING_KEY_A, 0U, NULL) == 0U, "invalid key/output");
+}
+
 int main(void) {
     struct boring_terminal terminal;
     char printable[95];
     size_t index;
+
+    test_input();
 
     require(!boring_terminal_init(NULL, 10U, 4U), "NULL init accepted");
     require(!boring_terminal_init(&terminal, 0U, 4U), "zero cols accepted");
@@ -72,6 +135,6 @@ int main(void) {
             "resize geometry wrong");
     require(!boring_terminal_resize(&terminal, 0U, 2U), "invalid resize accepted");
 
-    (void)puts("boring-terminal parser/grid host tests passed.");
+    (void)puts("boring-terminal parser/grid/key-translation host tests passed.");
     return 0;
 }

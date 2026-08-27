@@ -105,6 +105,21 @@ bool pty_init(void) {
     return true;
 }
 
+bool pty_get_stats(struct pty_stats *stats) {
+    size_t index;
+    if (!pty_initialized || (stats == NULL)) { return false; }
+    *stats = (struct pty_stats){0};
+    for (index = 0U; index < (size_t)KERNEL_PTY_MAX; ++index) {
+        const struct pty_pair *const pair = &pty_pairs[index];
+        if (pair->used) { ++stats->active_pairs; }
+        stats->references += (uint64_t)pair->refs[0] + (uint64_t)pair->refs[1];
+        stats->read_waiters += (pair->read_waiter_pid[0] != 0ULL) ? 1U : 0U;
+        stats->read_waiters += (pair->read_waiter_pid[1] != 0ULL) ? 1U : 0U;
+        stats->queued_bytes += pair->master_to_slave.count + pair->slave_to_master.count;
+    }
+    return true;
+}
+
 enum pty_result pty_create_pair(struct pty_handle *master_out,
                                 struct pty_handle *slave_out) {
     size_t index;

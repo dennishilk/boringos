@@ -9,6 +9,9 @@
 #include <boring/ring3_memory.h>
 #include <boring/user_memory.h>
 #include <boring/vmm.h>
+#ifdef BORING_M36_DESKTOP_ACCEPTANCE
+#include <boring/serial.h>
+#endif
 
 #define USER_MEMORY_OBJECT_NONE UINT32_MAX
 
@@ -706,6 +709,15 @@ enum user_memory_result user_buffer_create(struct process *process,
     handle->object_index = object_index;
     handle->active = true;
     *handle_out = encoded;
+#ifdef BORING_M36_DESKTOP_ACCEPTANCE
+    serial_write_string("m36-buffer: owner pid ");
+    serial_write_u64(process->pid);
+    serial_write_string(" object ");
+    serial_write_u64((uint64_t)object_index);
+    serial_write_string(" bytes ");
+    serial_write_u64((uint64_t)size);
+    serial_write_string("\n");
+#endif
     return USER_MEMORY_RESULT_OK;
 }
 

@@ -18,6 +18,7 @@
 #include <boring/irq.h>
 #include <boring/m36_desktop_test.h>
 #include <boring/process.h>
+#include <boring/pty.h>
 #include <boring/ring3_memory.h>
 #include <boring/serial.h>
 #include <boring/syscall.h>
@@ -184,6 +185,9 @@ void m36_desktop_test_run(const struct boring_limine_module_response *modules) {
     struct user_memory_global_stats memory;
     struct boring_input_stats input;
     struct boring_framebuffer_user_stats framebuffer;
+    struct pty_stats pty;
+    struct process_stats processes;
+    struct task_stats tasks;
     size_t index;
 
     active = false;
@@ -258,6 +262,17 @@ void m36_desktop_test_run(const struct boring_limine_module_response *modules) {
         states[index].process = NULL;
     }
     serial_write_string("m36-desktop: IPC/input/framebuffer/M32 cleanup complete\n");
+    if (!pty_get_stats(&pty) || (pty.active_pairs != 0U) ||
+        (pty.references != 0ULL) || (pty.read_waiters != 0U) ||
+        (pty.queued_bytes != 0U) ||
+        !process_get_stats(&processes) || (processes.active_processes != 0ULL) ||
+        (processes.created_processes != processes.finished_processes) ||
+        !task_get_stats(&tasks) || (tasks.active_tasks != 0ULL) ||
+        (tasks.created_tasks != tasks.finished_tasks) ||
+        (tasks.finished_resume_count != 0ULL) || (tasks.scheduler_fault_count != 0ULL)) {
+        fail("PTY/FD/process/task cleanup");
+    }
+    serial_write_string("m36-desktop: PTY pairs/refs/bytes/waiters=0 processes/tasks=0\n");
     serial_write_string("M36 graphical terminal desktop acceptance passed.\n");
     x86_64_halt_forever();
 }

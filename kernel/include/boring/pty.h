@@ -29,7 +29,15 @@ struct pty_poll_state {
     bool hup;
 };
 
+struct pty_stats {
+    uint32_t active_pairs;
+    uint32_t read_waiters;
+    uint64_t references;
+    size_t queued_bytes;
+};
+
 bool pty_init(void);
+bool pty_get_stats(struct pty_stats *stats);
 enum pty_result pty_create_pair(struct pty_handle *master_out,
                                 struct pty_handle *slave_out);
 enum pty_result pty_retain(struct pty_handle handle);

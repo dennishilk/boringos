@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """M36 real QMP -> PS/2 -> WM -> terminal -> PTY -> shell visual acceptance."""
+import argparse
 import json
 import os
 import re
@@ -14,10 +15,8 @@ ROOT = Path(__file__).resolve().parent.parent
 QMP = runpy.run_path(str(ROOT / "tests/qmp-input.py"))
 WM_ORACLE = runpy.run_path(str(ROOT / "tests/validate-wm-screenshot.py"))
 TERM_ORACLE = runpy.run_path(str(ROOT / "tests/validate-m36-terminal-screenshot.py"))
-OUT = ROOT / "build/m36-desktop-reference"
-
-
-def run():
+def run(mode):
+    OUT = ROOT / ("build/m36-desktop-reference" if mode == "normal" else f"build/m36-{mode}")
     if OUT.exists():
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True)
@@ -25,7 +24,11 @@ def run():
     log_path.write_text("")
     with (OUT / "bundle.log").open("w") as bundle:
         subprocess.run(["sh", "tests/m36-bundle-test.sh"], cwd=ROOT,
+                       env=dict(os.environ, M36_TERMINAL_VARIANT=(
+                           "death" if mode == "terminal-death" else "normal")),
                        stdout=bundle, stderr=subprocess.STDOUT, check=True)
+    for name in ("geometry.txt", "boringfsck.txt", "SHA256SUMS"):
+        shutil.copyfile(ROOT / "build/m36-bundle-test" / name, OUT / name)
     root_image = ROOT / "build/m36-bundle-test/boringos-root.img"
     with (OUT / "build.log").open("w") as build:
         subprocess.run(["make", "TEST_MODE=m36-desktop"], cwd=ROOT,
@@ -95,6 +98,54 @@ def run():
             before = log().count(read_marker)
             key(ch)
             witness(read_marker, before + 1)
+    def shell_for(terminal_pid):
+        children = re.findall(rf"boring-spawn: parent pid {terminal_pid} child pid (\d+) task \d+ detached", log())
+        if len(children) != 1:
+            raise RuntimeError("terminal must own exactly one shell")
+        return int(children[0])
+    def run_fetch(terminal_pid):
+        shell_pid = shell_for(terminal_pid)
+        type_text("boringfetch")
+        key("ret")
+        child = wait(lambda text: re.findall(
+            rf"boring-spawn: parent pid {shell_pid} child pid (\d+) task \d+ foreground", text),
+            f"SPAWN foreground command from shell {shell_pid}")[-1]
+        witness(f"boring-spawn: child pid {child} exited status 0")
+        witness(f"boring-spawn: reaped child pid {child} task/process cleanup complete")
+    def check_resources(frame):
+        text = log()
+        cr3s = {int(pid): int(cr3, 16) for pid, cr3 in re.findall(
+            r"boring-spawn: child pid (\d+) cr3 (0x[0-9a-fA-F]+)", text)}
+        cr3s.update({int(pid): int(cr3, 16) for pid, cr3 in re.findall(
+            r"m36-desktop: enter CPL3 pid (\d+) name \S+ cr3 (0x[0-9a-fA-F]+)", text)})
+        ptys = {int(pid): dict(slot=int(slot), generation=int(gen), master_fd=int(master), slave_fd=int(slave))
+                for pid, slot, gen, master, slave in re.findall(
+                    r"boring-pty: owner pid (\d+) slot (\d+) generation (\d+) master (\d+) slave (\d+)", text)}
+        buffers = {int(pid): dict(object=int(obj), bytes=int(size)) for pid, obj, size in re.findall(
+            r"m36-buffer: owner pid (\d+) object (\d+) bytes (\d+)", text)}
+        terminals = []
+        for tile in frame["tiles"]:
+            pid = tile["pid"]
+            shell_pid = shell_for(pid)
+            terminals.append(dict(pid=pid, cr3=cr3s[pid], shell_pid=shell_pid,
+                                  shell_cr3=cr3s[shell_pid], pty=ptys[pid],
+                                  buffer=buffers[pid], surface=tile["surface"], token=tile["token"]))
+        live_pids = [1, 2] + [pid for term in terminals for pid in (term["pid"], term["shell_pid"])]
+        if len(set(live_pids)) != 6 or len({cr3s[pid] for pid in live_pids}) != 6:
+            raise RuntimeError("desktop processes share a PID or CR3")
+        if len({(term["pty"]["slot"], term["pty"]["generation"]) for term in terminals}) != 2:
+            raise RuntimeError("terminals share a PTY")
+        if len({term["buffer"]["object"] for term in terminals}) != 2 or any(
+                term["buffer"]["bytes"] != 800 * 600 * 4 for term in terminals):
+            raise RuntimeError("terminals do not own independent complete M32 pixel buffers")
+        if buffers[1]["object"] in {term["buffer"]["object"] for term in terminals}:
+            raise RuntimeError("terminal aliases display composition buffer")
+        if "boring-launch:" in text:
+            raise RuntimeError("graphical path used legacy LAUNCH")
+        (OUT / "resources.json").write_text(json.dumps(dict(
+            mode=mode, terminals=terminals, display_cr3=cr3s[1], wm_cr3=cr3s[2],
+            limits=dict(processes=8, tasks=8, pty_pairs=8, live_desktop_processes=6,
+                        live_with_foreground_command=7)), indent=2) + "\n")
     def latest_frame(count=None, after=0):
         def match(text):
             frames = WM_ORACLE["frames"](text)
@@ -145,11 +196,8 @@ def run():
         time.sleep(0.25)
         settled_capture("prompt", prompt_frame, "prompt")
 
-        type_text("boringfetch")
-        key("ret")
-        witness("boring-spawn: VFS executable source /bin/boringfetch")
-        witness("exited status 0")
-        time.sleep(0.35)
+        terminal_a = prompt_frame["tiles"][0]["pid"]
+        run_fetch(terminal_a)
         fetch_frame = latest_frame(1, prompt_frame["frame"] - 1)
         settled_capture("boringfetch", fetch_frame, "fetch")
 
@@ -157,7 +205,35 @@ def run():
         witness("wm: Super+Return spawned /bin/boring-terminal", 2)
         witness("boring-terminal: Ring3 managed client + PTY + boring-shell ready", 2)
         dual = latest_frame(2, fetch_frame["frame"])
-        time.sleep(0.25)
+        settled_capture("dual-ready", dual, "dual-ready")
+        terminal_b = next(t["pid"] for t in dual["tiles"] if t["pid"] != terminal_a)
+        check_resources(dual)
+
+        if mode != "normal":
+            shell_b = shell_for(terminal_b)
+            if mode == "terminal-death":
+                key("f12")
+                witness("boring-terminal: test-only unexpected exit without unregister")
+                witness(f"boring-spawn: child pid {terminal_b} exited status 71")
+            else:
+                type_text("exit")
+                key("ret")
+                witness(f"boring-spawn: child pid {shell_b} exited status 0")
+                witness("boring-terminal: shell PTY HUP/EOF")
+            for pid in (terminal_b, shell_b):
+                witness(f"boring-spawn: reaped child pid {pid} task/process cleanup complete")
+            single = latest_frame(1, dual["frame"])
+            if single["tiles"][0]["pid"] != terminal_a:
+                raise RuntimeError("wrong terminal survived peer exit")
+            type_text("survivor")
+            settled_capture("surviving-terminal", single, "survivor")
+            key("q", super_key=True)
+            witness("M36 graphical terminal desktop acceptance passed.")
+            (OUT / "SUCCESS.txt").write_text(f"M36 {mode} SUCCESS\nUnexpected peer exit, HUP, independent survivor, final zero-resource cleanup.\n")
+            print(f"M36 {mode} acceptance passed; evidence: {OUT}")
+            return
+
+        run_fetch(terminal_b)
 
         type_text("terminalb")
         time.sleep(0.2)
@@ -167,6 +243,13 @@ def run():
         type_text("terminala")
         time.sleep(0.2)
         settled_capture("dual-focused-a", switched, "dual-a")
+
+        key("j", super_key=True)
+        back_to_b = latest_frame(2, switched["frame"])
+        settled_capture("dual-focused-b-return", back_to_b, "dual-b")
+        key("k", super_key=True)
+        switched = latest_frame(2, back_to_b["frame"])
+        settled_capture("dual-focused-a-return", switched, "dual-a")
 
         key("q", super_key=True)
         witness("boring-terminal: CLOSE received")
@@ -203,4 +286,7 @@ def run():
         vm.stdin.close(); vm.stdout.close()
 
 
-if __name__ == "__main__": run()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mode", choices=("normal", "terminal-death", "shell-death"), default="normal")
+    run(parser.parse_args().mode)

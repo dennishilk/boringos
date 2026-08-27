@@ -37,6 +37,8 @@ static char mock_launch_argv[BORING_SYSCALL_ARG_MAX][BORING_SHELL_LINE_MAX + 1U]
 static size_t mock_launch_argc;
 static uint64_t mock_wait_pid;
 static struct boring_spawn_stdio mock_spawn_stdio;
+static long mock_spawn_error;
+static size_t mock_legacy_launches;
 static size_t mock_named_deletions;
 
 static void test_fail(const char *message) {
@@ -221,10 +223,8 @@ long boring_fs_unlink(const char *path, size_t length) {
     return -(long)BORING_SYSCALL_EACCES;
 }
 
-long boring_launch_argv(const char *path,
-                        size_t path_length,
-                        const char *const argv[],
-                        size_t argc) {
+static long mock_record_command(const char *path, size_t path_length,
+                                const char *const argv[], size_t argc) {
     size_t index;
 
     if ((path == NULL) || (argv == NULL) ||
@@ -248,11 +248,19 @@ long boring_launch_argv(const char *path,
     return 3L;
 }
 
+long boring_launch_argv(const char *path, size_t path_length,
+                        const char *const argv[], size_t argc) {
+    ++mock_legacy_launches;
+    return mock_record_command(path, path_length, argv, argc);
+}
 
 long boring_spawn(const char *path, size_t path_length,
                   const char *const argv[], size_t argc,
                   const struct boring_spawn_stdio *stdio_config) {
-    const long result = boring_launch_argv(path, path_length, argv, argc);
+    long result;
+
+    if (mock_spawn_error != 0L) { return mock_spawn_error; }
+    result = mock_record_command(path, path_length, argv, argc);
 
     if ((result < 0L) || (stdio_config == NULL)) {
         return (result < 0L) ? result : -(long)BORING_SYSCALL_EINVAL;
@@ -462,6 +470,24 @@ int main(void) {
                  "cat argv is forwarded to the standalone program");
     test_require(mock_wait_pid == 3ULL,
                  "external cat waitpid");
+
+    test_require(mock_legacy_launches == 0U,
+                 "scheduler commands never use legacy LAUNCH");
+    {
+        char legacy_command[] = "boringfetch";
+        char denied_command[] = "boringfetch";
+        mock_spawn_error = -(long)BORING_SYSCALL_ENOTSUP;
+        mock_wait_pid = 0ULL;
+        test_require(shell_execute_line(legacy_command) &&
+                     mock_legacy_launches == 1U && mock_wait_pid == 3ULL,
+                     "unsupported scheduler falls back to historical ABI");
+        mock_spawn_error = -(long)BORING_SYSCALL_EACCES;
+        mock_wait_pid = 0ULL;
+        test_require(shell_execute_line(denied_command) &&
+                     mock_legacy_launches == 1U && mock_wait_pid == 0ULL,
+                     "SPAWN denial is never retried through legacy LAUNCH");
+        mock_spawn_error = 0L;
+    }
 
     (void)puts("BoringOS shell host editor/completion tests passed.");
     return 0;

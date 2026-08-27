@@ -234,3 +234,61 @@ jobs:
           name: boringos-qemu-x86_64
           path: build/boringos-qemu-x86_64/
           if-no-files-found: error
+
+  m36-terminal:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install build and QEMU dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential binutils curl xorriso qemu-system-x86
+
+      - name: Bounded PTY stack parser renderer and input host regressions
+        run: make pty-host-test fd-host-test shell-host-test spawn-stack-host-test terminal-host-test terminal-render-host-test
+
+      - name: Freestanding terminal ELF and measured BoringFS contents
+        run: |
+          sh ./tests/m36-bundle-test.sh
+          sh ./tests/terminal-build-audit.sh
+          sh ./tests/shell-build-audit.sh
+          sh ./tests/boringfetch-build-audit.sh
+
+      - name: Real Scheduler Ring3 PTY SPAWN stdio wait and detached reap
+        run: sh ./tests/m36-spawn-qemu.sh
+
+      - name: Real graphical prompt boringfetch dual focus and graceful close
+        run: python3 ./tests/m36-desktop-qemu.py
+
+      - name: Reject corrupted actual framebuffer evidence
+        run: python3 ./tests/m36-oracle-test.py
+
+      - name: Unexpected terminal exit peer cleanup and independent survivor
+        run: python3 ./tests/m36-desktop-qemu.py --mode terminal-death
+
+      - name: Shell exit PTY HUP cleanup and independent survivor
+        run: python3 ./tests/m36-desktop-qemu.py --mode shell-death
+
+      - name: Upload M36 actual framebuffer and lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boringos-m36-terminal-reference
+          path: |
+            build/m36-spawn-reference/
+            build/m36-desktop-reference/
+            build/m36-terminal-death/
+            build/m36-shell-death/
+          if-no-files-found: error
+
+      - name: Build human-runnable M36 graphical terminal bundle
+        run: sh ./tests/build-m36-qemu-bundle.sh
+
+      - name: Upload human-runnable M36 graphical terminal bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: boringos-m36-qemu-x86_64
+          path: build/boringos-m36-qemu-x86_64/
+          if-no-files-found: error

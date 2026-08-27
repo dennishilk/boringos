@@ -930,23 +930,33 @@ wm-audit: user-boringwm
 TERMINAL_MAIN_OBJECT := $(USER_BUILD_DIR)/boring-terminal/main.o
 TERMINAL_ENGINE_OBJECT := $(USER_BUILD_DIR)/boring-terminal/terminal.o
 TERMINAL_RENDER_OBJECT := $(USER_BUILD_DIR)/boring-terminal/render.o
+TERMINAL_INPUT_OBJECT := $(USER_BUILD_DIR)/boring-terminal/input.o
 TERMINAL_ELF := $(USER_BUILD_DIR)/boring-terminal.elf
+TERMINAL_DEATH_ELF := $(USER_BUILD_DIR)/boring-terminal-death.elf
 TERMINAL_HOST_TEST := $(BUILD_DIR)/terminal-host-test
 TERMINAL_RENDER_HOST_TEST := $(BUILD_DIR)/terminal-render-host-test
 
-.PHONY: user-boring-terminal terminal-host-test terminal-render-host-test terminal-audit
+.PHONY: user-boring-terminal user-boring-terminal-death terminal-host-test terminal-render-host-test terminal-audit
 user-boring-terminal: $(TERMINAL_ELF)
+user-boring-terminal-death: $(TERMINAL_DEATH_ELF)
 
-$(USER_BUILD_DIR)/boring-terminal/%.o: user/boring-terminal/%.c user/boring-terminal/terminal.h user/boring-terminal/render.h
+$(USER_BUILD_DIR)/boring-terminal/%.o: user/boring-terminal/%.c user/boring-terminal/terminal.h user/boring-terminal/render.h user/boring-terminal/input.h
 	@mkdir -p $(dir $@)
 	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
 
-$(TERMINAL_ELF): $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(TERMINAL_ENGINE_OBJECT) $(TERMINAL_RENDER_OBJECT) $(TERMINAL_MAIN_OBJECT)
+$(TERMINAL_ELF): $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(TERMINAL_ENGINE_OBJECT) $(TERMINAL_RENDER_OBJECT) $(TERMINAL_INPUT_OBJECT) $(TERMINAL_MAIN_OBJECT)
 	$(LD) $(DISPLAY_LDFLAGS) $^ -o $@
 
-$(TERMINAL_HOST_TEST): tests/terminal-host-test.c user/boring-terminal/terminal.c user/boring-terminal/terminal.h
+$(USER_BUILD_DIR)/boring-terminal-death/main.o: user/boring-terminal/main.c user/boring-terminal/input.h user/boring-terminal/terminal.h user/boring-terminal/render.h
 	@mkdir -p $(dir $@)
-	$(HOST_CC) -Iuser/boring-terminal $(HOST_CFLAGS) tests/terminal-host-test.c user/boring-terminal/terminal.c -o $@
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -DBORING_TERMINAL_DEATH_ACCEPTANCE -c $< -o $@
+
+$(TERMINAL_DEATH_ELF): $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(TERMINAL_ENGINE_OBJECT) $(TERMINAL_RENDER_OBJECT) $(TERMINAL_INPUT_OBJECT) $(USER_BUILD_DIR)/boring-terminal-death/main.o
+	$(LD) $(DISPLAY_LDFLAGS) $^ -o $@
+
+$(TERMINAL_HOST_TEST): tests/terminal-host-test.c user/boring-terminal/terminal.c user/boring-terminal/input.c user/boring-terminal/terminal.h user/boring-terminal/input.h kernel/include/boring/input_abi.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Iuser/boring-terminal -Ikernel/include $(HOST_CFLAGS) tests/terminal-host-test.c user/boring-terminal/terminal.c user/boring-terminal/input.c -o $@
 
 $(TERMINAL_RENDER_HOST_TEST): tests/terminal-render-host-test.c user/boring-terminal/terminal.c user/boring-terminal/render.c user/boring-terminal/terminal.h user/boring-terminal/render.h
 	@mkdir -p $(dir $@)

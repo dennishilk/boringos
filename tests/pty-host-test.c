@@ -6,10 +6,12 @@
 #include <boring/pty.h>
 
 static uint64_t woke_pid;
+static size_t checks;
 bool task_wake_pid(uint64_t pid);
 bool task_wake_pid(uint64_t pid) { woke_pid = pid; return true; }
 
 static int check(bool ok, const char *name) {
+    ++checks;
     if (!ok) { fprintf(stderr, "FAIL: %s\n", name); return 1; }
     return 0;
 }
@@ -17,6 +19,8 @@ static int check(bool ok, const char *name) {
 int main(void) {
     struct pty_handle m, s, m2, s2, stale;
     struct pty_poll_state state;
+    struct pty_stats stats;
+    struct pty_handle masters[KERNEL_PTY_MAX], slaves[KERNEL_PTY_MAX];
     char out[8192];
     char fill[KERNEL_PTY_RING_CAPACITY + 16U];
     size_t n;
@@ -60,6 +64,39 @@ int main(void) {
     failed |= check(pty_write(s,"z",1U,&n)==PTY_RESULT_HUP, "write peer closed");
     failed |= check(pty_close(s)==PTY_RESULT_OK, "final slave close");
     failed |= check(pty_close(m2)==PTY_RESULT_OK && pty_close(s2)==PTY_RESULT_OK, "final second close");
-    if (!failed) puts("PTY host test passed.");
+    failed |= check(pty_get_stats(&stats) && stats.active_pairs == 0U &&
+                    stats.references == 0ULL && stats.read_waiters == 0U &&
+                    stats.queued_bytes == 0U, "all original resources released");
+    for (i = 0U; i < KERNEL_PTY_MAX; ++i) {
+        failed |= check(pty_create_pair(&masters[i], &slaves[i]) == PTY_RESULT_OK,
+                        "allocate every bounded PTY slot");
+        failed |= check(pty_arm_read_waiter(slaves[i], 100ULL + i) == PTY_RESULT_OK,
+                        "arm each slave before peer exit");
+        failed |= check(pty_write(slaves[i], "pending", 7U, &n) == PTY_RESULT_OK && n == 7U,
+                        "queue output before peer exit");
+    }
+    failed |= check(pty_create_pair(&m, &s) == PTY_RESULT_NO_SPACE,
+                    "ninth pair rejected without overwriting live slots");
+    failed |= check(pty_get_stats(&stats) && stats.active_pairs == KERNEL_PTY_MAX &&
+                    stats.references == 2ULL * KERNEL_PTY_MAX &&
+                    stats.read_waiters == KERNEL_PTY_MAX &&
+                    stats.queued_bytes == 7U * KERNEL_PTY_MAX, "full bounded resource accounting");
+    stale = masters[0];
+    for (i = 0U; i < KERNEL_PTY_MAX; ++i) {
+        woke_pid = 0ULL;
+        failed |= check(pty_close(masters[i]) == PTY_RESULT_OK && woke_pid == 100ULL + i,
+                        "master exit wakes slave waiter");
+        failed |= check(pty_close(slaves[i]) == PTY_RESULT_OK, "slave exit releases final reference");
+    }
+    failed |= check(pty_get_stats(&stats) && stats.active_pairs == 0U &&
+                    stats.references == 0ULL && stats.read_waiters == 0U &&
+                    stats.queued_bytes == 0U, "exhaustion and HUP leave no resource behind");
+    failed |= check(pty_create_pair(&m, &s) == PTY_RESULT_OK && m.slot == stale.slot &&
+                    m.generation != stale.generation, "exhausted slot reused with new generation");
+    failed |= check(pty_retain(stale) == PTY_RESULT_INVALID &&
+                    pty_close(stale) == PTY_RESULT_INVALID, "stale endpoint cannot affect reused pair");
+    failed |= check(pty_close(m) == PTY_RESULT_OK && pty_close(s) == PTY_RESULT_OK,
+                    "reused slot released");
+    if (!failed) printf("PTY host test passed: %zu checks.\n", checks);
     return failed ? 1 : 0;
 }

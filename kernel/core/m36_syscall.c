@@ -454,6 +454,17 @@ static uint64_t m36_pty_create(uint64_t user_result) {
         (void)kernel_fd_close(&process->fd_table, slave_fd);
         return m36_error(BORING_SYSCALL_EFAULT);
     }
+    serial_write_string("boring-pty: owner pid ");
+    serial_write_u64(process->pid);
+    serial_write_string(" slot ");
+    serial_write_u64((uint64_t)master.slot);
+    serial_write_string(" generation ");
+    serial_write_u64((uint64_t)master.generation);
+    serial_write_string(" master ");
+    serial_write_u64((uint64_t)master_fd);
+    serial_write_string(" slave ");
+    serial_write_u64((uint64_t)slave_fd);
+    serial_write_string("\n");
     return 0ULL;
 }
 
@@ -513,6 +524,11 @@ static uint64_t m36_spawn(uint64_t user_path,
 
     if ((parent == NULL) || !process_is_alive(parent) || (parent->pid == 0ULL)) {
         return m36_error(BORING_SYSCALL_EACCES);
+    }
+    /* Legacy LAUNCH fixtures enter Ring3 without a scheduler-owned task.
+     * Reject before allocating a child so callers can use the legacy ABI. */
+    if (task_current_process_id() != parent->pid) {
+        return m36_error(BORING_SYSCALL_ENOTSUP);
     }
     record = m36_record_free();
     if (record == NULL) {
@@ -643,6 +659,11 @@ static uint64_t m36_spawn(uint64_t user_path,
     serial_write_string(" task ");
     serial_write_u64(task_id);
     serial_write_string(record->detached ? " detached\n" : " foreground\n");
+    serial_write_string("boring-spawn: child pid ");
+    serial_write_u64(child->pid);
+    serial_write_string(" cr3 ");
+    serial_write_hex_u64(child->address_space.root_physical);
+    serial_write_string("\n");
     return child->pid;
 }
 
