@@ -60,4 +60,39 @@ x86_64_ring3_payload_cli:
 x86_64_ring3_payload_end:
 .size x86_64_ring3_payload_start, .-x86_64_ring3_payload_start
 
+
+/*
+ * Scheduler-started Ring3 process entry.
+ * RDI = user RIP, RSI = user RSP, DX = user CS, CX = user SS,
+ * R8 = argc, R9 = argv.  Unlike the early Ring3 proof, userspace enters
+ * with IF set so the established timer/input/scheduler path remains live.
+ * Keep this function in .text: the lost M36 tree already proved that placing
+ * this entry in a non-loadable/incorrect section causes a real linker fault.
+ */
+.section .text
+.globl x86_64_enter_ring3_argv
+.type x86_64_enter_ring3_argv, @function
+x86_64_enter_ring3_argv:
+    movq %rdi, %rax
+    movq %r9, %r11
+
+    movw %cx, %r10w
+    movw %r10w, %ds
+    movw %r10w, %es
+
+    movzwq %cx, %r10
+    pushq %r10
+    pushq %rsi
+    pushq $0x202
+    movzwq %dx, %r10
+    pushq %r10
+    pushq %rax
+
+    movq %r8, %rdi
+    movq %r11, %rsi
+    iretq
+
+    ud2
+.size x86_64_enter_ring3_argv, .-x86_64_enter_ring3_argv
+
 .section .note.GNU-stack,"",@progbits
