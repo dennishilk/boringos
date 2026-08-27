@@ -36,6 +36,7 @@ static char mock_launch_path[BORING_SYSCALL_EXEC_PATH_MAX + 1U];
 static char mock_launch_argv[BORING_SYSCALL_ARG_MAX][BORING_SHELL_LINE_MAX + 1U];
 static size_t mock_launch_argc;
 static uint64_t mock_wait_pid;
+static struct boring_spawn_stdio mock_spawn_stdio;
 
 static void test_fail(const char *message) {
     (void)fprintf(stderr, "shell host test failed: %s\n", message);
@@ -98,6 +99,21 @@ long boring_console_read(void *buffer, size_t length) {
     *(char *)buffer = mock_input[mock_input_offset];
     ++mock_input_offset;
     return 1L;
+}
+
+
+long boring_fd_write(uint32_t fd, const void *buffer, size_t length) {
+    if ((fd != BORING_FD_STDOUT) && (fd != BORING_FD_STDERR)) {
+        return -(long)BORING_SYSCALL_EACCES;
+    }
+    return boring_console_write(buffer, length);
+}
+
+long boring_fd_read(uint32_t fd, void *buffer, size_t length) {
+    if (fd != BORING_FD_STDIN) {
+        return -(long)BORING_SYSCALL_EACCES;
+    }
+    return boring_console_read(buffer, length);
 }
 
 long boring_fs_readdir(const char *path,
@@ -217,6 +233,19 @@ long boring_launch_argv(const char *path,
         (void)memcpy(mock_launch_argv[index], argv[index], length + 1U);
     }
     return 3L;
+}
+
+
+long boring_spawn(const char *path, size_t path_length,
+                  const char *const argv[], size_t argc,
+                  const struct boring_spawn_stdio *stdio_config) {
+    const long result = boring_launch_argv(path, path_length, argv, argc);
+
+    if ((result < 0L) || (stdio_config == NULL)) {
+        return (result < 0L) ? result : -(long)BORING_SYSCALL_EINVAL;
+    }
+    mock_spawn_stdio = *stdio_config;
+    return result;
 }
 
 long boring_waitpid(uint64_t pid, int *status) {
@@ -382,6 +411,11 @@ int main(void) {
                  "external command argv0");
     test_require(mock_wait_pid == 3ULL,
                  "external command waitpid");
+    test_require(mock_spawn_stdio.stdin_fd == BORING_FD_STDIN &&
+                 mock_spawn_stdio.stdout_fd == BORING_FD_STDOUT &&
+                 mock_spawn_stdio.stderr_fd == BORING_FD_STDERR &&
+                 mock_spawn_stdio.flags == 0U,
+                 "external command exact stdio binding");
 
     mock_launch_path[0] = '\0';
     mock_launch_argc = 0U;
