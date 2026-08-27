@@ -1,0 +1,268 @@
+)
++        *(.text .text.*)
++    } :text
++
++    . = ALIGN(0x1000);
++    .rodata : ALIGN(0x1000)
++    {
++        *(.rodata .rodata.*)
++    } :rodata
++
++    . = ALIGN(0x1000);
++    .data : ALIGN(8)
++    {
++        *(.data .data.*)
++    } :data
++
++    .bss (NOLOAD) : ALIGN(8)
++    {
++        *(.bss .bss.*)
++        *(COMMON)
++    } :data
++
++    /DISCARD/ :
++    {
++        *(.comment)
++        *(.note*)
++        *(.eh_frame*)
++        *(.gcc_except_table*)
++    }
++}
+diff --git a/user/m36-spawn-parent/main.c b/user/m36-spawn-parent/main.c
+new file mode 100644
+index 0000000..a768de4
+--- /dev/null
++++ b/user/m36-spawn-parent/main.c
+@@ -0,0 +1,232 @@
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++
++#include <boring/string.h>
++#include <boring/syscall.h>
++#include <boring/syscall_abi.h>
++
++#define CAPTURE_CAPACITY 1024U
++#define EXPECTED_MASTER_FD 3U
++#define EXPECTED_SLAVE_FD 4U
++#define EXPECTED_UNRELATED_A 5U
++#define EXPECTED_UNRELATED_B 6U
++
++int boring_main(int argc, char **argv);
++
++static bool console_text(const char *text) {
++    const size_t length = boring_strlen(text);
++    return boring_console_write(text, length) == (long)length;
++}
++
++static bool console_bytes(const char *buffer, size_t length) {
++    return boring_console_write(buffer, length) == (long)length;
++}
++
++static void fail(const char *check) __attribute__((noreturn));
++static void fail(const char *check) {
++    (void)console_text("M36 spawn QEMU FAILED: ");
++    (void)console_text(check);
++    (void)console_text("\n");
++    for (;;) {
++        __asm__ volatile ("pause");
++    }
++}
++
++static bool contains(const char *buffer, size_t length, const char *needle) {
++    const size_t needle_length = boring_strlen(needle);
++    size_t start;
++    size_t index;
++    if ((buffer == NULL) || (needle == NULL) || (needle_length == 0U) ||
++        (needle_length > length)) {
++        return false;
++    }
++    for (start = 0U; start <= length - needle_length; ++start) {
++        for (index = 0U; index < needle_length; ++index) {
++            if (buffer[start + index] != needle[index]) {
++                break;
++            }
++        }
++        if (index == needle_length) {
++            return true;
++        }
++    }
++    return false;
++}
++
++static bool read_until(uint32_t fd, char *buffer, size_t capacity,
++                       size_t *length_in_out, const char *marker) {
++    size_t length = *length_in_out;
++    while (!contains(buffer, length, marker)) {
++        long result;
++        if (length >= capacity) {
++            return false;
++        }
++        result = boring_fd_read(fd, &buffer[length], capacity - length);
++        if ((result <= 0L) || ((size_t)result > capacity - length)) {
++            return false;
++        }
++        length += (size_t)result;
++    }
++    *length_in_out = length;
++    return true;
++}
++
++static bool write_all(uint32_t fd, const char *text) {
++    size_t offset = 0U;
++    const size_t length = boring_strlen(text);
++    while (offset < length) {
++        const long result = boring_fd_write(fd, &text[offset], length - offset);
++        if ((result <= 0L) || ((size_t)result > length - offset)) {
++            return false;
++        }
++        offset += (size_t)result;
++    }
++    return true;
++}
++
++static bool no_child_processes(uint64_t self_pid) {
++    uint64_t index;
++    for (index = 0ULL; index < 8ULL; ++index) {
++        struct boring_process_info info;
++        const long result = boring_process_snapshot(index, &info);
++        if (result < 0L) {
++            return false;
++        }
++        if (result == 0L) {
++            return true;
++        }
++        if (info.pid != self_pid) {
++            return false;
++        }
++    }
++    return false;
++}
++
++int boring_main(int argc, char **argv) {
++    static const char child_path[] = "/bin/ipc-test";
++    static const char readme_path[] = "/README.txt";
++    const char *foreground_argv[3] = {child_path, "foreground", "argv-ok"};
++    const char *detached_argv[2] = {child_path, "detached"};
++    struct boring_pty_create_result pty;
++    struct boring_pty_create_result detached_pty;
++    struct boring_pty_create_result reap_trigger;
++    struct boring_spawn_stdio stdio_config;
++    char capture[CAPTURE_CAPACITY];
++    char eof_probe = 0;
++    size_t capture_length = 0U;
++    long unrelated_a;
++    long unrelated_b;
++    long child_pid;
++    long detached_pid;
++    int status = -1;
++    const uint64_t self_pid = boring_getpid();
++
++    (void)argc;
++    (void)argv;
++    if (!console_text("m36-parent: CPL3 scheduler parent running\n")) {
++        fail("parent console");
++    }
++    if (boring_pty_create(&pty) != 0L ||
++        (pty.master_fd != EXPECTED_MASTER_FD) ||
++        (pty.slave_fd != EXPECTED_SLAVE_FD)) {
++        fail("SYS42 PTY_CREATE");
++    }
++    unrelated_a = boring_fd_open(readme_path, sizeof(readme_path) - 1U,
++                                 BORING_FD_OPEN_READ);
++    unrelated_b = boring_fd_open(readme_path, sizeof(readme_path) - 1U,
++                                 BORING_FD_OPEN_READ);
++    if ((unrelated_a != (long)EXPECTED_UNRELATED_A) ||
++        (unrelated_b != (long)EXPECTED_UNRELATED_B)) {
++        fail("unrelated parent descriptors");
++    }
++
++    stdio_config.stdin_fd = pty.slave_fd;
++    stdio_config.stdout_fd = pty.slave_fd;
++    stdio_config.stderr_fd = pty.slave_fd;
++    stdio_config.flags = 0U;
++    child_pid = boring_spawn(child_path, sizeof(child_path) - 1U,
++                             foreground_argv, 3U, &stdio_config);
++    if (child_pid <= 0L) {
++        fail("SYS43 foreground SPAWN");
++    }
++    if (boring_fd_close(pty.slave_fd) != 0L) {
++        fail("parent local slave close");
++    }
++    if (!read_until(pty.master_fd, capture, sizeof(capture), &capture_length,
++                    "child: stdin-block-ready\n") ||
++        !contains(capture, capture_length, "child: argc-argv PASS\n") ||
++        !contains(capture, capture_length, "child: stdout PASS\n") ||
++        !contains(capture, capture_length, "child: stderr PASS\n") ||
++        !contains(capture, capture_length, "child: no-fd-inheritance PASS\n")) {
++        fail("child stdout stderr argv inheritance");
++    }
++    if (!console_text("m36-parent: child reached blocking stdin\n") ||
++        !write_all(pty.master_fd, "wake-up\n")) {
++        fail("master to child stdin");
++    }
++    if (!read_until(pty.master_fd, capture, sizeof(capture), &capture_length,
++                    "child: exiting\n") ||
++        !contains(capture, capture_length, "child: stdin wake PASS\n") ||
++        !contains(capture, capture_length, "child: stderr-after-wake PASS\n")) {
++        fail("blocked reader wake/output");
++    }
++    if (!console_bytes(capture, capture_length)) {
++        fail("foreground capture relay");
++    }
++    if (boring_fd_read(pty.master_fd, &eof_probe, 1U) != 0L) {
++        fail("child-exit HUP EOF");
++    }
++    if ((boring_waitpid((uint64_t)child_pid, &status) != child_pid) ||
++        (status != 23)) {
++        fail("foreground WAITPID");
++    }
++    if (!no_child_processes(self_pid)) {
++        fail("foreground process reap");
++    }
++    if ((boring_fd_close(pty.master_fd) != 0L) ||
++        (boring_fd_close((uint32_t)unrelated_a) != 0L) ||
++        (boring_fd_close((uint32_t)unrelated_b) != 0L)) {
++        fail("foreground descriptor cleanup");
++    }
++    if (!console_text("m36-parent: foreground PTY/SPAWN/WAITPID PASS\n")) {
++        fail("foreground marker");
++    }
++
++    if (boring_pty_create(&detached_pty) != 0L) {
++        fail("detached PTY_CREATE");
++    }
++    stdio_config.stdin_fd = detached_pty.slave_fd;
++    stdio_config.stdout_fd = detached_pty.slave_fd;
++    stdio_config.stderr_fd = detached_pty.slave_fd;
++    stdio_config.flags = BORING_SPAWN_FLAG_DETACHED;
++    detached_pid = boring_spawn(child_path, sizeof(child_path) - 1U,
++                                detached_argv, 2U, &stdio_config);
++    if (detached_pid <= 0L || boring_fd_close(detached_pty.slave_fd) != 0L) {
++        fail("detached SPAWN/local slave close");
++    }
++    capture_length = 0U;
++    if (!read_until(detached_pty.master_fd, capture, sizeof(capture),
++                    &capture_length, "child: detached stderr PASS\n") ||
++        !contains(capture, capture_length, "child: detached stdout PASS\n") ||
++        !console_bytes(capture, capture_length) ||
++        (boring_fd_read(detached_pty.master_fd, &eof_probe, 1U) != 0L) ||
++        (boring_fd_close(detached_pty.master_fd) != 0L)) {
++        fail("detached output/HUP");
++    }
++
++    /* Any following M36 syscall runs detached auto-reap before dispatch. */
++    if ((boring_pty_create(&reap_trigger) != 0L) ||
++        (boring_fd_close(reap_trigger.master_fd) != 0L) ||
++        (boring_fd_close(reap_trigger.slave_fd) != 0L) ||
++        !no_child_processes(self_pid)) {
++        fail("detached auto-reap/cleanup");
++    }
++    if (!console_text("m36-parent: detached auto-reap PASS\n") ||
++        !console_text("M36 QEMU SPAWN acceptance passed.\n")) {
++        fail("final marker");
++    }
++    for (;;) {
++        __asm__ volatile ("pause");
++    }
++}
