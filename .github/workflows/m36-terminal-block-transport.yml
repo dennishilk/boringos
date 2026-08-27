@@ -1,0 +1,49 @@
+name: M36 terminal block transport
+
+on:
+  push:
+    branches: [agent/native-boring-terminal]
+
+permissions:
+  contents: write
+
+jobs:
+  terminal-block:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: agent/native-boring-terminal
+      - name: Apply and verify terminal block
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = 48039d9d803fbe49b54c17fcf81551da8c8a7711
+          cat .github/m36-terminal.patch.xz.b64.part00 .github/m36-terminal.patch.xz.b64.part01 > /tmp/m36-terminal.patch.xz.b64
+          base64 -d /tmp/m36-terminal.patch.xz.b64 > /tmp/m36-terminal.patch.xz
+          xz -dc /tmp/m36-terminal.patch.xz > /tmp/m36-terminal.patch
+          echo '19cae8c50dc4f97610e8b1e251856b182c1e427db53af3859c4d85dc87b877cc  /tmp/m36-terminal.patch' | sha256sum -c -
+          git apply --check /tmp/m36-terminal.patch
+          git apply /tmp/m36-terminal.patch
+          make terminal-host-test
+          make terminal-render-host-test
+          make user-boring-terminal terminal-audit
+          make user-shell user-boringfetch user-boringwm
+          make wm-host-test
+          make TEST_MODE=m35-wm build/kernel.elf
+      - name: Publish tested terminal source block
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/m36-terminal.patch.xz.b64.part00 \
+                .github/m36-terminal.patch.xz.b64.part01 \
+                .github/workflows/m36-terminal-block-transport.yml
+          git add -A
+          test ! -e .github/m36-terminal.patch.xz.b64.part00
+          test ! -e .github/m36-terminal.patch.xz.b64.part01
+          test ! -e .github/workflows/m36-terminal-block-transport.yml
+          git config user.name 'Dennis Hilk'
+          git config user.email '81433681+dennishilk@users.noreply.github.com'
+          git commit -m 'M36: add native managed terminal client'
+          git push origin HEAD:agent/native-boring-terminal
