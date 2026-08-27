@@ -14,7 +14,9 @@ jobs:
           sudo apt-get install -y qemu-system-x86 xorriso
           mkdir -p portable/usr/bin portable/usr/share
           cp /usr/bin/qemu-system-x86_64 /usr/bin/xorriso portable/usr/bin/
-          ldd /usr/bin/qemu-system-x86_64 /usr/bin/xorriso | awk '$2 == "=>" {print $3}' | sort -u > libraries.txt
+          mkdir -p portable/usr/lib/x86_64-linux-gnu
+          cp -a /usr/lib/x86_64-linux-gnu/qemu portable/usr/lib/x86_64-linux-gnu/
+          ldd /usr/bin/qemu-system-x86_64 /usr/bin/xorriso /usr/lib/x86_64-linux-gnu/qemu/*.so | awk '$2 == "=>" {print $3}' | sort -u > libraries.txt
           printf '%s\n' /lib64/ld-linux-x86-64.so.2 >> libraries.txt
           while read -r library; do
             mkdir -p "portable$(dirname "$library")"

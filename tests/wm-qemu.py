@@ -4,7 +4,8 @@ import json
 import os
 import re
 import runpy
-import socket
+import select
+import shutil
 import subprocess
 import sys
 import time
@@ -17,21 +18,36 @@ ORACLE = runpy.run_path(str(ROOT / "tests/validate-wm-screenshot.py"))
 
 def run(mode):
     out = ROOT / "build" / ("m35-wm-death" if mode == "m35-wm-death" else "m35-wm-reference")
+    if out.exists():
+        shutil.rmtree(out)
     out.mkdir(parents=True, exist_ok=True)
     log_path = out / "serial.log"
     log_path.write_text("")
-    qmp_path = out / "qmp.sock"
-    qmp_path.unlink(missing_ok=True)
     with (out / "build.log").open("w") as build:
         subprocess.run(["make", f"TEST_MODE={mode}"], cwd=ROOT, stdout=build, stderr=subprocess.STDOUT, check=True)
     qemu_log = (out / "qemu.log").open("w")
     vm = subprocess.Popen([os.environ.get("QEMU", "qemu-system-x86_64"), "-M", "q35", "-cpu",
                            os.environ.get("QEMU_CPU", "qemu64,apic=off"), "-m", "128M", "-cdrom",
                            str(ROOT / "build/boringos.iso"), "-boot", "d", "-vga", "std", "-display", "none",
-                           "-serial", f"file:{log_path}", "-monitor", "none", "-qmp",
-                           f"unix:{qmp_path},server=on,wait=off", "-no-reboot", "-no-shutdown"],
-                          stdout=subprocess.DEVNULL, stderr=qemu_log)
+                           "-serial", f"file:{log_path}", "-monitor", "none", "-qmp", "stdio",
+                           "-no-reboot", "-no-shutdown"],
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=qemu_log, bufsize=0)
     cursor = None
+    qmp_ready = False
+
+    class QmpPipes:
+        def readline(self):
+            if not select.select([vm.stdout], [], [], 10)[0]:
+                raise RuntimeError("QMP pipe response timeout")
+            return vm.stdout.readline()
+
+        def write(self, data):
+            return vm.stdin.write(data)
+
+        def flush(self):
+            return vm.stdin.flush()
+
+    pipes = QmpPipes()
 
     def log():
         return log_path.read_text(errors="replace")
@@ -54,13 +70,12 @@ def run(mode):
         return wait(lambda output: text in output, text)
 
     def command(name, arguments=None):
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.settimeout(10)
-            connection.connect(str(qmp_path))
-            with connection.makefile("rwb", buffering=0) as stream:
-                QMP["receive_message"](stream)
-                QMP["execute"](stream, "qmp_capabilities")
-                result = QMP["execute"](stream, name, arguments)
+        nonlocal qmp_ready
+        if not qmp_ready:
+            QMP["receive_message"](pipes)
+            QMP["execute"](pipes, "qmp_capabilities")
+            qmp_ready = True
+        result = QMP["execute"](pipes, name, arguments)
         with (out / "qmp.log").open("a") as record:
             record.write(json.dumps({"command": name, "arguments": arguments, "result": result}) + "\n")
         return result
@@ -162,7 +177,8 @@ def run(mode):
         except subprocess.TimeoutExpired:
             vm.kill(); vm.wait()
         qemu_log.close()
-        qmp_path.unlink(missing_ok=True)
+        vm.stdin.close()
+        vm.stdout.close()
 
 
 if __name__ == "__main__":
