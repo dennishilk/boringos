@@ -4,6 +4,7 @@
 
 #include <boring/cpu.h>
 #include <boring/process.h>
+#include <boring/pty.h>
 
 static struct process bootstrap_process;
 static struct process processes[KERNEL_PROCESS_MAX];
@@ -118,7 +119,7 @@ bool process_init(void) {
     for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
         process_clear(&processes[index]);
     }
-    if (!user_memory_system_init() ||
+    if (!pty_init() || !user_memory_system_init() ||
         !address_space_system_init(&bootstrap_process.address_space)) {
         process_clear(&bootstrap_process);
         process_restore_interrupts(interrupts_were_enabled);
@@ -151,6 +152,28 @@ struct process *process_current(void) {
         return NULL;
     }
     return current_process;
+}
+
+struct process *process_find_pid(uint64_t pid) {
+    size_t index;
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+    struct process *found = NULL;
+
+    x86_64_interrupts_disable();
+    if (process_initialized) {
+        if ((pid == KERNEL_BOOTSTRAP_PID) && bootstrap_process.slot_used) {
+            found = &bootstrap_process;
+        } else {
+            for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
+                if (processes[index].slot_used && (processes[index].pid == pid)) {
+                    found = &processes[index];
+                    break;
+                }
+            }
+        }
+    }
+    process_restore_interrupts(interrupts_were_enabled);
+    return found;
 }
 
 bool process_create(struct process **process_out) {
