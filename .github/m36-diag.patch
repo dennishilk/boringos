@@ -1,8 +1,8 @@
 diff --git a/user/boring-display/server.c b/user/boring-display/server.c
-index 54034ac..07e6868 100644
+index 51ff334..6fd7bfc 100644
 --- a/user/boring-display/server.c
 +++ b/user/boring-display/server.c
-@@ -105,6 +105,7 @@ static void control(uint32_t endpoint, const struct display_control *r) {
+@@ -112,17 +112,22 @@ static void control(uint32_t endpoint, const struct display_control *r) {
              }
              if (probe > 0L) { (void)boring_ipc_close((uint32_t)probe); }
          } else if (r->type == DISPLAY_INPUT_ACK) {
@@ -10,7 +10,6 @@ index 54034ac..07e6868 100644
              if ((endpoint == managed.manager_endpoint) && input_pending) {
                  input_pending = false;
                  return; /* ACK itself has no reply. */
-@@ -112,12 +113,16 @@ static void control(uint32_t endpoint, const struct display_control *r) {
              }
              status = BORING_DISPLAY_STATUS_ACCESS;
          } else {
@@ -27,10 +26,10 @@ index 54034ac..07e6868 100644
  
  static void receive(uint32_t endpoint) {
 diff --git a/user/boring-terminal/main.c b/user/boring-terminal/main.c
-index e011b83..17af493 100644
+index e3bfe01..52fa739 100644
 --- a/user/boring-terminal/main.c
 +++ b/user/boring-terminal/main.c
-@@ -397,6 +397,7 @@ int boring_main(void) {
+@@ -397,6 +397,7 @@ int boring_main(int argc, char **argv) {
          if (ready <= 0L) {
              term_fail("EVENT_WAIT");
          }
@@ -38,7 +37,7 @@ index e011b83..17af493 100644
          if (watches[0].events != 0U) {
              struct boring_wm_message event;
              struct boring_ipc_receive_result received;
-@@ -412,6 +413,7 @@ int boring_main(void) {
+@@ -411,6 +412,7 @@ int boring_main(int argc, char **argv) {
                  term_fail("WM event envelope");
              }
              if (event.type == BORING_WM_CONFIGURE) {
@@ -46,7 +45,7 @@ index e011b83..17af493 100644
                  configure(&event);
              } else if (event.type == BORING_WM_KEY) {
                  handle_key(&event);
-@@ -424,6 +426,7 @@ int boring_main(void) {
+@@ -423,6 +425,7 @@ int boring_main(int argc, char **argv) {
          }
          if (watches[1].events != 0U) {
              if ((watches[1].events & BORING_EVENT_READ) != 0U) {
@@ -55,7 +54,7 @@ index e011b83..17af493 100644
              }
              if ((watches[1].events & BORING_EVENT_HUP) != 0U) {
 diff --git a/user/boringwm/main.c b/user/boringwm/main.c
-index c2e08ab..d7446b5 100644
+index 2ab98ab..272d004 100644
 --- a/user/boringwm/main.c
 +++ b/user/boringwm/main.c
 @@ -77,7 +77,9 @@ static void sync_layout(void) {
@@ -68,7 +67,7 @@ index c2e08ab..d7446b5 100644
          if (reply.status != BORING_DISPLAY_STATUS_OK) { drop(c->endpoint); index = 0U; continue; }
          configure.version = BORING_WM_VERSION; configure.type = BORING_WM_CONFIGURE;
          configure.token = c->token; configure.surface = c->surface;
-@@ -85,12 +87,15 @@ static void sync_layout(void) {
+@@ -85,13 +87,16 @@ static void sync_layout(void) {
          configure.height = place.height; configure.border = place.border;
          configure.focused = wm.focus == c->token ? 1U : 0U;
          if (!app_send(c->endpoint, &configure)) { index = 0U; continue; }
