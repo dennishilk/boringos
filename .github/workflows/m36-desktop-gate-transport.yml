@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   graphical-desktop-qemu:
-    if: "${{ github.event.head_commit.message == 'M36: stage graphical desktop QEMU gate' }}"
+    if: "${{ github.event.head_commit.message == 'M36: stage graphical desktop QEMU gate stack fix' }}"
     runs-on: ubuntu-24.04
     steps:
       - name: Check out exact feature branch
@@ -22,13 +22,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = "65ce343efff3ab0547c35192a5ab98c93175e966"
+          test "$(git rev-parse HEAD^)" = "babfdcc9d07cf1e621d0182660e23971d050425e"
           cat .github/m36-desktop.patch.part00 \
               .github/m36-desktop.patch.part01 \
               .github/m36-desktop.patch.part02 > /tmp/m36-desktop.patch
           echo '1fe71f0861fc31d233bde39624b402419c8b965c9a4f24bf2f43fe8628bc5e35  /tmp/m36-desktop.patch' | sha256sum -c -
           git apply --check /tmp/m36-desktop.patch
           git apply /tmp/m36-desktop.patch
+          echo '509272be600fe571233528ec62ff7ba10553561e53fe8cb1758afd4fdf053997  .github/m36-stackfix.patch' | sha256sum -c -
+          git apply --check .github/m36-stackfix.patch
+          git apply .github/m36-stackfix.patch
 
       - name: Install exact QEMU build dependencies
         run: |
@@ -40,8 +43,9 @@ jobs:
         run: |
           set -euo pipefail
           sh tests/m36-bundle-test.sh
-          make terminal-host-test terminal-render-host-test wm-host-test
+          make pty-host-test fd-host-test shell-host-test terminal-host-test terminal-render-host-test wm-host-test
           sh tests/terminal-build-audit.sh
+          sh tests/shell-build-audit.sh
           python3 -m py_compile tests/m36-desktop-qemu.py tests/validate-m36-terminal-screenshot.py
 
       - name: Run real graphical QMP terminal acceptance
@@ -68,10 +72,12 @@ jobs:
           rm -f .github/m36-desktop.patch.part00 \
                 .github/m36-desktop.patch.part01 \
                 .github/m36-desktop.patch.part02 \
+                .github/m36-stackfix.patch \
                 .github/workflows/m36-desktop-gate-transport.yml
           test ! -e .github/m36-desktop.patch.part00
           test ! -e .github/m36-desktop.patch.part01
           test ! -e .github/m36-desktop.patch.part02
+          test ! -e .github/m36-stackfix.patch
           test ! -e .github/workflows/m36-desktop-gate-transport.yml
           git add -A
           git diff --cached --check
