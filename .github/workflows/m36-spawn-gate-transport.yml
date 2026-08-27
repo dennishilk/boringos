@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   real-spawn-qemu:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'M36: stage real spawn QEMU gate' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Check out exact feature branch
@@ -23,8 +22,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = 4d93197f2b40719036b86ada14d99d03d4e051d4
-          test "$(git show -s --format=%s HEAD)" = 'M36: stage real spawn QEMU gate'
+          git merge-base --is-ancestor 4d93197f2b40719036b86ada14d99d03d4e051d4 HEAD
+          test -f .github/m36-spawn-gate.patch.part00
+          test -f .github/m36-spawn-gate.patch.part01
+          test -f .github/m36-spawn-gate.patch.part02
           cat .github/m36-spawn-gate.patch.part00 \
               .github/m36-spawn-gate.patch.part01 \
               .github/m36-spawn-gate.patch.part02 > /tmp/m36-spawn-gate.patch
