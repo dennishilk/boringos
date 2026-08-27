@@ -69,7 +69,10 @@ jobs:
                 .github/workflows/m36-foundation-reconstruct.yml
 
           git add -A
-          test -z "$(git diff --cached --name-only | grep -E '^\.github/m36-foundation\.patch|^\.github/workflows/m36-foundation-reconstruct\.yml$' || true)"
+          test ! -e .github/m36-foundation.patch.part00
+          test ! -e .github/m36-foundation.patch.part01
+          test ! -e .github/m36-foundation.patch.part02
+          test ! -e .github/workflows/m36-foundation-reconstruct.yml
           git config user.name 'Dennis Hilk'
           git config user.email '81433681+dennishilk@users.noreply.github.com'
           git commit -m 'M36: complete reconstructed spawn foundation'
