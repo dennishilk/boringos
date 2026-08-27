@@ -111,6 +111,7 @@ BOOT_EXTRA4_USER_ELF :=
 BOOT_LIMINE_CONF := limine.conf
 
 TEST_MODE ?= normal
+TEST_CPPFLAGS :=
 ifeq ($(TEST_MODE),normal)
 TEST_MODE_VALUE := 0
 TEST_HARNESS_C := kernel/core/syscall_test.c
@@ -205,6 +206,15 @@ TEST_HARNESS_C := kernel/core/m36_spawn_test.c kernel/core/m36_spawn_test_adapte
 BOOT_USER_ELF := $(M36_SPAWN_PARENT_ELF)
 BOOT_USER_NAME := m36-spawn-parent.elf
 BOOT_LIMINE_CONF := limine-m36-spawn.conf
+else ifeq ($(TEST_MODE),m36-desktop)
+TEST_MODE_VALUE := 5
+TEST_CPPFLAGS := -DBORING_M36_DESKTOP_ACCEPTANCE=1
+TEST_HARNESS_C := kernel/core/m36_desktop_test.c kernel/core/m36_desktop_test_adapter.c
+BOOT_USER_ELF := $(DISPLAY_WM_ELF)
+BOOT_USER_NAME := boring-display.elf
+BOOT_EXTRA_USER_ELF := $(WM_ELF)
+BOOT_EXTRA_USER_NAME := boringwm.elf
+BOOT_LIMINE_CONF := limine-m36-desktop.conf
 else ifeq ($(TEST_MODE),m34-display)
 # Reuse the established special-test entry seam (value 5); the adapter below
 # routes it to the dedicated three-process display_test_run() harness.
@@ -233,7 +243,7 @@ BOOT_EXTRA3_USER_ELF := $(USER_BUILD_DIR)/wm-client-b.elf
 BOOT_EXTRA4_USER_ELF := $(USER_BUILD_DIR)/wm-client-c.elf
 BOOT_LIMINE_CONF := limine-wm.conf
 else
-$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, block, virtio-block, boringfs-ro, boringfs-rw, persistent-root, m33-ipc, or m34-display, m35-wm, m35-wm-death, or m36-spawn)
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, block, virtio-block, boringfs-ro, boringfs-rw, persistent-root, m33-ipc, or m34-display, m35-wm, m35-wm-death, m36-spawn, or m36-desktop)
 endif
 
 LIMINE_VERSION := 12.5.2
@@ -242,7 +252,7 @@ LIMINE_DIR := $(BUILD_DIR)/deps/limine-binary
 LIMINE_SHA256 := 4c760c09c53560d859b362319a3dc63b79cca3d47f35d69ab0106a13b8057055
 LIMINE_URL := https://github.com/Limine-Bootloader/Limine/releases/download/v$(LIMINE_VERSION)/limine-binary.tar.gz
 
-CPPFLAGS := -Ikernel/include -Ilibs/boringfs/include -DBORING_TEST_MODE=$(TEST_MODE_VALUE)
+CPPFLAGS := -Ikernel/include -Ilibs/boringfs/include -DBORING_TEST_MODE=$(TEST_MODE_VALUE) $(TEST_CPPFLAGS)
 CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
 	-m64 -mno-80387 -mno-mmx -mno-sse -mno-sse2 \
 	-mno-red-zone -mcmodel=kernel -O2 -g \
@@ -313,6 +323,7 @@ KERNEL_C_SOURCES := \
 	kernel/core/ring3_test.c \
 	kernel/core/syscall.c \
 	kernel/core/m36_syscall.c \
+	kernel/core/spawn_stack.c \
 	kernel/core/elf_boot.c \
 	kernel/core/elf_loader.c \
 	kernel/core/elf_vfs.c \
@@ -949,3 +960,10 @@ terminal-render-host-test: $(TERMINAL_RENDER_HOST_TEST)
 
 terminal-audit: $(TERMINAL_ELF)
 	sh ./tests/terminal-build-audit.sh
+
+.PHONY: spawn-stack-host-test
+spawn-stack-host-test: $(BUILD_DIR)/spawn-stack-host-test
+	$<
+$(BUILD_DIR)/spawn-stack-host-test: tests/spawn-stack-host-test.c kernel/core/spawn_stack.c kernel/include/boring/spawn_stack.h kernel/include/boring/elf_loader.h kernel/include/boring/syscall_abi.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) tests/spawn-stack-host-test.c kernel/core/spawn_stack.c -o $@

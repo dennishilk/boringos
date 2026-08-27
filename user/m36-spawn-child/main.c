@@ -60,8 +60,19 @@ static bool read_line(char *buffer, size_t capacity) {
 }
 
 int boring_main(int argc, char **argv) {
+    /* Force a real entry frame larger than one page, including with GCC
+     * stack-clash probes; retain it across the blocking stdin schedule. */
+    volatile uint8_t startup_stack[4096U + 128U];
+    size_t stack_index;
     char input[CHILD_INPUT_CAPACITY];
     char probe = 0;
+
+    for (stack_index = 0U; stack_index < sizeof(startup_stack); ++stack_index) {
+        startup_stack[stack_index] = (uint8_t)(stack_index ^ 0x5aU);
+    }
+    if (!write_all(BORING_FD_STDOUT, "child: startup stack pages PASS\n")) {
+        boring_exit(97);
+    }
 
     if ((argc == 2) && text_equal(argv[0], "/bin/ipc-test") &&
         text_equal(argv[1], "detached")) {
@@ -92,6 +103,11 @@ int boring_main(int argc, char **argv) {
     }
     if (!read_line(input, sizeof(input)) || !text_equal(input, "wake-up\n")) {
         boring_exit(95);
+    }
+    for (stack_index = 0U; stack_index < sizeof(startup_stack); ++stack_index) {
+        if (startup_stack[stack_index] != (uint8_t)(stack_index ^ 0x5aU)) {
+            boring_exit(98);
+        }
     }
     if (!write_all(BORING_FD_STDOUT, "child: stdin wake PASS\n") ||
         !write_all(BORING_FD_STDERR, "child: stderr-after-wake PASS\n") ||

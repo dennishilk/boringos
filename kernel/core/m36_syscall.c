@@ -14,20 +14,13 @@
 #include <boring/process.h>
 #include <boring/ring3_memory.h>
 #include <boring/serial.h>
+#include <boring/spawn_stack.h>
 #include <boring/syscall.h>
 #include <boring/syscall_abi.h>
 #include <boring/task.h>
 #include <boring/user_memory.h>
 #include <boring/vfs.h>
 #include <boring/vmm.h>
-
-#define M36_PROGRAM_STACK_BASE 0x0000000040010000ULL
-#define M36_PROGRAM_STACK_SIZE ((size_t)BORING_ELF_PAGE_SIZE)
-#define M36_ARG_RUNTIME_RESERVE 2048U
-#define M36_ARG_POINTER_BYTES \
-    (((size_t)BORING_SYSCALL_ARG_MAX + 1U) * sizeof(uint64_t))
-#define M36_ARG_BLOCK_MAX \
-    (M36_ARG_POINTER_BYTES + (size_t)BORING_SYSCALL_ARG_BYTES_MAX + 15U)
 
 struct m36_launch_arguments {
     size_t argc;
@@ -245,36 +238,22 @@ static bool m36_prepare_arguments(struct process *child,
                                   const struct m36_launch_arguments *arguments,
                                   uintptr_t *rsp_out,
                                   uintptr_t *argv_out) {
-    uint8_t block[M36_ARG_BLOCK_MAX];
+    uint8_t block[BORING_SPAWN_ARG_BLOCK_MAX];
     size_t pointer_bytes;
     size_t block_size;
-    size_t aligned_size;
     uintptr_t rsp;
     size_t index;
 
     if ((child == NULL) || (image == NULL) || (arguments == NULL) ||
         (rsp_out == NULL) || (argv_out == NULL) ||
-        (arguments->argc == 0U) ||
-        (arguments->argc > (size_t)BORING_SYSCALL_ARG_MAX)) {
+        !boring_spawn_stack_layout(image->stack_base, image->stack_top,
+                                    arguments->argc, arguments->total_bytes,
+                                    &rsp, &block_size)) {
         return false;
     }
     pointer_bytes = (arguments->argc + 1U) * sizeof(uint64_t);
     if ((pointer_bytes > sizeof(block)) ||
         (arguments->total_bytes > sizeof(block) - pointer_bytes)) {
-        return false;
-    }
-    block_size = pointer_bytes + arguments->total_bytes;
-    if (block_size > SIZE_MAX - 15U) {
-        return false;
-    }
-    aligned_size = (block_size + 15U) & ~(size_t)15U;
-    if ((aligned_size > M36_PROGRAM_STACK_SIZE) ||
-        ((size_t)M36_ARG_RUNTIME_RESERVE >
-         M36_PROGRAM_STACK_SIZE - aligned_size)) {
-        return false;
-    }
-    rsp = image->stack_top - (uintptr_t)aligned_size;
-    if ((rsp & 0x0fU) != 0U) {
         return false;
     }
     m36_zero(block, sizeof(block));
@@ -601,8 +580,8 @@ static uint64_t m36_spawn(uint64_t user_path,
                                   BORING_SYSCALL_EACCES);
     }
     if (!boring_elf_load_source(child, &source.source,
-                                (uintptr_t)M36_PROGRAM_STACK_BASE,
-                                M36_PROGRAM_STACK_SIZE, &image)) {
+                                BORING_SPAWN_STACK_BASE,
+                                BORING_SPAWN_STACK_SIZE, &image)) {
         (void)boring_elf_vfs_source_close(&source);
         return m36_spawn_rollback(child, &image, false,
                                   BORING_SYSCALL_ENOEXEC);

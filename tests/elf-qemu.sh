@@ -73,6 +73,7 @@ for line in \
     '  malformed-no-allocation: PASS' \
     '  nx-enabled: PASS' \
     '  process-created: PASS' \
+    '  bounded-stack-mapping: PASS' \
     '  load-segments: PASS' \
     '  segment-permissions: PASS' \
     '  entry-executable: PASS' \

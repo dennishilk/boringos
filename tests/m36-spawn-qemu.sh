@@ -73,6 +73,7 @@ for line in \
     'boring-spawn: argc 3' \
     'boring-spawn: stdio child 0<-4 1<-4 2<-4' \
     'child: argc-argv PASS' \
+    'child: startup stack pages PASS' \
     'child: stdout PASS' \
     'child: stderr PASS' \
     'child: no-fd-inheritance PASS' \

@@ -256,7 +256,7 @@ static uint64_t syscall_system_info(uint64_t user_info) {
                               "memory")) {
         return syscall_error(BORING_SYSCALL_EIO);
     }
-#elif BORING_TEST_MODE == 15
+#elif (BORING_TEST_MODE == 15) || defined(BORING_M36_DESKTOP_ACCEPTANCE)
     if (!syscall_copy_literal(info.root_fs, sizeof(info.root_fs), "BoringFS") ||
         !syscall_copy_literal(info.root_device, sizeof(info.root_device),
                               "virtio-blk")) {
