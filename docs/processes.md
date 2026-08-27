@@ -33,8 +33,9 @@ It copies the preserved status to checked userspace memory, destroys the
 inactive child address space, releases the retained CWD, clears the process
 slot and closes the suspended-launch record. PID 1 then launches the next
 shell. Repeated acceptance proves that an old zombie disappears from `ps`
-before the replacement shell is used and that the four-slot table does not
-exhaust.
+before the replacement shell is used and that the historical four-slot table
+does not exhaust. M35 raises ordinary process capacity to eight, separate from
+PID 0, for the display/WM/client session.
 
 Slots are reusable only after successful reap. PID numbers remain
 monotonically allocated and are not reused in M27; there are no PID

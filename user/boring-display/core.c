@@ -362,7 +362,7 @@ static bool compose_surfaces(const struct boring_display_core *core,
     return true;
 }
 
-static void compose_cursor(const struct boring_display_core *core, uint8_t *output) {
+void boring_display_compose_cursor(const struct boring_display_core *core, uint8_t *output) {
     uint32_t row;
 
     for (row = 0U; row < 12U; ++row) {
@@ -403,6 +403,6 @@ bool boring_display_compose(const struct boring_display_core *core,
     if (!compose_surfaces(core, output)) {
         return false;
     }
-    compose_cursor(core, output);
+    boring_display_compose_cursor(core, output);
     return true;
 }

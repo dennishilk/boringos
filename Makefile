@@ -13,6 +13,12 @@ RUNTIME_MEMORY_OBJECT := $(USER_BUILD_DIR)/runtime/memory.o
 RUNTIME_STRING_OBJECT := $(USER_BUILD_DIR)/runtime/string.o
 IPC_RUNTIME_OBJECT := $(USER_BUILD_DIR)/runtime/ipc.o
 DISPLAY_RUNTIME_OBJECT := $(USER_BUILD_DIR)/runtime/display.o
+EVENT_RUNTIME_OBJECT := $(USER_BUILD_DIR)/runtime/event.o
+DESKTOP_COMMON := $(RUNTIME_ENTRY_OBJECT) $(RUNTIME_SYSCALL_OBJECT) $(RUNTIME_MEMORY_OBJECT) $(RUNTIME_STRING_OBJECT) $(IPC_RUNTIME_OBJECT) $(EVENT_RUNTIME_OBJECT)
+WM_ELF := $(USER_BUILD_DIR)/boringwm.elf
+WM_DEATH_ELF := $(USER_BUILD_DIR)/boringwm-death.elf
+DISPLAY_WM_ELF := $(USER_BUILD_DIR)/boring-display-wm.elf
+WM_CLIENT_ELFS := $(USER_BUILD_DIR)/wm-client-a.elf $(USER_BUILD_DIR)/wm-client-b.elf $(USER_BUILD_DIR)/wm-client-c.elf
 RUNTIME_COMMON_OBJECTS := $(RUNTIME_ENTRY_OBJECT) $(RUNTIME_SYSCALL_OBJECT) \
 	$(RUNTIME_MEMORY_OBJECT) $(RUNTIME_STRING_OBJECT)
 RUNTIME_MAIN_OBJECT := $(USER_BUILD_DIR)/runtime-smoke/main.o
@@ -93,6 +99,8 @@ BOOT_EXTRA_USER_ELF :=
 BOOT_EXTRA_USER_NAME :=
 BOOT_EXTRA2_USER_ELF :=
 BOOT_EXTRA2_USER_NAME :=
+BOOT_EXTRA3_USER_ELF :=
+BOOT_EXTRA4_USER_ELF :=
 BOOT_LIMINE_CONF := limine.conf
 
 TEST_MODE ?= normal
@@ -196,6 +204,21 @@ BOOT_EXTRA_USER_NAME := display-client-a.elf
 BOOT_EXTRA2_USER_ELF := $(DISPLAY_CLIENT_B_ELF)
 BOOT_EXTRA2_USER_NAME := display-client-b.elf
 BOOT_LIMINE_CONF := limine-display.conf
+else ifneq ($(filter $(TEST_MODE),m35-wm m35-wm-death),)
+TEST_MODE_VALUE := 5
+TEST_HARNESS_C := kernel/core/wm_test.c kernel/core/wm_test_adapter.c
+BOOT_USER_ELF := $(DISPLAY_WM_ELF)
+BOOT_USER_NAME := boring-display.elf
+BOOT_EXTRA_USER_ELF := $(WM_ELF)
+ifeq ($(TEST_MODE),m35-wm-death)
+BOOT_EXTRA_USER_ELF := $(WM_DEATH_ELF)
+endif
+BOOT_EXTRA_USER_NAME := boringwm.elf
+BOOT_EXTRA2_USER_ELF := $(USER_BUILD_DIR)/wm-client-a.elf
+BOOT_EXTRA2_USER_NAME := wm-client-a.elf
+BOOT_EXTRA3_USER_ELF := $(USER_BUILD_DIR)/wm-client-b.elf
+BOOT_EXTRA4_USER_ELF := $(USER_BUILD_DIR)/wm-client-c.elf
+BOOT_LIMINE_CONF := limine-wm.conf
 else
 $(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, block, virtio-block, boringfs-ro, boringfs-rw, persistent-root, m33-ipc, or m34-display)
 endif
@@ -260,6 +283,7 @@ KERNEL_C_SOURCES := \
 	kernel/core/ipc.c \
 	kernel/core/ipc_syscall.c \
 	kernel/core/display_syscall.c \
+	kernel/core/event_syscall.c \
 	kernel/core/display_test_stub.c \
 	kernel/core/ipc_test.c \
 	kernel/core/vfs.c \
@@ -709,7 +733,7 @@ $(LIMINE_DIR)/limine: $(LIMINE_ARCHIVE)
 	tar -xzf $(LIMINE_ARCHIVE) -C $(BUILD_DIR)/deps
 	$(MAKE) -C $(LIMINE_DIR) CC="$(HOST_CC)"
 
-$(ISO): $(KERNEL_ELF) $(BOOT_USER_ELF) $(BOOT_EXTRA_USER_ELF) $(BOOT_EXTRA2_USER_ELF) $(LIMINE_DIR)/limine $(BOOT_LIMINE_CONF)
+$(ISO): $(KERNEL_ELF) $(BOOT_USER_ELF) $(BOOT_EXTRA_USER_ELF) $(BOOT_EXTRA2_USER_ELF) $(BOOT_EXTRA3_USER_ELF) $(BOOT_EXTRA4_USER_ELF) $(LIMINE_DIR)/limine $(BOOT_LIMINE_CONF)
 	rm -rf $(ISO_ROOT)
 	mkdir -p $(ISO_ROOT)/boot/limine $(ISO_ROOT)/boot/user $(ISO_ROOT)/EFI/BOOT
 	cp $(KERNEL_ELF) $(ISO_ROOT)/boot/kernel.elf
@@ -721,6 +745,8 @@ $(ISO): $(KERNEL_ELF) $(BOOT_USER_ELF) $(BOOT_EXTRA_USER_ELF) $(BOOT_EXTRA2_USER
 		cp $(BOOT_EXTRA2_USER_ELF) $(ISO_ROOT)/boot/user/$(BOOT_EXTRA2_USER_NAME); \
 	fi
 	cp $(BOOT_LIMINE_CONF) $(ISO_ROOT)/boot/limine/limine.conf
+	@if [ -n "$(BOOT_EXTRA3_USER_ELF)" ]; then cp $(BOOT_EXTRA3_USER_ELF) $(ISO_ROOT)/boot/user/wm-client-b.elf; fi
+	@if [ -n "$(BOOT_EXTRA4_USER_ELF)" ]; then cp $(BOOT_EXTRA4_USER_ELF) $(ISO_ROOT)/boot/user/wm-client-c.elf; fi
 	cp $(LIMINE_DIR)/limine-bios.sys $(ISO_ROOT)/boot/limine/
 	cp $(LIMINE_DIR)/limine-bios-cd.bin $(ISO_ROOT)/boot/limine/
 	cp $(LIMINE_DIR)/limine-uefi-cd.bin $(ISO_ROOT)/boot/limine/
@@ -795,3 +821,52 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 distclean: clean
+
+# M35 is additive: the M34 service/client binaries and tests remain intact.
+.PHONY: user-boringwm wm-host-test wm-audit
+user-boringwm: $(WM_ELF) $(WM_DEATH_ELF) $(DISPLAY_WM_ELF) $(WM_CLIENT_ELFS)
+
+$(USER_BUILD_DIR)/runtime/event.o: user/runtime/event.c user/runtime/include/boring/event.h kernel/include/boring/event_abi.h kernel/include/boring/syscall_abi.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(USER_BUILD_DIR)/boringwm/%.o: user/boringwm/%.c user/boringwm/core.h user/runtime/include/boring/wm.h user/runtime/include/boring/display_control.h user/runtime/include/boring/desktop_log.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(USER_BUILD_DIR)/boringwm/death.o: user/boringwm/main.c user/boringwm/core.h user/runtime/include/boring/wm.h user/runtime/include/boring/display_control.h user/runtime/include/boring/desktop_log.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -DBORING_WM_DEATH_ACCEPTANCE -c $< -o $@
+
+$(USER_BUILD_DIR)/boring-display/%.o: user/boring-display/%.c user/boring-display/managed.h user/boring-display/core.h user/runtime/include/boring/display_control.h user/runtime/include/boring/desktop_log.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
+$(WM_ELF): $(DESKTOP_COMMON) $(USER_BUILD_DIR)/boringwm/core.o $(USER_BUILD_DIR)/boringwm/main.o
+	$(LD) $(DISPLAY_LDFLAGS) $^ -o $@
+
+$(WM_DEATH_ELF): $(DESKTOP_COMMON) $(USER_BUILD_DIR)/boringwm/core.o $(USER_BUILD_DIR)/boringwm/death.o
+	$(LD) $(DISPLAY_LDFLAGS) $^ -o $@
+
+$(DISPLAY_WM_ELF): $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(BORING_DISPLAY_CORE_OBJECT) $(USER_BUILD_DIR)/boring-display/managed.o $(USER_BUILD_DIR)/boring-display/server.o
+	$(LD) $(DISPLAY_LDFLAGS) $^ -o $@
+
+$(USER_BUILD_DIR)/wm-client-a.o: user/wm-client/main.c user/runtime/include/boring/wm.h user/runtime/include/boring/display_control.h user/runtime/include/boring/desktop_log.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -DWM_CLIENT_ID=1 -c $< -o $@
+$(USER_BUILD_DIR)/wm-client-b.o: user/wm-client/main.c user/runtime/include/boring/wm.h user/runtime/include/boring/display_control.h user/runtime/include/boring/desktop_log.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -DWM_CLIENT_ID=2 -c $< -o $@
+$(USER_BUILD_DIR)/wm-client-c.o: user/wm-client/main.c user/runtime/include/boring/wm.h user/runtime/include/boring/display_control.h user/runtime/include/boring/desktop_log.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -DWM_CLIENT_ID=3 -c $< -o $@
+$(USER_BUILD_DIR)/wm-client-%.elf: $(USER_BUILD_DIR)/wm-client-%.o $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT)
+	$(LD) $(DISPLAY_LDFLAGS) $^ -o $@
+
+$(BUILD_DIR)/wm-host-test: tests/wm-host-test.c user/boringwm/core.c user/boringwm/core.h user/boring-display/managed.c user/boring-display/managed.h user/boring-display/core.c user/boring-display/core.h user/runtime/include/boring/wm.h user/runtime/include/boring/display_control.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(RUNTIME_USER_CPPFLAGS) $(HOST_CFLAGS) tests/wm-host-test.c user/boringwm/core.c user/boring-display/managed.c user/boring-display/core.c -o $@
+wm-host-test: $(BUILD_DIR)/wm-host-test
+	$(BUILD_DIR)/wm-host-test
+wm-audit: user-boringwm
+	sh tests/wm-build-audit.sh

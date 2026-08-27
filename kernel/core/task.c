@@ -630,6 +630,21 @@ bool task_block_current(void) {
     return true;
 }
 
+bool task_wake_pid(uint64_t pid) {
+    size_t index;
+
+    if (!task_initialized || (pid == 0ULL)) {
+        return false;
+    }
+    for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
+        if (tasks[index].slot_used && (tasks[index].process != NULL) &&
+            (tasks[index].process->pid == pid)) {
+            return task_wake_process(tasks[index].process);
+        }
+    }
+    return false;
+}
+
 bool task_wake_process(struct process *process) {
     size_t index;
     bool woke = false;

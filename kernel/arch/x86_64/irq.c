@@ -4,6 +4,7 @@
 
 #include <boring/cpu.h>
 #include <boring/exception.h>
+#include <boring/event_syscall.h>
 #include <boring/i8042.h>
 #include <boring/io.h>
 #include <boring/irq.h>
@@ -258,9 +259,11 @@ struct x86_64_trap_frame *x86_64_irq_dispatch(
     } else if ((irq_number == (uint8_t)X86_64_KEYBOARD_IRQ) && expected &&
                i8042_handle_irq(irq_number)) {
         ++keyboard_irq_count;
+        boring_event_input_irq();
     } else if ((irq_number == (uint8_t)X86_64_MOUSE_IRQ) && expected &&
                i8042_handle_irq(irq_number)) {
         ++mouse_irq_count;
+        boring_event_input_irq();
     } else {
         ++unexpected_irq_count;
     }

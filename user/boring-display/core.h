@@ -63,5 +63,7 @@ void boring_display_cursor_move(struct boring_display_core *core,
 bool boring_display_compose(const struct boring_display_core *core,
                             uint8_t *output,
                             size_t output_size);
+void boring_display_compose_cursor(const struct boring_display_core *core,
+                                   uint8_t *output);
 
 #endif

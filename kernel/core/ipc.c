@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include <boring/ipc.h>
+#include <boring/event_abi.h>
 #include <boring/process.h>
 #include <boring/syscall_abi.h>
 #include <boring/task.h>
@@ -835,6 +836,57 @@ enum boring_ipc_result boring_ipc_receive(
                             BORING_IPC_MESSAGES_PER_DIRECTION);
     --queue->count;
     (void)connection_maybe_destroy(connection);
+    return BORING_IPC_RESULT_OK;
+}
+
+enum boring_ipc_result boring_ipc_poll(struct process *process,
+                                     uint32_t handle, uint32_t *events,
+                                     uint64_t *peer_pid) {
+    struct ipc_handle_entry *entry;
+    struct ipc_connection *connection;
+
+    if (!ipc_initialized || !process_identity_valid(process) ||
+        (events == NULL) || (peer_pid == NULL)) {
+        return BORING_IPC_RESULT_INVALID;
+    }
+    *events = 0U;
+    *peer_pid = 0ULL;
+    entry = lookup_handle(process, handle, (uint8_t)BORING_IPC_HANDLE_LISTENER);
+    if (entry != NULL) {
+        struct ipc_service *service;
+        uint16_t pending;
+        if (entry->object_index >= BORING_IPC_GLOBAL_SERVICE_MAX) {
+            return BORING_IPC_RESULT_INVALID;
+        }
+        service = &services[entry->object_index];
+        if (!service_owner_alive(service) || (service->owner != process) ||
+            (service->owner_pid != process->pid)) {
+            return BORING_IPC_RESULT_INVALID;
+        }
+        if (pending_peek(service, &pending)) {
+            *events = BORING_EVENT_READ;
+        }
+        return BORING_IPC_RESULT_OK;
+    }
+    entry = lookup_handle(process, handle, (uint8_t)BORING_IPC_HANDLE_ENDPOINT);
+    if ((entry == NULL) ||
+        (entry->object_index >= BORING_IPC_GLOBAL_CONNECTION_MAX) ||
+        (entry->side > IPC_SIDE_SERVER)) {
+        return BORING_IPC_RESULT_INVALID;
+    }
+    connection = &connections[entry->object_index];
+    if (!connection->active || !connection_side_open(connection, entry->side)) {
+        return BORING_IPC_RESULT_INVALID;
+    }
+    if (incoming_queue(connection, entry->side)->count != 0U) {
+        *events |= BORING_EVENT_READ;
+    }
+    if (!connection_peer_open(connection, entry->side)) {
+        *events |= BORING_EVENT_HUP;
+    } else {
+        *peer_pid = (entry->side == IPC_SIDE_CLIENT) ?
+                    connection->server_pid : connection->client_pid;
+    }
     return BORING_IPC_RESULT_OK;
 }
 

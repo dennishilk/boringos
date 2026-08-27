@@ -1,0 +1,153 @@
+#include <stddef.h>
+#include <stdint.h>
+#include <boring/cpu.h>
+#include <boring/display_syscall.h>
+#include <boring/event_abi.h>
+#include <boring/event_syscall.h>
+#include <boring/input.h>
+#include <boring/ipc.h>
+#include <boring/process.h>
+#include <boring/ring3_memory.h>
+#include <boring/syscall.h>
+#include <boring/syscall_abi.h>
+#include <boring/task.h>
+#include <boring/vmm.h>
+
+/* No consumption, allocation or authority transfer occurs during a wait. */
+static bool user_copy(uintptr_t address, void *buffer, size_t size, bool out) {
+    struct process *process = process_current();
+    struct vmm_stats stats;
+    uint8_t *bytes = buffer;
+    size_t done = 0U;
+
+    if ((process == NULL) || !process_is_alive(process) ||
+        process->address_space.bootstrap ||
+        !ring3_user_range_valid(address, size) || !vmm_get_stats(&stats)) {
+        return false;
+    }
+    /* Validate the whole writable range before any output is written. */
+    while (done < size) {
+        uint64_t physical;
+        size_t chunk = (size_t)VMM_PAGE_SIZE -
+            (size_t)((address + done) & (VMM_PAGE_SIZE - 1ULL));
+        if (chunk > size - done) {
+            chunk = size - done;
+        }
+        if (!ring3_user_translate(&process->address_space, address + done,
+                                  true, &physical) ||
+            (physical > UINT64_MAX - stats.hhdm_offset)) {
+            return false;
+        }
+        done += chunk;
+    }
+    done = 0U;
+    while (done < size) {
+        uint64_t physical;
+        size_t index;
+        size_t chunk = (size_t)VMM_PAGE_SIZE -
+            (size_t)((address + done) & (VMM_PAGE_SIZE - 1ULL));
+        uint8_t *mapped;
+        if (chunk > size - done) {
+            chunk = size - done;
+        }
+        if (!ring3_user_translate(&process->address_space, address + done,
+                                  true, &physical)) {
+            return false;
+        }
+        mapped = (uint8_t *)(uintptr_t)(stats.hhdm_offset + physical);
+        for (index = 0U; index < chunk; ++index) {
+            if (out) {
+                mapped[index] = bytes[done + index];
+            } else {
+                bytes[done + index] = mapped[index];
+            }
+        }
+        done += chunk;
+    }
+    return true;
+}
+
+static long poll_watches(struct process *process,
+                         struct boring_event_watch *watches, size_t count) {
+    size_t index;
+    long ready = 0L;
+    for (index = 0U; index < count; ++index) {
+        struct boring_event_watch *watch = &watches[index];
+        watch->events = 0U;
+        watch->peer_pid = 0ULL;
+        if (watch->reserved != 0U) {
+            return -(long)BORING_SYSCALL_EINVAL;
+        }
+        if (watch->kind == BORING_EVENT_IPC) {
+            if (boring_ipc_poll(process, watch->handle, &watch->events,
+                                &watch->peer_pid) != BORING_IPC_RESULT_OK) {
+                return -(long)BORING_SYSCALL_EINVAL;
+            }
+        } else if ((watch->kind == BORING_EVENT_INPUT) && (watch->handle == 0U)) {
+            struct boring_input_stats input;
+            if (!boring_input_get_stats(&input) || !input.initialized) {
+                return -(long)BORING_SYSCALL_EINVAL;
+            }
+            if (!input.owned || (input.owner_pid != process->pid)) {
+                return -(long)BORING_SYSCALL_EACCES;
+            }
+            watch->events = (input.queued_events != 0U) ? BORING_EVENT_READ : 0U;
+        } else {
+            return -(long)BORING_SYSCALL_EINVAL;
+        }
+        if (watch->events != 0U) {
+            ++ready;
+        }
+    }
+    return ready;
+}
+
+void boring_event_input_irq(void) {
+    struct boring_input_stats input;
+    if (boring_input_get_stats(&input) && input.owned &&
+        (input.queued_events != 0U)) {
+        (void)task_wake_pid(input.owner_pid);
+    }
+}
+
+void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
+    struct boring_event_watch watches[BORING_EVENT_MAX];
+    struct process *process;
+    size_t count;
+    long result;
+
+    /* Retain all established trusted-stack/SYSRET checks and slots 0..40. */
+    x86_64_syscall_dispatch_m34(frame);
+    if ((frame == NULL) || (frame->syscall_number != BORING_SYS_EVENT_WAIT)) {
+        return;
+    }
+    if ((frame->rsi == 0ULL) || (frame->rsi > BORING_EVENT_MAX) ||
+        ((frame->rdx & ~(uint64_t)BORING_EVENT_QUERY) != 0ULL)) {
+        frame->result = (uint64_t)(-(int64_t)BORING_SYSCALL_EINVAL);
+        return;
+    }
+    count = (size_t)frame->rsi;
+    if (!user_copy((uintptr_t)frame->rdi, watches, count * sizeof(watches[0]), false)) {
+        frame->result = (uint64_t)(-(int64_t)BORING_SYSCALL_EFAULT);
+        return;
+    }
+    process = process_current();
+    for (;;) {
+        x86_64_interrupts_disable();
+        result = poll_watches(process, watches, count);
+        if ((result != 0L) || (frame->rdx == BORING_EVENT_QUERY)) {
+            break;
+        }
+        if (!task_block_current()) {
+            /* Last runnable task: sleep until hardware wakes any waiter. */
+            x86_64_enable_and_halt();
+            x86_64_interrupts_disable();
+            task_yield();
+        }
+    }
+    if ((result >= 0L) &&
+        !user_copy((uintptr_t)frame->rdi, watches, count * sizeof(watches[0]), true)) {
+        result = -(long)BORING_SYSCALL_EFAULT;
+    }
+    frame->result = (uint64_t)(int64_t)result;
+}
