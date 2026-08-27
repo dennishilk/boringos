@@ -29,7 +29,7 @@ jobs:
           cat .github/m36-spawn-gate.patch.part00 \
               .github/m36-spawn-gate.patch.part01 \
               .github/m36-spawn-gate.patch.part02 > /tmp/m36-spawn-gate.patch
-          echo '4c81c6e3c0bacbf6fe5b01491847f7fab4a684ad7b30710b1c04194377098179  /tmp/m36-spawn-gate.patch' | sha256sum -c -
+          echo 'd44d89d0946eda6a8f0fa99c563647f1811f39dbc231b236c45f954a14d3d904  /tmp/m36-spawn-gate.patch' | sha256sum -c -
           git apply --check /tmp/m36-spawn-gate.patch
           git apply /tmp/m36-spawn-gate.patch
 
