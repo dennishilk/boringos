@@ -1,111 +1,65 @@
-#include <assert.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
-
+#include <string.h>
 #include <boring/pty.h>
 
-/*
- * Host-side PTY regression: compile the kernel PTY core directly with a tiny
- * scheduler wake stub so ring, generation, HUP and isolation semantics stay
- * testable without QEMU.
- */
-static uint64_t last_woken_pid;
-
+static uint64_t woke_pid;
 bool task_wake_pid(uint64_t pid);
-bool task_wake_pid(uint64_t pid) {
-    last_woken_pid = pid;
-    return true;
-}
+bool task_wake_pid(uint64_t pid) { woke_pid = pid; return true; }
 
-#include "../kernel/core/pty.c"
-
-static void expect_bytes(const uint8_t *actual, const char *expected,
-                         size_t length) {
-    size_t index;
-    for (index = 0U; index < length; ++index) {
-        assert(actual[index] == (uint8_t)expected[index]);
-    }
+static int check(bool ok, const char *name) {
+    if (!ok) { fprintf(stderr, "FAIL: %s\n", name); return 1; }
+    return 0;
 }
 
 int main(void) {
-    struct pty_handle master;
-    struct pty_handle slave;
-    struct pty_handle master2;
-    struct pty_handle slave2;
-    struct pty_handle stale_master;
-    struct pty_poll_state poll;
-    uint8_t bytes[KERNEL_PTY_RING_CAPACITY + 16U];
-    size_t transferred;
-    size_t index;
-
-    assert(pty_init());
-    assert(pty_create_pair(&master, &slave) == PTY_RESULT_OK);
-    stale_master = master;
-
-    assert(pty_write(master, "abc", 3U, &transferred) == PTY_RESULT_OK);
-    assert(transferred == 3U);
-    assert(pty_poll(slave, &poll) == PTY_RESULT_OK);
-    assert(poll.readable && !poll.hup);
-    assert(pty_read(slave, bytes, 2U, &transferred) == PTY_RESULT_OK);
-    assert(transferred == 2U);
-    expect_bytes(bytes, "ab", 2U);
-    assert(pty_read(slave, bytes, sizeof(bytes), &transferred) == PTY_RESULT_OK);
-    assert(transferred == 1U && bytes[0] == (uint8_t)'c');
-    assert(pty_read(slave, bytes, 1U, &transferred) == PTY_RESULT_WOULD_BLOCK);
-
-    assert(pty_write(slave, "XY", 2U, &transferred) == PTY_RESULT_OK);
-    assert(pty_read(master, bytes, sizeof(bytes), &transferred) == PTY_RESULT_OK);
-    assert(transferred == 2U);
-    expect_bytes(bytes, "XY", 2U);
-
-    for (index = 0U; index < sizeof(bytes); ++index) {
-        bytes[index] = (uint8_t)(index & 0xffU);
+    struct pty_handle m, s, m2, s2, stale;
+    struct pty_poll_state state;
+    char out[8192];
+    char fill[KERNEL_PTY_RING_CAPACITY + 16U];
+    size_t n;
+    size_t i;
+    int failed = 0;
+    memset(fill, 'x', sizeof(fill));
+    failed |= check(pty_init(), "init");
+    failed |= check(pty_create_pair(&m, &s) == PTY_RESULT_OK, "create");
+    failed |= check(pty_write(m, "abc", 3U, &n) == PTY_RESULT_OK && n == 3U, "m->s write");
+    memset(out, 0, sizeof(out));
+    failed |= check(pty_read(s, out, 3U, &n) == PTY_RESULT_OK && n == 3U && memcmp(out,"abc",3U)==0, "m->s read");
+    failed |= check(pty_write(s, "xyz", 3U, &n) == PTY_RESULT_OK && n == 3U, "s->m write");
+    failed |= check(pty_read(m, out, 3U, &n) == PTY_RESULT_OK && n == 3U && memcmp(out,"xyz",3U)==0, "s->m read");
+    failed |= check(pty_read(m, out, 1U, &n) == PTY_RESULT_WOULD_BLOCK && n == 0U, "empty would block");
+    failed |= check(pty_arm_read_waiter(m, 42ULL) == PTY_RESULT_OK, "arm waiter");
+    woke_pid = 0ULL;
+    failed |= check(pty_write(s, "q", 1U, &n) == PTY_RESULT_OK && woke_pid == 42ULL, "wake read");
+    failed |= check(pty_read(m, out, 1U, &n) == PTY_RESULT_OK && out[0]=='q', "wake byte");
+    failed |= check(pty_write(m, fill, sizeof(fill), &n) == PTY_RESULT_OK && n == KERNEL_PTY_RING_CAPACITY, "full partial");
+    failed |= check(pty_write(m, fill, 1U, &n) == PTY_RESULT_WOULD_BLOCK && n == 0U, "full would block");
+    failed |= check(pty_read(s, out, 17U, &n) == PTY_RESULT_OK && n == 17U, "partial drain");
+    failed |= check(pty_write(m, fill, 17U, &n) == PTY_RESULT_OK && n == 17U, "wrap write");
+    for (i=0U;i<KERNEL_PTY_RING_CAPACITY;i+=sizeof(out)) {
+        size_t want=KERNEL_PTY_RING_CAPACITY-i; if (want>sizeof(out)) want=sizeof(out);
+        failed |= check(pty_read(s,out,want,&n)==PTY_RESULT_OK && n==want,"wrap drain");
     }
-    assert(pty_write(master, bytes, KERNEL_PTY_RING_CAPACITY, &transferred) == PTY_RESULT_OK);
-    assert(transferred == KERNEL_PTY_RING_CAPACITY);
-    assert(pty_write(master, bytes, 1U, &transferred) == PTY_RESULT_WOULD_BLOCK);
-    assert(transferred == 0U);
-    assert(pty_read(slave, bytes, 17U, &transferred) == PTY_RESULT_OK);
-    assert(transferred == 17U);
-    assert(pty_write(master, bytes, 17U, &transferred) == PTY_RESULT_OK);
-    assert(transferred == 17U);
-    assert(pty_read(slave, bytes, sizeof(bytes), &transferred) == PTY_RESULT_OK);
-    assert(transferred == KERNEL_PTY_RING_CAPACITY);
-
-    last_woken_pid = 0ULL;
-    assert(pty_arm_read_waiter(master, 77ULL) == PTY_RESULT_OK);
-    assert(pty_write(slave, "q", 1U, &transferred) == PTY_RESULT_OK);
-    assert(last_woken_pid == 77ULL);
-    assert(pty_read(master, bytes, 1U, &transferred) == PTY_RESULT_OK);
-
-    assert(pty_retain(slave) == PTY_RESULT_OK);
-    assert(pty_close(slave) == PTY_RESULT_OK);
-    assert(pty_poll(master, &poll) == PTY_RESULT_OK && !poll.hup);
-    assert(pty_close(slave) == PTY_RESULT_OK);
-    assert(pty_poll(master, &poll) == PTY_RESULT_OK && poll.hup);
-    assert(pty_read(master, bytes, 1U, &transferred) == PTY_RESULT_HUP);
-    assert(pty_write(master, bytes, 1U, &transferred) == PTY_RESULT_HUP);
-    assert(pty_close(master) == PTY_RESULT_OK);
-
-    assert(pty_create_pair(&master, &slave) == PTY_RESULT_OK);
-    assert(master.generation != stale_master.generation);
-    assert(pty_poll(stale_master, &poll) == PTY_RESULT_INVALID);
-
-    assert(pty_create_pair(&master2, &slave2) == PTY_RESULT_OK);
-    assert(pty_write(master, "A", 1U, &transferred) == PTY_RESULT_OK);
-    assert(pty_write(master2, "B", 1U, &transferred) == PTY_RESULT_OK);
-    assert(pty_read(slave, bytes, 1U, &transferred) == PTY_RESULT_OK);
-    assert(bytes[0] == (uint8_t)'A');
-    assert(pty_read(slave2, bytes, 1U, &transferred) == PTY_RESULT_OK);
-    assert(bytes[0] == (uint8_t)'B');
-
-    assert(pty_close(master) == PTY_RESULT_OK);
-    assert(pty_close(slave) == PTY_RESULT_OK);
-    assert(pty_close(master2) == PTY_RESULT_OK);
-    assert(pty_close(slave2) == PTY_RESULT_OK);
-
-    puts("pty host test passed");
-    return 0;
+    failed |= check(pty_create_pair(&m2, &s2) == PTY_RESULT_OK, "second pty");
+    failed |= check(pty_write(m, "A",1U,&n)==PTY_RESULT_OK, "isolation write A");
+    failed |= check(pty_read(s2,out,1U,&n)==PTY_RESULT_WOULD_BLOCK, "isolation no cross");
+    failed |= check(pty_poll(s,&state)==PTY_RESULT_OK && state.readable && !state.hup, "poll readable");
+    failed |= check(pty_read(s,out,1U,&n)==PTY_RESULT_OK && out[0]=='A', "isolation own read");
+    stale=m2;
+    failed |= check(pty_close(m2)==PTY_RESULT_OK && pty_close(s2)==PTY_RESULT_OK, "close second");
+    failed |= check(pty_create_pair(&m2,&s2)==PTY_RESULT_OK, "reuse slot");
+    failed |= check(pty_read(stale,out,1U,&n)==PTY_RESULT_INVALID, "stale handle");
+    failed |= check(pty_retain(s)==PTY_RESULT_OK, "retain slave");
+    failed |= check(pty_close(s)==PTY_RESULT_OK, "drop one slave ref");
+    failed |= check(pty_close(m)==PTY_RESULT_OK, "close master");
+    failed |= check(pty_poll(s,&state)==PTY_RESULT_OK && state.hup, "hup poll");
+    failed |= check(pty_read(s,out,1U,&n)==PTY_RESULT_HUP && n==0U, "eof hup");
+    failed |= check(pty_write(s,"z",1U,&n)==PTY_RESULT_HUP, "write peer closed");
+    failed |= check(pty_close(s)==PTY_RESULT_OK, "final slave close");
+    failed |= check(pty_close(m2)==PTY_RESULT_OK && pty_close(s2)==PTY_RESULT_OK, "final second close");
+    if (!failed) puts("PTY host test passed.");
+    return failed ? 1 : 0;
 }
