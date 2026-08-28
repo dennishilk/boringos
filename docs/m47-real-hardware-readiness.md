@@ -1,7 +1,7 @@
 # M47 — real-hardware boot-readiness boundary
 
-Status: implementation complete on BoringKernel 0.0.47-dev; exact-head CI and
-Semantic Freeze pending.
+Status: implementation COMPLETE and Semantic Frozen; runtime-neutral closeout
+to BoringKernel 0.0.48-dev.
 
 Verified base main `fc4f6d0dd26ff985a4336362b4a32bd0f9ea7f91`, tree
 `229653f11d94c3a15b25ca9bc417773dfa1a1a97`, with all eleven exact-main push
@@ -67,3 +67,21 @@ persistent-root failures separately; this changes diagnostics only.
 
 No USB, xHCI, AHCI, NVMe or ACPI implementation is hidden in M47, and no result
 in this milestone is a physical-machine verification claim.
+
+## Semantic Freeze
+
+Implementation: `db2a403f90dafbb1686f295a1547aa0d548f43eb`.
+Tree: `2849e0c0a80baa283ac08531abaabbde0ea3746f`.
+Exact-head SUCCESS: M47 #1 / 33205793084; M46 #5 / 33205793000;
+M45 #9 / 33205792981; M44 #14 / 33205793040;
+M43 #18 / 33205793008; M42 #22 / 33205793032;
+M41 #26 / 33205793445; M40 #29 / 33205793017;
+M39 #32 / 33205793101; M38 #43 / 33205793036;
+M37 #76 / 33205792967; complete Boot #542 / 33205793042.
+Evidence: `boringos-m47-readiness-reference`, artifact 9699625549, GitHub ZIP
+SHA-256 `581ab9de170984279fff882be30a223156d0bd20393ae90cbc3b6914e2d9a596`.
+This separate closeout changes only documentation and active version witnesses.
+Exact-head closeout CI and guarded merge remain required.
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.48-dev**.
+M48 must wait for closeout CI, guarded merge and main-push SUCCESS.
