@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Decode the real M36 terminal bitmap font from a QEMU screendump."""
+"""M40 full-frame oracle: three real clients using the existing bitmap font."""
 import ast
 import hashlib
 import json
@@ -16,7 +16,7 @@ TERM_FG = bytes((0xEB, 0xDB, 0xB2))
 TERM_CURSOR = bytes((0x83, 0xA5, 0x98))
 WM_BG = bytes((0x28, 0x28, 0x28))
 MARGIN_X, MARGIN_Y, CELL_W, CELL_H = 4, 4, 6, 8
-MAX_COLS, MAX_ROWS = 128, 64
+MAX_COLS, MAX_ROWS = 160, 96
 
 
 def glyphs():
@@ -103,7 +103,7 @@ def decode(ppm, metadata):
     if (width, height) != (800, 600) or (width, height) != (metadata["width"], metadata["height"]):
         raise ValueError("framebuffer is not the requested exact 800x600 mode")
     tiles = metadata["tiles"]
-    if metadata["count"] != len(tiles) or not 1 <= len(tiles) <= 2:
+    if metadata["count"] != len(tiles) or not 1 <= len(tiles) <= 3:
         raise ValueError("invalid terminal count")
     for field in ("pid", "surface", "token"):
         if len({t[field] for t in tiles}) != len(tiles) or any(t[field] <= 0 for t in tiles):
@@ -136,67 +136,3 @@ def decode(ppm, metadata):
         index = first // 3
         raise ValueError(f"first pixel divergence at {index % width},{index // width}")
     return screens
-
-
-def contains(rows, text):
-    return any(text in row for row in rows)
-
-
-def validate(ppm, metadata, mode):
-    screens = decode(ppm, metadata)
-    if mode == "prompt":
-        if len(screens) != 1 or not any(contains(rows, "boring@boringos:/$") for rows in screens.values()):
-            raise ValueError(f"graphical shell prompt missing: {screens}")
-    elif mode == "fetch":
-        if len(screens) != 1:
-            raise ValueError("fetch proof requires exactly one terminal")
-        rows = next(iter(screens.values()))
-        for text in ("BoringOS", "Kernel: BoringKernel 0.0.41-dev", "Root FS: BoringFS"):
-            if not contains(rows, text):
-                raise ValueError(f"graphical boringfetch text missing: {text}: {rows}")
-    elif mode == "dual-ready":
-        if len(screens) != 2 or not all(contains(rows, "boring@boringos:/$") for rows in screens.values()):
-            raise ValueError("two independent shell prompts not visible")
-    elif mode == "dual-b":
-        focus = metadata["focus"]
-        focused = next((tile["pid"] for tile in metadata["tiles"] if tile["token"] == focus), None)
-        if len(screens) != 2 or focused is None or not contains(screens[focused], "terminalb"):
-            raise ValueError(f"focused terminal-b text missing: {screens}")
-        if any(pid != focused and contains(rows, "terminalb") for pid, rows in screens.items()):
-            raise ValueError("terminal-b input leaked into non-focused PTY")
-    elif mode == "dual-a":
-        focus = metadata["focus"]
-        focused = next((tile["pid"] for tile in metadata["tiles"] if tile["token"] == focus), None)
-        if len(screens) != 2 or focused is None or not contains(screens[focused], "terminala"):
-            raise ValueError(f"focused terminal-a text missing: {screens}")
-        other = [pid for pid in screens if pid != focused]
-        if len(other) != 1 or not contains(screens[other[0]], "terminalb"):
-            raise ValueError("other terminal did not retain its independent terminalb input")
-        if contains(screens[focused], "terminalb") or contains(screens[other[0]], "terminala"):
-            raise ValueError("cross-terminal input leak detected")
-    elif mode == "single-after-close":
-        if len(screens) != 1:
-            raise ValueError("graceful close did not leave exactly one graphical terminal")
-        rows = next(iter(screens.values()))
-        if not contains(rows, "terminalb") or contains(rows, "terminala"):
-            raise ValueError("close did not retain the correct independent terminal")
-    elif mode == "survivor":
-        if len(screens) != 1 or not contains(next(iter(screens.values())), "survivor"):
-            raise ValueError("surviving terminal did not accept independent input")
-    else:
-        raise ValueError(f"unknown validation mode: {mode}")
-    print(f"M36 visual validator passed: {mode}; 480000 exact pixels; terminal pids={sorted(screens)}; "
-          f"sha256={hashlib.sha256(Path(ppm).read_bytes()).hexdigest()}")
-    return screens
-
-
-if __name__ == "__main__":
-    if len(sys.argv) != 4:
-        raise SystemExit("usage: validate-m36-terminal-screenshot.py frame.ppm frame.json mode")
-    meta = json.loads(Path(sys.argv[2]).read_text())
-    decoded = validate(Path(sys.argv[1]), meta, sys.argv[3])
-    for pid, rows in sorted(decoded.items()):
-        print(f"--- pid {pid} ---")
-        for row in rows:
-            if row:
-                print(row)

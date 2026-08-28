@@ -87,7 +87,7 @@ stdbuf -o0 tr -d '\r' < "${PIPE_BASE}.out" > "${LOG}" & CAT_PID=$!
 
 wait_prompt 1
 for line in \
-    'BoringKernel 0.0.40-dev' \
+    'BoringKernel 0.0.41-dev' \
     'boring-framebuffer: detected' \
     'boring-framebuffer: rgb validated' \
     'boring-graphics: primitives online' \

@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.40-dev
+BoringKernel 0.0.41-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1205,3 +1205,28 @@ This runtime-neutral closeout advances active current-version witnesses to
 **BoringKernel 0.0.40-dev**. Exact-head closeout CI and guarded merge are
 required before M40 begins. See [native-boringedit.md](native-boringedit.md)
 for operation, bounds, acceptance, and the human-runnable QEMU command.
+
+
+## Milestone 40: native BoringFiles — COMPLETE, Semantic Frozen
+
+`/bin/boring-files [directory]` is a native Ring3 boring.display client managed
+by BoringWM. It displays real bounded VFS readdir entries, directory/file types,
+current canonical directory and selection. Up/Down select; Enter navigates or
+spawns `/bin/boring-edit <path>` with the existing detached SPAWN contract;
+Backspace navigates to the parent; R refreshes. Directory scratch uses the
+existing private userspace allocator, keeping the unchanged 16-page ELF budget.
+
+Real QEMU acceptance proves guest-created nested directories and text files,
+child/parent navigation, file selection, terminal/Files/Edit simultaneously
+with independent surfaces and focus, editing and saving, reopening from Files,
+independent Ring3 cat, exact persisted `hello world` bytes, and full desktop
+resource drain to PID1 only. No syscall, display ABI or kernel changes.
+
+Semantic Freeze: `aeba543bba9b5fd91b5c447a616c73738f00d277`.
+Tree: `c0b3af8e2fc52d94c74be1956ee90616dbd41314`.
+Exact-head SUCCESS: M40 #1 / 33188714799; M39 #4 / 33188713720;
+M38 #15 / 33188713568; M37 #48 / 33188713596; full Boot #514 / 33188713599.
+
+This runtime-neutral closeout advances active version witnesses to
+**BoringKernel 0.0.41-dev**. Exact-head closeout CI and guarded merge must pass
+before M41 begins. See [native-boringfiles.md](native-boringfiles.md).
