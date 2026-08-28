@@ -27,6 +27,7 @@ uint32_t wm_authority(const struct wm_core *wm, uint32_t endpoint, uint32_t toke
 bool wm_focus_step(struct wm_core *wm, int direction);
 bool wm_reorder(struct wm_core *wm, int direction);
 bool wm_pointer(struct wm_core *wm, uint32_t x, uint32_t y);
+const char *wm_application_path(uint32_t key);
 enum wm_action wm_key(struct wm_core *wm, const struct boring_input_event *event);
 uint32_t wm_validate_request(const struct boring_wm_message *message, size_t length);
 #endif
