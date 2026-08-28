@@ -40,7 +40,23 @@ static bool init_write_exact(const char *message, size_t length) {
     return boring_console_write(message, length) == (long)length;
 }
 
-static bool init_write_u64(uint64_t value) {
+static bool init_buffer_append(char *buffer, size_t capacity, size_t *length,
+                               const char *text, size_t text_length) {
+    size_t index;
+
+    if ((buffer == NULL) || (length == NULL) || (text == NULL) ||
+        (*length > capacity) || (text_length > capacity - *length)) {
+        return false;
+    }
+    for (index = 0U; index < text_length; ++index) {
+        buffer[*length + index] = text[index];
+    }
+    *length += text_length;
+    return true;
+}
+
+static bool init_buffer_append_u64(char *buffer, size_t capacity,
+                                   size_t *length, uint64_t value) {
     char digits[21];
     size_t count = 0U;
     size_t index;
@@ -50,12 +66,23 @@ static bool init_write_u64(uint64_t value) {
         value /= 10ULL;
         ++count;
     } while (value != 0ULL);
-    for (index = 0U; index < count / 2U; ++index) {
-        const char temporary = digits[index];
-        digits[index] = digits[count - index - 1U];
-        digits[count - index - 1U] = temporary;
+    if ((buffer == NULL) || (length == NULL) || (*length > capacity) ||
+        (count > capacity - *length)) {
+        return false;
     }
-    return init_write_exact(digits, count);
+    for (index = 0U; index < count; ++index) {
+        buffer[*length + index] = digits[count - index - 1U];
+    }
+    *length += count;
+    return true;
+}
+
+static bool init_write_u64(uint64_t value) {
+    char digits[21];
+    size_t length = 0U;
+
+    return init_buffer_append_u64(digits, sizeof(digits), &length, value) &&
+           init_write_exact(digits, length);
 }
 
 static void init_fail(void) __attribute__((noreturn));
@@ -76,13 +103,15 @@ static long init_spawn(const char *path, size_t length) {
 
 static bool init_write_status(const char *label, size_t label_length,
                               int status) {
-    if ((label == NULL) ||
-        !init_write_exact(label, label_length) ||
-        !init_write_u64((uint64_t)(uint32_t)status) ||
-        !init_write_exact("\n", 1U)) {
-        return false;
-    }
-    return true;
+    char message[96];
+    size_t length = 0U;
+
+    return init_buffer_append(message, sizeof(message), &length,
+                              label, label_length) &&
+           init_buffer_append_u64(message, sizeof(message), &length,
+                                  (uint64_t)(uint32_t)status) &&
+           init_buffer_append(message, sizeof(message), &length, "\n", 1U) &&
+           init_write_exact(message, length);
 }
 
 static bool init_write_state(enum init_session_state state) {
@@ -125,13 +154,20 @@ static void init_mark_failed(struct init_desktop_session *session,
                              int status) {
     static const char prefix[] = "boring-init: desktop session failed: ";
     static const char middle[] = " exited status ";
+    char message[128];
+    size_t length = 0U;
 
     if ((session == NULL) || session->failed || (child_name == NULL) ||
-        !init_write_exact(prefix, sizeof(prefix) - 1U) ||
-        !init_write_exact(child_name, child_name_length) ||
-        !init_write_exact(middle, sizeof(middle) - 1U) ||
-        !init_write_u64((uint64_t)(uint32_t)status) ||
-        !init_write_exact("\n", 1U)) {
+        !init_buffer_append(message, sizeof(message), &length,
+                            prefix, sizeof(prefix) - 1U) ||
+        !init_buffer_append(message, sizeof(message), &length,
+                            child_name, child_name_length) ||
+        !init_buffer_append(message, sizeof(message), &length,
+                            middle, sizeof(middle) - 1U) ||
+        !init_buffer_append_u64(message, sizeof(message), &length,
+                                (uint64_t)(uint32_t)status) ||
+        !init_buffer_append(message, sizeof(message), &length, "\n", 1U) ||
+        !init_write_exact(message, length)) {
         init_fail();
     }
     session->failed = true;
