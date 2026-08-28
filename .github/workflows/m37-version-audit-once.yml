@@ -8,7 +8,7 @@ on:
       - .github/workflows/m37-version-audit-once.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   audit:
@@ -18,11 +18,68 @@ jobs:
         with:
           ref: agent/native-desktop-session-startup
           fetch-depth: 1
-      - name: List remaining 0.0.37-dev witnesses
+      - name: Apply audited active current-version witnesses
         shell: bash
         run: |
           set -euo pipefail
-          echo '=== ALL 0.0.37-dev matches ==='
-          grep -RIn --exclude-dir=.git --exclude='m37-version-audit-once.yml' '0\.0\.37-dev' . || true
-          echo '=== ACTIVE CODE/TEST/CI matches only ==='
-          grep -RIn --exclude-dir=.git --include='*.sh' --include='*.py' --include='*.c' --include='*.h' --include='*.yml' --include='*.yaml' '0\.0\.37-dev' kernel user tests .github Makefile 2>/dev/null || true
+          python3 - <<'PY'
+          from pathlib import Path
+
+          expected = {
+              "README.md": 1,
+              "README.de.md": 1,
+              "kernel/core/syscall.c": 1,
+              "kernel/core/boringfs_ro_test.c": 1,
+              "tests/boot-qemu.sh": 1,
+              "tests/block-device-qemu.sh": 1,
+              "tests/framebuffer-qemu.sh": 1,
+              "tests/exception-pagefault-qemu.sh": 1,
+              "tests/persistent-root-qemu.sh": 3,
+              "tests/runtime-qemu.sh": 1,
+              "tests/boringfs-ro-qemu.sh": 1,
+              "tests/ramfs-qemu.sh": 1,
+              "tests/shell-host-test.c": 1,
+              "tests/syscall-qemu.sh": 1,
+              "tests/exception-divide-qemu.sh": 1,
+              "tests/ring3-qemu.sh": 1,
+              "tests/boringfs-rw-qemu.sh": 1,
+              "tests/virtio-block-qemu.sh": 1,
+              "tests/elf-qemu.sh": 1,
+              "tests/shell-qemu.sh": 2,
+              "tests/m36-spawn-qemu.sh": 1,
+              "tests/init-qemu.sh": 1,
+              "tests/validate-m36-terminal-screenshot.py": 1,
+              "tests/vfs-qemu.sh": 1,
+              "tests/console-qemu.sh": 1,
+          }
+          old = "0.0.37-dev"
+          new = "0.0.38-dev"
+          assert sum(expected.values()) == 28
+          for name, count in expected.items():
+              path = Path(name)
+              text = path.read_text()
+              actual = text.count(old)
+              assert actual == count, (name, actual, count)
+              path.write_text(text.replace(old, new))
+          PY
+
+          rm .github/workflows/m37-version-audit-once.yml
+          git diff --check
+
+          if grep -RIn --exclude-dir=.git --include='*.sh' --include='*.py' --include='*.c' --include='*.h' --include='*.yml' --include='*.yaml' '0\.0\.37-dev' kernel user tests .github Makefile 2>/dev/null; then
+            echo 'stale active 0.0.37-dev witness remains' >&2
+            exit 1
+          fi
+
+          mapfile -t historical < <(grep -RIl --exclude-dir=.git '0\.0\.37-dev' README.md README.de.md docs kernel user tests .github Makefile 2>/dev/null | sort || true)
+          expected_historical=(docs/RUNNING-M36.md docs/roadmap.md)
+          printf '%s\n' "${historical[@]}" > /tmp/historical
+          printf '%s\n' "${expected_historical[@]}" | sort > /tmp/expected_historical
+          sort -o /tmp/historical /tmp/historical
+          diff -u /tmp/expected_historical /tmp/historical
+
+          git config user.name 'M37 Closeout'
+          git config user.email '81433681+dennishilk@users.noreply.github.com'
+          git add -A
+          git commit -m 'Update active version witnesses for 0.0.38-dev'
+          git push origin HEAD:agent/native-desktop-session-startup
