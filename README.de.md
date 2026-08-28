@@ -21,7 +21,7 @@ Die aktuelle serielle Ausgabe beginnt mit:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.37-dev
+BoringKernel 0.0.38-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```

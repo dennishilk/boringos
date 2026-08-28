@@ -8,6 +8,7 @@
 #include <boring/elf_vfs.h>
 #include <boring/event_syscall.h>
 #include <boring/fd.h>
+#include <boring/framebuffer_user.h>
 #include <boring/input.h>
 #include <boring/ipc.h>
 #include <boring/m36_syscall.h>
@@ -52,6 +53,9 @@ void x86_64_enter_ring3_argv(uintptr_t user_rip,
                              uint16_t user_ss,
                              size_t argc,
                              uintptr_t argv) __attribute__((noreturn));
+#if defined(BORING_M37_DESKTOP_ACCEPTANCE)
+void m37_desktop_test_finish_from_pid1(void) __attribute__((noreturn));
+#endif
 
 static uint64_t m36_error(int error_number) {
     return (uint64_t)(-(int64_t)error_number);
@@ -143,6 +147,31 @@ static bool m36_copy_to_user(uintptr_t address, const void *buffer, size_t size)
     return m36_copy_process(process_current(), address, (void *)buffer, size,
                             true);
 }
+
+#if defined(BORING_M37_DESKTOP_ACCEPTANCE)
+static void m37_observe_console_write(uint64_t user_buffer,
+                                      uint64_t raw_length) {
+    static const char marker[] = "boring-init: desktop session drained\n";
+    char observed[sizeof(marker) - 1U];
+    size_t index;
+
+    if (raw_length != (uint64_t)(sizeof(marker) - 1U)) {
+        return;
+    }
+    if (!m36_copy_from_user(observed, (uintptr_t)user_buffer,
+                            sizeof(observed))) {
+        serial_write_string(
+            "M37 desktop FAILED: cannot observe PID 1 drain witness\n");
+        x86_64_halt_forever();
+    }
+    for (index = 0U; index < sizeof(observed); ++index) {
+        if (observed[index] != marker[index]) {
+            return;
+        }
+    }
+    m37_desktop_test_finish_from_pid1();
+}
+#endif
 
 static int m36_copy_string(uint64_t user_address,
                            uint64_t raw_length,
@@ -671,6 +700,7 @@ static bool m36_exit(struct x86_64_syscall_frame *frame) {
     struct process *const process = process_current();
     struct m36_spawn_record *record;
     struct user_memory_cleanup_stats memory_cleanup;
+    bool framebuffer_released = false;
     bool input_released = false;
 
     if ((frame == NULL) ||
@@ -683,7 +713,12 @@ static bool m36_exit(struct x86_64_syscall_frame *frame) {
         return false;
     }
     record->exit_status = (int32_t)frame->rdi;
-    (void)boring_input_process_teardown(process->pid, &input_released);
+    if (!boring_framebuffer_user_process_teardown(process->pid,
+                                                  &framebuffer_released) ||
+        !boring_input_process_teardown(process->pid, &input_released)) {
+        serial_write_string("m36: process device cleanup failed\n");
+        x86_64_halt_forever();
+    }
     boring_ipc_process_cleanup(process);
     if (user_memory_process_cleanup(process, &memory_cleanup) !=
         USER_MEMORY_RESULT_OK) {
@@ -757,6 +792,11 @@ void x86_64_syscall_dispatch_m36(struct x86_64_syscall_frame *frame) {
 
     x86_64_syscall_dispatch_events(frame);
     m36_reap_detached();
+#if defined(BORING_M37_DESKTOP_ACCEPTANCE)
+    if (number == (uint64_t)BORING_SYS_CONSOLE_WRITE) {
+        m37_observe_console_write(frame->rdi, frame->rsi);
+    }
+#endif
 
     if (number == (uint64_t)BORING_SYS_PTY_CREATE) {
         result = m36_pty_create(frame->rdi);
