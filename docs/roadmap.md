@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.38-dev
+BoringKernel 0.0.39-dev
 ```
 
 The current syscall ABI is exactly:
@@ -146,6 +146,7 @@ with explicit stdio and guarded generic stacks, plus the native Ring3 graphical
 terminal launched by real BoringWM Super+Return. There is still no partition
 layer, networking, POSIX TTY/job-control model or general desktop supervision.
 M37 completes native desktop session startup without extending the ABI: PID 1 is the sole userspace boot module, starts `/bin/boring-display` and `/bin/boringwm` from persistent BoringFS through existing syscall 43 `SPAWN`, waits for and reaps both children, and remains alive after the real graphical terminal session drains. There is still no partition layer, networking, POSIX TTY/job-control model, restart policy or general desktop supervision.
+M38 adds bounded PID 1 desktop-session supervision without extending syscall numbering: `WAITPID(0, status)` waits for any waitable direct child while exact-PID `WAITPID` remains unchanged. PID 1 tracks the display/WM session through STARTING, RUNNING, FAILED/DRAINING and DRAINED, reaps both central children regardless of exit order, and survives normal, WM-first and display-first drains. There is still no restart policy, general service manager, login manager, signals, networking, audio or M39 work.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -1135,4 +1136,43 @@ legacy `LAUNCH` is not used for the M37 desktop startup path.
 All intended M37 runtime semantics and every M0–M36 regression gate passed on
 the exact freeze head before closeout. Closeout changes only the active current
 version witnesses to **BoringKernel 0.0.38-dev** and this documentation. No M38
+implementation is included.
+
+---
+
+# Stage 22 — bounded desktop session supervision
+
+## Milestone 38: native desktop session supervision — implementation COMPLETE, Semantic Frozen
+
+M38 keeps the M37 desktop architecture and syscall numbering intact while making
+PID 1 a bounded two-child desktop-session supervisor. Existing syscall 17
+`WAITPID` gains the compatible selector `WAITPID(0, status)` for any waitable
+direct child; exact-PID waits retain their previous contract. PID 1 records the
+display and WM child identities, observes whichever central child exits first,
+reaps each exactly once, drains the surviving desktop stack through existing
+IPC/PTY/buffer/input/framebuffer teardown, and remains alive after the session.
+
+Real QEMU acceptance covers the normal M37-compatible lifecycle plus deterministic
+unexpected WM-first and display-first Ring3 exits. Every scenario proves concrete
+reap order/status, one surviving PID1 process/task, complete IPC/M32/input/
+framebuffer/PTY resource drain, and zero resume/fault residue. No restart loop or
+general service-manager semantics are introduced. See
+[m38-session-supervision.md](m38-session-supervision.md).
+
+## M38 Semantic Freeze record
+
+- Base: `2662aa44dc00e2d1b1577576f27522554291316d`
+- Freeze SHA: `56b80bacf52e04b8f7b2f89830f578cfb9da2765`
+- Freeze tree: `c4db3501b52a21d63cfad2d1dd678585eb11fcb6`
+- M38 exact-head supervision CI: **Run #6 / 33181145205 / SUCCESS**
+- M37 exact-head regression: **Run #39 / 33181145272 / SUCCESS**
+- BoringKernel full regression: **Run #505 / 33181145165 / SUCCESS**
+- Event: `pull_request`; branch: `agent/native-desktop-session-supervision`; frozen version: `0.0.38-dev`
+- Freeze evidence artifact: `boringos-m38-desktop-reference`, ID `9689752268`
+- Artifact ZIP SHA-256: `7eb5d4d49cbdc6db443e31b25fcdc451946fed0f7758737f6b29bf02b319589d`
+- PR: [#49](https://github.com/dennishilk/boringos/pull/49)
+
+All intended M38 runtime semantics and every inherited regression gate passed on
+the exact freeze head before closeout. Closeout changes only this roadmap and the
+active current-version witnesses to **BoringKernel 0.0.39-dev**. No M39
 implementation is included.

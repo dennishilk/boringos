@@ -151,7 +151,7 @@ def validate(ppm, metadata, mode):
         if len(screens) != 1:
             raise ValueError("fetch proof requires exactly one terminal")
         rows = next(iter(screens.values()))
-        for text in ("BoringOS", "Kernel: BoringKernel 0.0.38-dev", "Root FS: BoringFS"):
+        for text in ("BoringOS", "Kernel: BoringKernel 0.0.39-dev", "Root FS: BoringFS"):
             if not contains(rows, text):
                 raise ValueError(f"graphical boringfetch text missing: {text}: {rows}")
     elif mode == "dual-ready":
