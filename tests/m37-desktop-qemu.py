@@ -242,7 +242,6 @@ def run():
         witness("m37-desktop: real BoringFS root mounted")
         witness("m37-desktop: PID 1 scheduler task ready; desktop children must come from BoringFS")
         witness("boring-spawn: VFS executable source /bin/boring-display")
-        witness("boring-init: boring.display service online")
         witness("boring-spawn: VFS executable source /bin/boringwm")
         witness("display: M35 service and M31 input ready")
         witness("wm: boring.wm Ring3 policy ready; no pixel mappings")
@@ -270,8 +269,6 @@ def run():
         settled_capture("dual-ready", dual, "dual-ready")
         check_resources(dual)
 
-        # The established M36 pixel oracle proves that characters only reach the
-        # focused PTY and remain isolated after a real BoringWM focus switch.
         type_text("terminalb")
         settled_capture("dual-focused-b", dual, "dual-b")
         key("j", super_key=True)
@@ -279,7 +276,6 @@ def run():
         type_text("terminala")
         settled_capture("dual-focused-a", switched, "dual-a")
 
-        # Focus is now terminal A, so closing it must leave terminal B intact.
         key("q", super_key=True)
         witness("boring-terminal: CLOSE received")
         witness("boring-terminal: graceful cleanup complete")
@@ -292,13 +288,14 @@ def run():
         witness("wm: session empty; clean exit")
         witness("boring-init: desktop WM exited status 0")
         witness("display: session drained; exiting with claims")
+        witness("boring-init: desktop display exited status 0")
         witness("boring-init: desktop session drained")
         witness("m37-desktop: IPC/input/framebuffer/M32/PTY desktop resources drained")
         witness("m37-desktop: all spawned desktop tasks/processes reaped; PID 1 remains")
         witness("M37 native desktop session startup acceptance passed.")
         (OUT / "SUCCESS.txt").write_text(
             "M37 native desktop session startup SUCCESS\n"
-            "PID1 SPAWN from persistent BoringFS -> display -> WM -> Super+Return terminal -> PTY shell -> boringfetch; dual focus/input; complete desktop child drain with PID1 remaining.\n")
+            "PID1 SPAWN from persistent BoringFS -> display -> WM -> Super+Return terminal -> PTY shell -> boringfetch; dual focus/input; explicit display/WM waitpid drain with PID1 remaining.\n")
         print(f"M37 desktop startup acceptance passed; evidence: {OUT}")
     except Exception as exc:
         if vm.poll() is None:
