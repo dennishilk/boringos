@@ -347,8 +347,8 @@ int boring_main(int argc, char **argv) {
 
     for (;;) {
         struct boring_event_watch watches[2] = {
-            {BORING_EVENT_IPC, manager, 0U, 0U, 0U, 0ULL},
-            {BORING_EVENT_FD, master_fd, 0U, 0U, 0U, 0ULL}
+            {BORING_EVENT_IPC, manager, 0U, 0U, 0ULL},
+            {BORING_EVENT_FD, master_fd, 0U, 0U, 0ULL}
         };
         long ready = boring_event_wait(watches, 2U, 0U);
         if (ready <= 0L) {
