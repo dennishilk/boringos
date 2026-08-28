@@ -196,7 +196,10 @@ static void init_supervise_session(struct init_desktop_session *session) {
         }
 
         if (!session->failed) {
-            if (display_child || (status != 0)) {
+            const bool unexpected_display_first =
+                display_child && !session->wm.reaped;
+
+            if ((status != 0) || unexpected_display_first) {
                 init_mark_failed(session, failure_name,
                                  failure_name_length, status);
             } else if (!init_both_reaped(session)) {
