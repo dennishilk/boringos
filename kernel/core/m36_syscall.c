@@ -56,6 +56,9 @@ void x86_64_enter_ring3_argv(uintptr_t user_rip,
 #if defined(BORING_M37_DESKTOP_ACCEPTANCE)
 void m37_desktop_test_finish_from_pid1(void) __attribute__((noreturn));
 #endif
+#if defined(BORING_M38_DESKTOP_ACCEPTANCE)
+void m38_desktop_test_finish_from_pid1(void) __attribute__((noreturn));
+#endif
 
 static uint64_t m36_error(int error_number) {
     return (uint64_t)(-(int64_t)error_number);
@@ -170,6 +173,44 @@ static void m37_observe_console_write(uint64_t user_buffer,
         }
     }
     m37_desktop_test_finish_from_pid1();
+}
+#endif
+
+#if defined(BORING_M38_DESKTOP_ACCEPTANCE)
+static bool m38_console_marker(uint64_t user_buffer, uint64_t raw_length,
+                               const char *marker, size_t marker_length) {
+    char observed[64];
+    size_t index;
+
+    if ((marker == NULL) || (marker_length > sizeof(observed)) ||
+        (raw_length != (uint64_t)marker_length)) {
+        return false;
+    }
+    if (!m36_copy_from_user(observed, (uintptr_t)user_buffer, marker_length)) {
+        serial_write_string(
+            "M38 desktop FAILED: cannot observe PID 1 drain witness\n");
+        x86_64_halt_forever();
+    }
+    for (index = 0U; index < marker_length; ++index) {
+        if (observed[index] != marker[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void m38_observe_console_write(uint64_t user_buffer,
+                                      uint64_t raw_length) {
+    static const char clean[] = "boring-init: desktop session drained\n";
+    static const char failed[] =
+        "boring-init: desktop failed session drained\n";
+
+    if (m38_console_marker(user_buffer, raw_length,
+                           clean, sizeof(clean) - 1U) ||
+        m38_console_marker(user_buffer, raw_length,
+                           failed, sizeof(failed) - 1U)) {
+        m38_desktop_test_finish_from_pid1();
+    }
 }
 #endif
 
@@ -402,6 +443,53 @@ static struct m36_spawn_record *m36_record_pid(uint64_t pid,
         }
     }
     return NULL;
+}
+
+static bool m36_record_waitable(const struct m36_spawn_record *record,
+                                uint64_t parent_pid) {
+    return (record != NULL) && record->active && !record->detached &&
+           (record->child != NULL) && (record->parent_pid == parent_pid);
+}
+
+static bool m36_parent_has_waitable(uint64_t parent_pid) {
+    size_t index;
+
+    for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
+        if (m36_record_waitable(&spawn_records[index], parent_pid)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static struct m36_spawn_record *m36_record_any_finished(uint64_t parent_pid) {
+    struct m36_spawn_record *best = NULL;
+    size_t index;
+
+    for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
+        struct m36_spawn_record *const record = &spawn_records[index];
+
+        if (!m36_record_waitable(record, parent_pid) ||
+            (record->child->state != PROCESS_FINISHED)) {
+            continue;
+        }
+        if ((best == NULL) || (record->child->pid < best->child->pid)) {
+            best = record;
+        }
+    }
+    return best;
+}
+
+static void m36_set_parent_waiting(uint64_t parent_pid, bool waiting) {
+    size_t index;
+
+    for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
+        struct m36_spawn_record *const record = &spawn_records[index];
+
+        if (m36_record_waitable(record, parent_pid)) {
+            record->parent_waiting = waiting;
+        }
+    }
 }
 
 static bool m36_reap_record(struct m36_spawn_record *record) {
@@ -744,30 +832,56 @@ static bool m36_exit(struct x86_64_syscall_frame *frame) {
 
 static uint64_t m36_waitpid(uint64_t pid, uint64_t user_status) {
     struct process *const parent = process_current();
-    struct m36_spawn_record *record;
+    struct m36_spawn_record *record = NULL;
+    const bool any_child = pid == 0ULL;
+    uint64_t reaped_pid;
     int status;
 
-    if ((parent == NULL) || !process_is_alive(parent) || (pid == 0ULL) ||
+    if ((parent == NULL) || !process_is_alive(parent) ||
         !m36_user_range(parent, (uintptr_t)user_status, sizeof(status), true)) {
         return m36_error(BORING_SYSCALL_EINVAL);
     }
-    record = m36_record_pid(pid, parent->pid);
-    if ((record == NULL) || record->detached) {
-        return m36_error(BORING_SYSCALL_EINVAL);
-    }
-    while ((record->child != NULL) &&
-           (record->child->state != PROCESS_FINISHED)) {
-        record->parent_waiting = true;
-        if (!task_block_current()) {
-            record->parent_waiting = false;
-            return m36_error(BORING_SYSCALL_EBUSY);
+
+    if (!any_child) {
+        record = m36_record_pid(pid, parent->pid);
+        if ((record == NULL) || record->detached) {
+            return m36_error(BORING_SYSCALL_EINVAL);
         }
-        record->parent_waiting = false;
+        while ((record->child != NULL) &&
+               (record->child->state != PROCESS_FINISHED)) {
+            record->parent_waiting = true;
+            if (!task_block_current()) {
+                record->parent_waiting = false;
+                return m36_error(BORING_SYSCALL_EBUSY);
+            }
+            record->parent_waiting = false;
+        }
+    } else {
+        if (!m36_parent_has_waitable(parent->pid)) {
+            return m36_error(BORING_SYSCALL_EINVAL);
+        }
+        for (;;) {
+            record = m36_record_any_finished(parent->pid);
+            if (record != NULL) {
+                break;
+            }
+            m36_set_parent_waiting(parent->pid, true);
+            if (!task_block_current()) {
+                m36_set_parent_waiting(parent->pid, false);
+                return m36_error(BORING_SYSCALL_EBUSY);
+            }
+            m36_set_parent_waiting(parent->pid, false);
+            if (!m36_parent_has_waitable(parent->pid)) {
+                return m36_error(BORING_SYSCALL_EIO);
+            }
+        }
     }
-    if ((record->child == NULL) ||
+
+    if ((record == NULL) || (record->child == NULL) ||
         (record->child->state != PROCESS_FINISHED)) {
         return m36_error(BORING_SYSCALL_EIO);
     }
+    reaped_pid = record->child->pid;
     status = record->exit_status;
     if (!m36_copy_to_user((uintptr_t)user_status, &status, sizeof(status))) {
         return m36_error(BORING_SYSCALL_EFAULT);
@@ -775,7 +889,7 @@ static uint64_t m36_waitpid(uint64_t pid, uint64_t user_status) {
     if (!m36_reap_record(record)) {
         return m36_error(BORING_SYSCALL_EIO);
     }
-    return pid;
+    return reaped_pid;
 }
 
 void x86_64_syscall_dispatch_m36(struct x86_64_syscall_frame *frame) {
@@ -797,6 +911,11 @@ void x86_64_syscall_dispatch_m36(struct x86_64_syscall_frame *frame) {
         m37_observe_console_write(frame->rdi, frame->rsi);
     }
 #endif
+#if defined(BORING_M38_DESKTOP_ACCEPTANCE)
+    if (number == (uint64_t)BORING_SYS_CONSOLE_WRITE) {
+        m38_observe_console_write(frame->rdi, frame->rsi);
+    }
+#endif
 
     if (number == (uint64_t)BORING_SYS_PTY_CREATE) {
         result = m36_pty_create(frame->rdi);
@@ -806,7 +925,9 @@ void x86_64_syscall_dispatch_m36(struct x86_64_syscall_frame *frame) {
     } else if (number == (uint64_t)BORING_SYS_WAITPID) {
         struct process *const process = process_current();
         if ((process != NULL) &&
-            (m36_record_pid(frame->rdi, process->pid) != NULL)) {
+            (((frame->rdi == 0ULL) && (process->pid != 0ULL) &&
+              (task_current_process_id() == process->pid)) ||
+             (m36_record_pid(frame->rdi, process->pid) != NULL))) {
             result = m36_waitpid(frame->rdi, frame->rsi);
         } else {
             return;

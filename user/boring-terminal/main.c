@@ -21,7 +21,7 @@ static uint32_t manager;
 static uint32_t surface;
 static uint32_t window_token;
 static uint32_t buffer_handle;
-static uint32_t master_fd;
+static uint32_t master_fd = UINT32_MAX;
 static uint8_t *pixels;
 static uint32_t surface_width;
 static uint32_t surface_height;
@@ -37,6 +37,11 @@ static void term_fail(const char *reason) {
     desktop_say("M36 terminal FAILED: ");
     desktop_say(reason);
     desktop_say("\n");
+    if (master_fd != UINT32_MAX) {
+        (void)boring_fd_close(master_fd);
+        master_fd = UINT32_MAX;
+        desktop_say("boring-terminal: failure closed PTY master\n");
+    }
     boring_exit(90);
 }
 

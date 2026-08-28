@@ -6,6 +6,29 @@
 #include <boring/syscall.h>
 #include <boring/syscall_abi.h>
 
+enum init_session_state {
+    INIT_SESSION_STARTING = 0,
+    INIT_SESSION_RUNNING,
+    INIT_SESSION_DRAINING,
+    INIT_SESSION_FAILED,
+    INIT_SESSION_DRAINED
+};
+
+struct init_session_child {
+    long pid;
+    int status;
+    bool running;
+    bool exited;
+    bool reaped;
+};
+
+struct init_desktop_session {
+    enum init_session_state state;
+    struct init_session_child display;
+    struct init_session_child wm;
+    bool failed;
+};
+
 static void init_idle_forever(void) __attribute__((noreturn));
 static void init_idle_forever(void) {
     for (;;) {
@@ -17,7 +40,23 @@ static bool init_write_exact(const char *message, size_t length) {
     return boring_console_write(message, length) == (long)length;
 }
 
-static bool init_write_u64(uint64_t value) {
+static bool init_buffer_append(char *buffer, size_t capacity, size_t *length,
+                               const char *text, size_t text_length) {
+    size_t index;
+
+    if ((buffer == NULL) || (length == NULL) || (text == NULL) ||
+        (*length > capacity) || (text_length > capacity - *length)) {
+        return false;
+    }
+    for (index = 0U; index < text_length; ++index) {
+        buffer[*length + index] = text[index];
+    }
+    *length += text_length;
+    return true;
+}
+
+static bool init_buffer_append_u64(char *buffer, size_t capacity,
+                                   size_t *length, uint64_t value) {
     char digits[21];
     size_t count = 0U;
     size_t index;
@@ -27,12 +66,23 @@ static bool init_write_u64(uint64_t value) {
         value /= 10ULL;
         ++count;
     } while (value != 0ULL);
-    for (index = 0U; index < count / 2U; ++index) {
-        const char temporary = digits[index];
-        digits[index] = digits[count - index - 1U];
-        digits[count - index - 1U] = temporary;
+    if ((buffer == NULL) || (length == NULL) || (*length > capacity) ||
+        (count > capacity - *length)) {
+        return false;
     }
-    return init_write_exact(digits, count);
+    for (index = 0U; index < count; ++index) {
+        buffer[*length + index] = digits[count - index - 1U];
+    }
+    *length += count;
+    return true;
+}
+
+static bool init_write_u64(uint64_t value) {
+    char digits[21];
+    size_t length = 0U;
+
+    return init_buffer_append_u64(digits, sizeof(digits), &length, value) &&
+           init_write_exact(digits, length);
 }
 
 static void init_fail(void) __attribute__((noreturn));
@@ -51,31 +101,149 @@ static long init_spawn(const char *path, size_t length) {
     return boring_spawn(path, length, argv, 1U, &stdio_config);
 }
 
-static bool init_write_wait_success(const char *label, size_t label_length) {
-    char line[96];
-    size_t index;
+static bool init_write_status(const char *label, size_t label_length,
+                              int status) {
+    char message[96];
+    size_t length = 0U;
 
-    if ((label == NULL) || (label_length + 2U > sizeof(line))) {
-        return false;
-    }
-    for (index = 0U; index < label_length; ++index) {
-        line[index] = label[index];
-    }
-    line[label_length] = '0';
-    line[label_length + 1U] = '\n';
-    return init_write_exact(line, label_length + 2U);
+    return init_buffer_append(message, sizeof(message), &length,
+                              label, label_length) &&
+           init_buffer_append_u64(message, sizeof(message), &length,
+                                  (uint64_t)(uint32_t)status) &&
+           init_buffer_append(message, sizeof(message), &length, "\n", 1U) &&
+           init_write_exact(message, length);
 }
 
-static void init_wait_child(long child_pid, const char *label,
-                            size_t label_length) {
-    long waited;
-    int status = 0;
+static bool init_write_state(enum init_session_state state) {
+    switch (state) {
+        case INIT_SESSION_STARTING:
+            return init_write_exact(
+                "boring-init: desktop session state STARTING\n",
+                sizeof("boring-init: desktop session state STARTING\n") - 1U);
+        case INIT_SESSION_RUNNING:
+            return init_write_exact(
+                "boring-init: desktop session state RUNNING\n",
+                sizeof("boring-init: desktop session state RUNNING\n") - 1U);
+        case INIT_SESSION_DRAINING:
+            return init_write_exact(
+                "boring-init: desktop session state DRAINING\n",
+                sizeof("boring-init: desktop session state DRAINING\n") - 1U);
+        case INIT_SESSION_FAILED:
+            return init_write_exact(
+                "boring-init: desktop session state FAILED\n",
+                sizeof("boring-init: desktop session state FAILED\n") - 1U);
+        case INIT_SESSION_DRAINED:
+            return init_write_exact(
+                "boring-init: desktop session state DRAINED\n",
+                sizeof("boring-init: desktop session state DRAINED\n") - 1U);
+        default:
+            return false;
+    }
+}
 
-    waited = boring_waitpid((uint64_t)child_pid, &status);
-    if ((waited != child_pid) || (status != 0) ||
-        !init_write_wait_success(label, label_length)) {
+static void init_set_state(struct init_desktop_session *session,
+                           enum init_session_state state) {
+    if ((session == NULL) || !init_write_state(state)) {
         init_fail();
     }
+    session->state = state;
+}
+
+static void init_mark_failed(struct init_desktop_session *session,
+                             const char *child_name, size_t child_name_length,
+                             int status) {
+    static const char prefix[] = "boring-init: desktop session failed: ";
+    static const char middle[] = " exited status ";
+    char message[128];
+    size_t length = 0U;
+
+    if ((session == NULL) || session->failed || (child_name == NULL) ||
+        !init_buffer_append(message, sizeof(message), &length,
+                            prefix, sizeof(prefix) - 1U) ||
+        !init_buffer_append(message, sizeof(message), &length,
+                            child_name, child_name_length) ||
+        !init_buffer_append(message, sizeof(message), &length,
+                            middle, sizeof(middle) - 1U) ||
+        !init_buffer_append_u64(message, sizeof(message), &length,
+                                (uint64_t)(uint32_t)status) ||
+        !init_buffer_append(message, sizeof(message), &length, "\n", 1U) ||
+        !init_write_exact(message, length)) {
+        init_fail();
+    }
+    session->failed = true;
+    init_set_state(session, INIT_SESSION_FAILED);
+    init_set_state(session, INIT_SESSION_DRAINING);
+}
+
+static void init_record_reap(struct init_session_child *child, int status) {
+    if ((child == NULL) || !child->running || child->exited || child->reaped) {
+        init_fail();
+    }
+    child->running = false;
+    child->exited = true;
+    child->status = status;
+    child->reaped = true;
+}
+
+static bool init_both_reaped(const struct init_desktop_session *session) {
+    return (session != NULL) && session->display.reaped && session->wm.reaped;
+}
+
+static void init_supervise_session(struct init_desktop_session *session) {
+    static const char wm_exited[] =
+        "boring-init: desktop WM exited status ";
+    static const char display_exited[] =
+        "boring-init: desktop display exited status ";
+
+    if ((session == NULL) || (session->state != INIT_SESSION_RUNNING)) {
+        init_fail();
+    }
+    while (!init_both_reaped(session)) {
+        int status = 0;
+        const long waited = boring_waitpid(0ULL, &status);
+        struct init_session_child *child;
+        const char *label;
+        size_t label_length;
+        const char *failure_name;
+        size_t failure_name_length;
+        bool display_child;
+
+        if (waited == session->display.pid) {
+            child = &session->display;
+            label = display_exited;
+            label_length = sizeof(display_exited) - 1U;
+            failure_name = "display";
+            failure_name_length = sizeof("display") - 1U;
+            display_child = true;
+        } else if (waited == session->wm.pid) {
+            child = &session->wm;
+            label = wm_exited;
+            label_length = sizeof(wm_exited) - 1U;
+            failure_name = "WM";
+            failure_name_length = sizeof("WM") - 1U;
+            display_child = false;
+        } else {
+            init_fail();
+        }
+
+        init_record_reap(child, status);
+        if (!init_write_status(label, label_length, status)) {
+            init_fail();
+        }
+
+        if (!session->failed) {
+            const bool unexpected_display_first =
+                display_child && !session->wm.reaped;
+
+            if ((status != 0) || unexpected_display_first) {
+                init_mark_failed(session, failure_name,
+                                 failure_name_length, status);
+            } else if (!init_both_reaped(session)) {
+                init_set_state(session, INIT_SESSION_DRAINING);
+            }
+        }
+    }
+    init_set_state(session, INIT_SESSION_DRAINED);
 }
 
 static void init_verify_session_drained(void) {
@@ -98,43 +266,47 @@ int boring_main(void) {
         "boring-init: desktop display spawned pid ";
     static const char wm_spawned[] =
         "boring-init: desktop WM spawned pid ";
-    static const char wm_exited[] =
-        "boring-init: desktop WM exited status ";
-    static const char display_exited[] =
-        "boring-init: desktop display exited status ";
     static const char drained[] =
         "boring-init: desktop session drained\n";
+    static const char failed_drained[] =
+        "boring-init: desktop failed session drained\n";
     const uint64_t pid = boring_getpid();
-    long display_pid;
-    long wm_pid;
+    struct init_desktop_session session = {0};
 
+    session.state = INIT_SESSION_STARTING;
     if (!init_write_exact(starting, sizeof(starting) - 1U) ||
         (pid != 1ULL) || !init_write_exact(pid_ok, sizeof(pid_ok) - 1U) ||
-        !init_write_exact(online, sizeof(online) - 1U)) {
+        !init_write_exact(online, sizeof(online) - 1U) ||
+        !init_write_state(session.state)) {
         init_fail();
     }
 
-    display_pid = init_spawn(display_path, sizeof(display_path) - 1U);
-    if ((display_pid <= 1L) ||
+    session.display.pid = init_spawn(display_path, sizeof(display_path) - 1U);
+    if ((session.display.pid <= 1L) ||
         !init_write_exact(display_spawned, sizeof(display_spawned) - 1U) ||
-        !init_write_u64((uint64_t)display_pid) ||
+        !init_write_u64((uint64_t)session.display.pid) ||
         !init_write_exact("\n", 1U)) {
         init_fail();
     }
+    session.display.running = true;
 
-    wm_pid = init_spawn(wm_path, sizeof(wm_path) - 1U);
-    if ((wm_pid <= display_pid) ||
+    session.wm.pid = init_spawn(wm_path, sizeof(wm_path) - 1U);
+    if ((session.wm.pid <= 1L) || (session.wm.pid == session.display.pid) ||
         !init_write_exact(wm_spawned, sizeof(wm_spawned) - 1U) ||
-        !init_write_u64((uint64_t)wm_pid) ||
+        !init_write_u64((uint64_t)session.wm.pid) ||
         !init_write_exact("\n", 1U)) {
         init_fail();
     }
+    session.wm.running = true;
+    init_set_state(&session, INIT_SESSION_RUNNING);
 
-    init_wait_child(wm_pid, wm_exited, sizeof(wm_exited) - 1U);
-    init_wait_child(display_pid, display_exited,
-                    sizeof(display_exited) - 1U);
+    init_supervise_session(&session);
     init_verify_session_drained();
-    if (!init_write_exact(drained, sizeof(drained) - 1U)) {
+    if (session.failed) {
+        if (!init_write_exact(failed_drained, sizeof(failed_drained) - 1U)) {
+            init_fail();
+        }
+    } else if (!init_write_exact(drained, sizeof(drained) - 1U)) {
         init_fail();
     }
     init_idle_forever();
