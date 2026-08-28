@@ -44,6 +44,6 @@ make TEST_MODE=m36-desktop \
     build/boringos.iso
 
 FILES=$(xorriso -indev build/boringos.iso -find /boot/user -type f -print 2>/dev/null | \
-    sed -n 's/^.*\(\/boot\/user\/[^ ]*\).*$/\1/p' | sort -u)
+    tr -d "'" | grep '^/boot/user/' | sort -u)
 [ "${FILES}" = '/boot/user/boring-init.elf' ]
 printf '%s\n' 'M37 desktop init audit and one-module ISO build passed.'
