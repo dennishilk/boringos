@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.47-dev
+BoringKernel 0.0.48-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1431,3 +1431,46 @@ Exact-head closeout CI and guarded merge remain required.
 Active version after runtime-neutral closeout: **BoringKernel 0.0.47-dev**.
 M47 must wait for closeout CI, guarded merge and main-push SUCCESS.
 See [m46-boringfetch-hardware.md](m46-boringfetch-hardware.md).
+
+
+## Milestone 47: real-hardware boot-readiness boundary — COMPLETE, Semantic Frozen
+
+The exact platform audit classifies boot, memory, framebuffer, boot-CPU
+inventory, PCI inventory, SMBIOS, input, storage and desktop without promoting
+emulator evidence into a physical-machine claim. The result is a
+**REAL-HARDWARE-READY CANDIDATE** only for a deliberately legacy-assisted UEFI
+configuration and is **NOT PHYSICALLY VERIFIED**.
+
+A small platform-neutral PMM correction now accepts valid Limine maps larger
+than its fixed capacity, manages at most 1,048,576 frames (4 GiB), reports the
+cap and leaves excess usable memory unmanaged. Host tests and sanitizers prove
+the cap while malformed, overlapping and overflowing maps still fail closed.
+
+Four hashed OVMF scenarios prove normal 5-GiB UEFI boot with the explicit PMM
+cap, legacy i8042 + VirtIO desktop completion, a controlled xHCI-only input
+failure and a controlled AHCI-only persistent-root failure. ACPI is not
+consumed; legacy PIC/PIT, CF8/CFC PCI, PS/2 input and modern VirtIO block remain
+the implemented platform contracts. Numeric xHCI/AHCI inventory is not driver
+support.
+
+The first interactive blocker selects M48 as the smallest correct xHCI/USB-HID
+foundation. AHCI/NVMe root storage remains a separate explicit blocker.
+
+## Semantic Freeze
+
+Implementation: `db2a403f90dafbb1686f295a1547aa0d548f43eb`.
+Tree: `2849e0c0a80baa283ac08531abaabbde0ea3746f`.
+Exact-head SUCCESS: M47 #1 / 33205793084; M46 #5 / 33205793000;
+M45 #9 / 33205792981; M44 #14 / 33205793040;
+M43 #18 / 33205793008; M42 #22 / 33205793032;
+M41 #26 / 33205793445; M40 #29 / 33205793017;
+M39 #32 / 33205793101; M38 #43 / 33205793036;
+M37 #76 / 33205792967; complete Boot #542 / 33205793042.
+Evidence: `boringos-m47-readiness-reference`, artifact 9699625549, GitHub ZIP
+SHA-256 `581ab9de170984279fff882be30a223156d0bd20393ae90cbc3b6914e2d9a596`.
+This separate closeout changes only documentation and active version witnesses.
+Exact-head closeout CI and guarded merge remain required.
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.48-dev**.
+M48 must wait for closeout CI, guarded squash and main-push SUCCESS.
+See [m47-real-hardware-readiness.md](m47-real-hardware-readiness.md).

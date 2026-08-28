@@ -13,6 +13,7 @@ struct pmm_stats {
     uint64_t usable_frames;
     uint64_t free_frames;
     uint64_t region_count;
+    bool memory_map_capped;
 };
 
 bool pmm_init(const struct boring_limine_memmap_response *memory_map);

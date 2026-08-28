@@ -16,7 +16,7 @@ The current normal boot path proves PMM, selected bootstrap-VMM mappings, the bo
 
 ## Physical memory
 
-BoringKernel allocates 4096-byte physical frames only from Limine memory-map entries marked usable. A bounded static bitmap and usable-region table provide deterministic first-fit allocation, free/reuse, and invalid/double-free rejection. Bootloader-reclaimable and all other non-usable types remain non-allocatable.
+BoringKernel allocates 4096-byte physical frames only from Limine memory-map entries marked usable. A bounded static bitmap and usable-region table provide deterministic first-fit allocation, free/reuse, and invalid/double-free rejection. Bootloader-reclaimable and all other non-usable types remain non-allocatable. The PMM manages at most 1,048,576 frames (4 GiB of usable memory) across 64 usable regions. A valid larger map is accepted with an explicit `memory_map_capped` status and excess usable frames left unmanaged; malformed, overlapping and overflowing maps still fail closed.
 
 All new process root tables, process-private lower-level page tables, process-isolation data frames, and the dedicated Ring 3/syscall test pages come from this existing PMM. There is no second physical allocator.
 

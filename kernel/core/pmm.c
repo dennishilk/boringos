@@ -21,6 +21,7 @@ static uint64_t pmm_region_count;
 static uint64_t pmm_total_frames;
 static uint64_t pmm_free_frames;
 static bool pmm_initialized;
+static bool pmm_memory_map_capped;
 
 static void pmm_reset_state(void) {
     uint64_t index;
@@ -29,6 +30,7 @@ static void pmm_reset_state(void) {
     pmm_total_frames = 0ULL;
     pmm_free_frames = 0ULL;
     pmm_initialized = false;
+    pmm_memory_map_capped = false;
 
     for (index = 0ULL; index < PMM_MAX_REGIONS; ++index) {
         pmm_regions[index].base = 0ULL;
@@ -175,6 +177,7 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
         uint64_t aligned_base;
         uint64_t aligned_end;
         uint64_t frame_count;
+        uint64_t remaining_frames;
         const struct boring_limine_memmap_entry *entry =
             memory_map->entries[entry_index];
 
@@ -194,11 +197,18 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
         }
 
         frame_count = (aligned_end - aligned_base) / PMM_PAGE_SIZE;
-        if ((frame_count == 0ULL) ||
-            (frame_count > (PMM_MAX_FRAMES - pmm_total_frames)) ||
+        if (frame_count == 0ULL) {
+            continue;
+        }
+        remaining_frames = PMM_MAX_FRAMES - pmm_total_frames;
+        if ((remaining_frames == 0ULL) ||
             (pmm_region_count >= PMM_MAX_REGIONS)) {
-            pmm_reset_state();
-            return false;
+            pmm_memory_map_capped = true;
+            continue;
+        }
+        if (frame_count > remaining_frames) {
+            frame_count = remaining_frames;
+            pmm_memory_map_capped = true;
         }
 
         pmm_regions[pmm_region_count].base = aligned_base;
@@ -278,5 +288,6 @@ bool pmm_get_stats(struct pmm_stats *stats) {
     stats->usable_bytes = pmm_total_frames * PMM_PAGE_SIZE;
     stats->free_frames = pmm_free_frames;
     stats->region_count = pmm_region_count;
+    stats->memory_map_capped = pmm_memory_map_capped;
     return true;
 }

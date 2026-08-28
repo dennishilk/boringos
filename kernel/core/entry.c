@@ -990,7 +990,7 @@ void boring_kernel_entry(void) {
 
     serial_init();
     serial_write_string("BoringOS booting...\n");
-    serial_write_string("BoringKernel 0.0.47-dev\n");
+    serial_write_string("BoringKernel 0.0.48-dev\n");
     serial_write_string("Arch: x86_64\n");
     serial_write_string("Hello from BoringKernel.\n\n");
 
@@ -1039,6 +1039,9 @@ void boring_kernel_entry(void) {
     serial_write_string("\n");
     serial_write_string("Usable regions: ");
     serial_write_u64(pmm_stats.region_count);
+    serial_write_string("\n");
+    serial_write_string("Memory map capped: ");
+    serial_write_string(pmm_stats.memory_map_capped ? "yes" : "no");
     serial_write_string("\n");
     serial_write_string("PMM: online\n\n");
 
@@ -1151,7 +1154,7 @@ void boring_kernel_entry(void) {
     if (framebuffer_surface != NULL) {
         const struct boring_boot_dashboard_info dashboard_info = {
             .kernel_name = "BoringKernel",
-            .kernel_version = "0.0.47-dev",
+            .kernel_version = "0.0.48-dev",
             .arch = "x86_64",
             .memory_bytes = pmm_stats.usable_bytes,
             .root_fs = "N/A",

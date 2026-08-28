@@ -289,9 +289,14 @@ void m38_desktop_test_run(
     serial_write_string("M38 native desktop session supervision acceptance:\n");
     if (!find_init_module(modules) || !x86_64_enable_nx() ||
         !x86_64_nx_enabled() || !process_init() || !task_init() ||
-        !syscall_init() || !boring_ipc_system_init() ||
-        !input_hardware_init() || !mount_root(&root)) {
-        fail("subsystem/root init");
+        !syscall_init() || !boring_ipc_system_init()) {
+        fail("subsystem init");
+    }
+    if (!input_hardware_init()) {
+        fail("input hardware");
+    }
+    if (!mount_root(&root)) {
+        fail("persistent root");
     }
     boring_ipc_syscall_use_bootstrap_stack();
     serial_write_string("m38-desktop: real BoringFS root mounted\n");
