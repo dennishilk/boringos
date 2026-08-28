@@ -1040,6 +1040,9 @@ void boring_kernel_entry(void) {
     serial_write_string("Usable regions: ");
     serial_write_u64(pmm_stats.region_count);
     serial_write_string("\n");
+    serial_write_string("Memory map capped: ");
+    serial_write_string(pmm_stats.memory_map_capped ? "yes" : "no");
+    serial_write_string("\n");
     serial_write_string("PMM: online\n\n");
 
     if (!pmm_self_test()) {

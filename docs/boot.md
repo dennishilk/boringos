@@ -30,7 +30,7 @@ controlled cli/hlt loop
 
 Limine is an external bootloader, not a BoringKernel component. After it transfers control to the ELF entry point, the kernel's serial output, PMM and VMM logic are BoringOS code.
 
-The build creates a hybrid Limine ISO with BIOS and x86_64 UEFI boot files. The automated acceptance run currently uses QEMU's normal x86_64 PC firmware path; UEFI is not a separate acceptance claim at this stage.
+The build creates a hybrid Limine ISO with BIOS and x86_64 UEFI boot files. The complete inherited acceptance run uses QEMU's normal x86_64 PC firmware path. M47 additionally boots four controlled q35 scenarios through OVMF/UEFI: normal high-memory completion, legacy-assisted desktop completion, an expected xHCI-only input failure and an expected AHCI-only root failure. These are emulator readiness-boundary proofs, not physical-machine verification.
 
 The kernel is linked in the x86_64 higher-half region expected by the Limine protocol. BoringKernel now owns allocation of usable physical 4-KiB frames and can create/remove selected 4-KiB virtual mappings. It intentionally does **not** replace the bootloader-created active root page table yet. Kernel execution, the current stack, HHDM and boot structures still rely on mappings inherited from Limine.
 
@@ -41,6 +41,10 @@ The current kernel requests and validates:
 - the memory map for PMM ownership decisions;
 - the HHDM offset so physical page-table frames can be accessed without assuming identity mapping;
 - x86_64 four-level paging mode for the current VMM milestone.
+
+The PMM manages at most 4 GiB of usable frames. It reports when a valid larger
+map is capped and deliberately leaves the excess unmanaged rather than failing
+the whole boot. ACPI is not currently requested or consumed.
 
 The VMM reads the currently active root from `CR3` and modifies only selected mappings. See [`architecture.md`](architecture.md) for the exact ownership boundary and reserved early VMM test range.
 

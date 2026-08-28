@@ -1,0 +1,36 @@
+name: M47 real hardware boot readiness
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Install build, OVMF and QEMU dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential binutils xorriso qemu-system-x86 ovmf python3
+      - name: PMM cap host regression
+        run: make pmm-readiness-host-test
+      - name: OVMF success paths and controlled hardware boundaries
+        run: python3 tests/m47-ovmf-readiness.py
+      - name: Upload readiness matrix evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boringos-m47-readiness-reference
+          path: build/m47-ovmf-readiness/
+          if-no-files-found: error
+          retention-days: 30

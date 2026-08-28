@@ -83,6 +83,7 @@ MEMORY_HOST_TEST := $(BUILD_DIR)/memory-host-test
 RUNTIME_HEAP_HOST_TEST := $(BUILD_DIR)/runtime-heap-host-test
 IPC_HOST_TEST := $(BUILD_DIR)/ipc-host-test
 DISPLAY_HOST_TEST := $(BUILD_DIR)/display-host-test
+PMM_READINESS_HOST_TEST := $(BUILD_DIR)/pmm-readiness-host-test
 MKBORINGFS_VERIFY := $(BUILD_DIR)/mkboringfs-test/mkboringfs-verify
 BORINGFS_HEADER := libs/boringfs/include/boring/boringfs.h
 BORINGFS_CODEC := libs/boringfs/codec.c
@@ -456,6 +457,10 @@ ipc-host-test: $(IPC_HOST_TEST)
 display-host-test: $(DISPLAY_HOST_TEST)
 	$(DISPLAY_HOST_TEST)
 
+.PHONY: pmm-readiness-host-test
+pmm-readiness-host-test: $(PMM_READINESS_HOST_TEST)
+	$(PMM_READINESS_HOST_TEST)
+
 boringfs-host-test:
 	sh ./tests/boringfs-host-test.sh
 
@@ -582,6 +587,13 @@ $(DISPLAY_HOST_TEST): tests/display-host-test.c user/boring-display/core.c \
 	@mkdir -p $(dir $@)
 	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) \
 		tests/display-host-test.c user/boring-display/core.c -o $@
+
+$(PMM_READINESS_HOST_TEST): tests/pmm-readiness-host-test.c \
+		kernel/core/pmm.c kernel/include/boring/pmm.h \
+		kernel/include/boring/boot_protocol.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) \
+		tests/pmm-readiness-host-test.c kernel/core/pmm.c -o $@
 
 $(RUNTIME_HEAP_HOST_TEST): tests/runtime-heap-host-test.c user/runtime/memory.c \
 		user/runtime/include/boring/memory.h user/runtime/include/boring/syscall.h \
