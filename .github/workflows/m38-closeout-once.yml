@@ -28,6 +28,7 @@ jobs:
           expected = {
               "README.md": 1,
               "README.de.md": 1,
+              "kernel/core/entry.c": 2,
               "kernel/core/syscall.c": 1,
               "kernel/core/boringfs_ro_test.c": 1,
               "tests/boot-qemu.sh": 1,
@@ -54,7 +55,7 @@ jobs:
           }
           old = "0.0.38-dev"
           new = "0.0.39-dev"
-          assert sum(expected.values()) == 28
+          assert sum(expected.values()) == 30
           for name, count in expected.items():
               path = Path(name)
               text = path.read_text()
