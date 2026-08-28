@@ -1,0 +1,39 @@
+name: M42 native client foundation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Install build and QEMU dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential binutils xorriso qemu-system-x86 python3
+      - name: WM shortcut and inherited client model tests
+        run: make client-host-test wm-host-test files-host-test edit-host-test terminal-host-test terminal-render-host-test
+      - name: Real shortcuts, focused input, framebuffer and graceful close
+        run: python3 tests/m42-client-qemu.py
+      - name: Upload actual M42 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boringos-m42-client-reference
+          path: |
+            build/m42-client-reference/
+            build/m40-bundle/geometry.txt
+            build/m40-bundle/boringfsck.txt
+          if-no-files-found: error
+          retention-days: 30

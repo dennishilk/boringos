@@ -929,6 +929,12 @@ wm-host-test: $(BUILD_DIR)/wm-host-test
 wm-audit: user-boringwm
 	sh tests/wm-build-audit.sh
 
+# M42 shared native desktop client lifecycle.
+CLIENT_RUNTIME_OBJECT := $(USER_BUILD_DIR)/runtime/client.o
+$(CLIENT_RUNTIME_OBJECT): user/runtime/client.c user/runtime/include/boring/client.h user/runtime/include/boring/wm.h user/runtime/include/boring/display_control.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+
 # M36 native managed terminal client and deterministic parser/renderer.
 TERMINAL_MAIN_OBJECT := $(USER_BUILD_DIR)/boring-terminal/main.o
 TERMINAL_ENGINE_OBJECT := $(USER_BUILD_DIR)/boring-terminal/terminal.o
@@ -943,18 +949,18 @@ TERMINAL_RENDER_HOST_TEST := $(BUILD_DIR)/terminal-render-host-test
 user-boring-terminal: $(TERMINAL_ELF)
 user-boring-terminal-death: $(TERMINAL_DEATH_ELF)
 
-$(USER_BUILD_DIR)/boring-terminal/%.o: user/boring-terminal/%.c user/boring-terminal/terminal.h user/boring-terminal/render.h user/boring-terminal/input.h
+$(USER_BUILD_DIR)/boring-terminal/%.o: user/boring-terminal/%.c user/boring-terminal/terminal.h user/boring-terminal/render.h user/boring-terminal/input.h user/runtime/include/boring/client.h
 	@mkdir -p $(dir $@)
 	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
 
-$(TERMINAL_ELF): $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(TERMINAL_ENGINE_OBJECT) $(TERMINAL_RENDER_OBJECT) $(TERMINAL_INPUT_OBJECT) $(TERMINAL_MAIN_OBJECT)
+$(TERMINAL_ELF): $(CLIENT_RUNTIME_OBJECT) $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(TERMINAL_ENGINE_OBJECT) $(TERMINAL_RENDER_OBJECT) $(TERMINAL_INPUT_OBJECT) $(TERMINAL_MAIN_OBJECT)
 	$(LD) $(DISPLAY_LDFLAGS) $^ -o $@
 
-$(USER_BUILD_DIR)/boring-terminal-death/main.o: user/boring-terminal/main.c user/boring-terminal/input.h user/boring-terminal/terminal.h user/boring-terminal/render.h
+$(USER_BUILD_DIR)/boring-terminal-death/main.o: user/boring-terminal/main.c user/boring-terminal/input.h user/boring-terminal/terminal.h user/boring-terminal/render.h user/runtime/include/boring/client.h
 	@mkdir -p $(dir $@)
 	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -DBORING_TERMINAL_DEATH_ACCEPTANCE -c $< -o $@
 
-$(TERMINAL_DEATH_ELF): $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(TERMINAL_ENGINE_OBJECT) $(TERMINAL_RENDER_OBJECT) $(TERMINAL_INPUT_OBJECT) $(USER_BUILD_DIR)/boring-terminal-death/main.o
+$(TERMINAL_DEATH_ELF): $(CLIENT_RUNTIME_OBJECT) $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(TERMINAL_ENGINE_OBJECT) $(TERMINAL_RENDER_OBJECT) $(TERMINAL_INPUT_OBJECT) $(USER_BUILD_DIR)/boring-terminal-death/main.o
 	$(LD) $(DISPLAY_LDFLAGS) $^ -o $@
 
 $(TERMINAL_HOST_TEST): tests/terminal-host-test.c user/boring-terminal/terminal.c user/boring-terminal/input.c user/boring-terminal/terminal.h user/boring-terminal/input.h kernel/include/boring/input_abi.h
@@ -987,10 +993,10 @@ EDIT_ENGINE_OBJECT := $(USER_BUILD_DIR)/boring-edit/editor.o
 EDIT_ELF := $(USER_BUILD_DIR)/boring-edit.elf
 .PHONY: user-boring-edit edit-host-test
 user-boring-edit: $(EDIT_ELF)
-$(USER_BUILD_DIR)/boring-edit/%.o: user/boring-edit/%.c user/boring-edit/editor.h user/boring-terminal/terminal.h user/boring-terminal/render.h user/boring-terminal/input.h
+$(USER_BUILD_DIR)/boring-edit/%.o: user/boring-edit/%.c user/boring-edit/editor.h user/boring-terminal/terminal.h user/boring-terminal/render.h user/boring-terminal/input.h user/runtime/include/boring/client.h
 	@mkdir -p $(dir $@)
 	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
-$(EDIT_ELF): $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(TERMINAL_ENGINE_OBJECT) $(TERMINAL_RENDER_OBJECT) $(TERMINAL_INPUT_OBJECT) $(EDIT_ENGINE_OBJECT) $(EDIT_MAIN_OBJECT)
+$(EDIT_ELF): $(CLIENT_RUNTIME_OBJECT) $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(TERMINAL_ENGINE_OBJECT) $(TERMINAL_RENDER_OBJECT) $(TERMINAL_INPUT_OBJECT) $(EDIT_ENGINE_OBJECT) $(EDIT_MAIN_OBJECT)
 	$(LD) $(DISPLAY_LDFLAGS) $^ -o $@
 $(BUILD_DIR)/edit-host-test: tests/edit-host-test.c user/boring-edit/editor.c user/boring-edit/editor.h user/boring-terminal/terminal.c
 	@mkdir -p $(dir $@)
@@ -1004,13 +1010,20 @@ FILES_ENGINE_OBJECT := $(USER_BUILD_DIR)/boring-files/files.o
 FILES_ELF := $(USER_BUILD_DIR)/boring-files.elf
 .PHONY: user-boring-files files-host-test
 user-boring-files: $(FILES_ELF)
-$(USER_BUILD_DIR)/boring-files/%.o: user/boring-files/%.c user/boring-files/files.h user/boring-terminal/terminal.h user/boring-terminal/render.h
+$(USER_BUILD_DIR)/boring-files/%.o: user/boring-files/%.c user/boring-files/files.h user/boring-terminal/terminal.h user/boring-terminal/render.h user/runtime/include/boring/client.h
 	@mkdir -p $(dir $@)
 	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
-$(FILES_ELF): $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(TERMINAL_ENGINE_OBJECT) $(TERMINAL_RENDER_OBJECT) $(FILES_ENGINE_OBJECT) $(FILES_MAIN_OBJECT)
+$(FILES_ELF): $(CLIENT_RUNTIME_OBJECT) $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(TERMINAL_ENGINE_OBJECT) $(TERMINAL_RENDER_OBJECT) $(FILES_ENGINE_OBJECT) $(FILES_MAIN_OBJECT)
 	$(LD) $(DISPLAY_LDFLAGS) $^ -o $@
 $(BUILD_DIR)/files-host-test: tests/files-host-test.c user/boring-files/files.c user/boring-files/files.h user/boring-terminal/terminal.c
 	@mkdir -p $(dir $@)
 	$(HOST_CC) -Ikernel/include -Iuser/boring-files $(HOST_CFLAGS) tests/files-host-test.c user/boring-files/files.c user/boring-terminal/terminal.c -o $@
 files-host-test: $(BUILD_DIR)/files-host-test
 	./$(BUILD_DIR)/files-host-test
+
+.PHONY: client-host-test
+client-host-test: $(BUILD_DIR)/client-host-test
+	$<
+$(BUILD_DIR)/client-host-test: tests/client-host-test.c user/runtime/client.c user/runtime/include/boring/client.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(RUNTIME_USER_CPPFLAGS) $(HOST_CFLAGS) tests/client-host-test.c user/runtime/client.c -o $@
