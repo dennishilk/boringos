@@ -9,6 +9,7 @@
 #include <boring/framebuffer.h>
 #include <boring/context.h>
 #include <boring/cpu.h>
+#include <boring/cpu_inventory.h>
 #include <boring/exception.h>
 #include <boring/elf_boot.h>
 #include <boring/heap.h>
@@ -987,9 +988,11 @@ void boring_kernel_entry(void) {
 
     serial_init();
     serial_write_string("BoringOS booting...\n");
-    serial_write_string("BoringKernel 0.0.43-dev\n");
+    serial_write_string("BoringKernel 0.0.44-dev\n");
     serial_write_string("Arch: x86_64\n");
     serial_write_string("Hello from BoringKernel.\n\n");
+
+    boring_cpu_inventory_init();
 
     framebuffer_status = boring_framebuffer_boot_init();
     framebuffer_surface = boring_framebuffer_get();
@@ -1143,7 +1146,7 @@ void boring_kernel_entry(void) {
     if (framebuffer_surface != NULL) {
         const struct boring_boot_dashboard_info dashboard_info = {
             .kernel_name = "BoringKernel",
-            .kernel_version = "0.0.43-dev",
+            .kernel_version = "0.0.44-dev",
             .arch = "x86_64",
             .memory_bytes = pmm_stats.usable_bytes,
             .root_fs = "N/A",

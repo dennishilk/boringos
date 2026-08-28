@@ -48,7 +48,7 @@ done
 status=0
 for line in \
     'BoringOS booting...' \
-    'BoringKernel 0.0.43-dev' \
+    'BoringKernel 0.0.44-dev' \
     'Arch: x86_64' \
     'Hello from BoringKernel.' \
     'Physical memory manager:' \
