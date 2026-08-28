@@ -1,6 +1,7 @@
 #include <boring/desktop_log.h>
 #include <boring/display_control.h>
 #include <boring/event.h>
+#include <boring/input_abi.h>
 #include <boring/ipc.h>
 #include "core.h"
 
@@ -139,7 +140,17 @@ static void request(uint32_t endpoint) {
 }
 
 static void handle_input(const struct display_event *message) {
-    enum wm_action action = wm_key(&wm, &message->input);
+    enum wm_action action;
+#ifdef BORING_M38_WM_DEATH_ACCEPTANCE
+    if ((message != NULL) &&
+        (message->input.type == BORING_INPUT_EVENT_KEY) &&
+        (message->input.code == BORING_KEY_F12) &&
+        (message->input.value1 == BORING_KEY_DOWN_VALUE)) {
+        desktop_say("wm: M38 test-only unexpected Ring3 exit\n");
+        boring_exit(72);
+    }
+#endif
+    action = wm_key(&wm, &message->input);
     if ((message->input.type == BORING_INPUT_EVENT_MOUSE_MOVE) &&
         wm_pointer(&wm, message->cursor_x, message->cursor_y)) { action = WM_FOCUS; }
     if ((action == WM_FOCUS) || (action == WM_REORDER)) {
