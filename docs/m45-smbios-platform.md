@@ -1,6 +1,6 @@
 # M45 — real bounded SMBIOS platform identity
 
-Status: bounded scope; implementation and Semantic Freeze pending.
+Status: implementation COMPLETE and Semantic Frozen; runtime-neutral closeout to 0.0.46-dev.
 
 Verified base main `c78872a0877fbd7708c4b12a504de981899aae76`, tree
 `abfd0beeb3fa4e0cc8c8b38ef4eb03999bc2df2e`, BoringKernel 0.0.45-dev; all
@@ -67,3 +67,18 @@ The supplied values are test inputs carried by the guest firmware table, not
 production constants. Both scenarios reach the existing process/address-space
 normal-boot witness. This proves real guest table consumption and both entry
 formats while explicitly making no physical-PC or supported-hardware claim.
+
+## Semantic Freeze
+
+Implementation: `3d8f3ec610fb8a834aeb284bf63a3a4ce0c8f6d6`.
+Tree: `242876a301f8e40422debda687db05891786692b`.
+Exact-head SUCCESS: M45 #1 / 33200536553; M44 #6 / 33200536479;
+M43 #10 / 33200536471; M42 #14 / 33200536492; M41 #18 / 33200536477;
+M40 #21 / 33200536563; M39 #24 / 33200536516; M38 #35 / 33200536498;
+M37 #68 / 33200536559; complete Boot #534 / 33200536623.
+
+Evidence artifact: `boringos-m45-smbios-reference`, artifact ID
+`9697574284`. GitHub ZIP SHA-256:
+`222e1853781abd6c4656a3aa5aafdb7b590e7b5d48943b378760b5365cca89cc`.
+This separate closeout changes only documentation and active version witnesses.
+Exact-head closeout CI and guarded merge remain required.

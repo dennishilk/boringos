@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.45-dev
+BoringKernel 0.0.46-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1354,3 +1354,41 @@ Exact-head closeout CI and guarded merge remain required.
 Active version after runtime-neutral closeout: **BoringKernel 0.0.45-dev**.
 M45 must wait for closeout CI, guarded merge and main-push SUCCESS.
 See [m44-pci-inventory.md](m44-pci-inventory.md).
+
+
+## Milestone 45: real bounded SMBIOS platform identity — COMPLETE, Semantic Frozen
+
+The BoringOS-owned allocation-free SMBIOS path validates 2.x and 3.x entry
+points, checksums, physical table ranges, HHDM arithmetic and mapped-memory
+containment. A 1 MiB / 4,096-structure parser rejects malformed lengths,
+truncated structures, unterminated string sets and invalid string indices.
+Fixed fields retain actual firmware vendor/version, system manufacturer/product
+and board manufacturer/product. Missing optional values remain unavailable.
+
+Bounded type-17 handling records real memory slot/presence counts, total
+reported bytes and an explicit unknown-size completeness flag. There is no
+Linux DMI code, userspace ABI change, hardcoded emulator identity, driver
+support inference or physical-hardware readiness claim.
+
+Host fixtures and ASan/UBSan cover valid 2.x/3.x entries, optional absence,
+invalid checksums/lengths/indices/termination and table/structure limits. Real
+QEMU completes normal boots on default q35 SMBIOS 3.0/64-bit firmware and a
+distinct pc SMBIOS 2.8/32-bit configuration, proving actual guest table
+consumption and rejecting production hardcodes.
+
+## Semantic Freeze
+
+Implementation: `3d8f3ec610fb8a834aeb284bf63a3a4ce0c8f6d6`.
+Tree: `242876a301f8e40422debda687db05891786692b`.
+Exact-head SUCCESS: M45 #1 / 33200536553; M44 #6 / 33200536479;
+M43 #10 / 33200536471; M42 #14 / 33200536492; M41 #18 / 33200536477;
+M40 #21 / 33200536563; M39 #24 / 33200536516; M38 #35 / 33200536498;
+M37 #68 / 33200536559; complete Boot #534 / 33200536623.
+Evidence: `boringos-m45-smbios-reference`, artifact 9697574284, GitHub ZIP
+SHA-256 `222e1853781abd6c4656a3aa5aafdb7b590e7b5d48943b378760b5365cca89cc`.
+This separate closeout changes only documentation and active version witnesses.
+Exact-head closeout CI and guarded merge remain required.
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.46-dev**.
+M46 must wait for closeout CI, guarded merge and main-push SUCCESS.
+See [m45-smbios-platform.md](m45-smbios-platform.md).
