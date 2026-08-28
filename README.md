@@ -21,7 +21,7 @@ Current serial output begins with:
 
 ```text
 BoringOS booting...
-BoringKernel 0.0.40-dev
+BoringKernel 0.0.41-dev
 Arch: x86_64
 Hello from BoringKernel.
 ```

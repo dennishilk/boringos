@@ -1,6 +1,6 @@
 # M40 — native BoringFiles
 
-Status: implementation in progress; no Semantic Freeze or closeout claimed.
+Status: implementation COMPLETE and Semantic Frozen; runtime-neutral closeout to 0.0.41-dev. Exact-head closeout CI and guarded merge remain required.
 
 Verified base: main `913a14c6695ef335b75bbe422ad722f6991d8d94`, tree `e3d758b034ac112807e69b63807c27877513a86f`, BoringKernel 0.0.40-dev. M39/M38/M37/full Boot main-push CI SUCCESS before beginning.
 
@@ -44,5 +44,13 @@ focus-only editing, save, reopen through Files, independent Ring3 cat, exact
 persisted bytes `hello world`, and final 9-created/8-finished PID1-only drain.
 All IPC/shared-buffer/input/framebuffer/PTY counters are zero. Full-frame pixel
 checks passed at each captured state. Host model/ELF tests and ASan/UBSan passed
-(with unsupported LeakSanitizer disabled). Exact-head CI and Semantic Freeze
-remain pending.
+(with unsupported LeakSanitizer disabled). All exact-head implementation CI completed SUCCESS; Semantic Freeze is recorded below.
+
+
+## Semantic Freeze
+
+Implementation: `aeba543bba9b5fd91b5c447a616c73738f00d277`.
+Tree: `c0b3af8e2fc52d94c74be1956ee90616dbd41314`.
+Exact-head SUCCESS: M40 #1 / 33188714799; M39 #4 / 33188713720;
+M38 #15 / 33188713568; M37 #48 / 33188713596; complete Boot #514 / 33188713599.
+The separate closeout changes only documentation and current version witnesses.
