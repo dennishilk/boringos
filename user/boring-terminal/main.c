@@ -21,7 +21,7 @@ static uint32_t manager;
 static uint32_t surface;
 static uint32_t window_token;
 static uint32_t buffer_handle;
-static uint32_t master_fd;
+static uint32_t master_fd = UINT32_MAX;
 static uint8_t *pixels;
 static uint32_t surface_width;
 static uint32_t surface_height;
@@ -37,6 +37,11 @@ static void term_fail(const char *reason) {
     desktop_say("M36 terminal FAILED: ");
     desktop_say(reason);
     desktop_say("\n");
+    if (master_fd != UINT32_MAX) {
+        (void)boring_fd_close(master_fd);
+        master_fd = UINT32_MAX;
+        desktop_say("boring-terminal: failure closed PTY master\n");
+    }
     boring_exit(90);
 }
 
@@ -45,23 +50,20 @@ static struct display_event control_rpc(const struct display_control *request) {
     struct boring_ipc_receive_result received;
     if ((boring_ipc_send(display, request, sizeof(*request), 0U) != 0L) ||
         (boring_ipc_receive(display, &reply, sizeof(reply), &received) != 0L) ||
-        (received.payload_length != sizeof(reply)) ||
-        (received.buffer_handle != 0U) ||
-        (reply.version != BORING_DISPLAY_CONTROL_VERSION) ||
-        (reply.type != DISPLAY_REPLY)) {
+        (received.payload_length != sizeof(reply)) || (received.buffer_handle != 0U) ||
+        (reply.version != BORING_DISPLAY_CONTROL_VERSION) || (reply.type != DISPLAY_REPLY)) {
         term_fail("display control RPC");
     }
     return reply;
 }
 
-static struct boring_display_reply surface_rpc(
-    const struct boring_display_request *request, uint32_t attachment) {
+static struct boring_display_reply surface_rpc(const struct boring_display_request *request,
+                                                uint32_t attachment) {
     struct boring_display_reply reply;
     struct boring_ipc_receive_result received;
     if ((boring_ipc_send(display, request, sizeof(*request), attachment) != 0L) ||
         (boring_ipc_receive(display, &reply, sizeof(reply), &received) != 0L) ||
-        (received.payload_length != sizeof(reply)) ||
-        (received.buffer_handle != 0U) ||
+        (received.payload_length != sizeof(reply)) || (received.buffer_handle != 0U) ||
         (reply.version != BORING_DISPLAY_PROTOCOL_VERSION)) {
         term_fail("surface RPC");
     }
@@ -76,8 +78,7 @@ static struct boring_wm_message wm_rpc(const struct boring_wm_message *request) 
     }
     for (;;) {
         if ((boring_ipc_receive(manager, &reply, sizeof(reply), &received) != 0L) ||
-            (received.payload_length != sizeof(reply)) ||
-            (received.buffer_handle != 0U) ||
+            (received.payload_length != sizeof(reply)) || (received.buffer_handle != 0U) ||
             (reply.version != BORING_WM_VERSION)) {
             term_fail("WM receive");
         }
@@ -128,7 +129,6 @@ static void configure(const struct boring_wm_message *message) {
     commit();
     desktop_say("boring-terminal: CONFIGURE/redraw\n");
 }
-
 
 static void write_master(const char *bytes, size_t length) {
     size_t offset = 0U;
@@ -347,8 +347,8 @@ int boring_main(int argc, char **argv) {
 
     for (;;) {
         struct boring_event_watch watches[2] = {
-            {BORING_EVENT_IPC, manager, 0U, 0U, 0ULL},
-            {BORING_EVENT_FD, master_fd, 0U, 0U, 0ULL}
+            {BORING_EVENT_IPC, manager, 0U, 0U, 0U, 0ULL},
+            {BORING_EVENT_FD, master_fd, 0U, 0U, 0U, 0ULL}
         };
         long ready = boring_event_wait(watches, 2U, 0U);
         if (ready <= 0L) {
