@@ -49,6 +49,7 @@ static bool active;
 void x86_64_enter_ring3(uintptr_t user_rip, uintptr_t user_rsp,
                         uint16_t user_cs, uint16_t user_ss,
                         uintptr_t result_address) __attribute__((noreturn));
+void m37_desktop_test_finish_from_pid1(void) __attribute__((noreturn));
 
 static void fail(const char *reason) __attribute__((noreturn));
 static void fail(const char *reason) {
@@ -164,7 +165,7 @@ static bool mount_root(struct vfs_path *root_out) {
            (vfs_get_root(root_out) == VFS_RESULT_OK);
 }
 
-static void verify_drained(void) {
+void m37_desktop_test_finish_from_pid1(void) {
     struct boring_ipc_stats ipc;
     struct user_memory_global_stats memory;
     struct boring_input_stats input;
@@ -173,7 +174,12 @@ static void verify_drained(void) {
     struct process_stats processes;
     struct task_stats tasks;
 
-    if (!boring_ipc_get_stats(&ipc) || (ipc.live_services != 0U) ||
+    if (!active || (init_state.process == NULL) ||
+        (process_current() != init_state.process) ||
+        (init_state.process->pid != 1ULL) ||
+        (init_state.process->state != PROCESS_ALIVE) ||
+        !init_state.image_loaded ||
+        !boring_ipc_get_stats(&ipc) || (ipc.live_services != 0U) ||
         (ipc.live_connections != 0U) || (ipc.queued_messages != 0U) ||
         (ipc.retained_buffer_attachments != 0U) ||
         !user_memory_get_global_stats(&memory) || (memory.active_objects != 0U) ||
@@ -184,17 +190,22 @@ static void verify_drained(void) {
         (pty.queued_bytes != 0U) ||
         !process_get_stats(&processes) || (processes.active_processes != 1ULL) ||
         (processes.created_processes != processes.finished_processes + 1ULL) ||
-        (processes.current_pid != 0ULL) ||
+        (processes.current_pid != 1ULL) ||
         !task_get_stats(&tasks) || (tasks.active_tasks != 1ULL) ||
         (tasks.created_tasks != tasks.finished_tasks + 1ULL) ||
+        (tasks.current_task_id != init_state.task_id) ||
+        (tasks.current_process_pid != 1ULL) ||
         (tasks.finished_resume_count != 0ULL) ||
         (tasks.scheduler_fault_count != 0ULL)) {
-        fail("desktop drain accounting");
+        fail("desktop drain accounting in PID 1");
     }
     serial_write_string(
         "m37-desktop: IPC/input/framebuffer/M32/PTY desktop resources drained\n");
     serial_write_string(
         "m37-desktop: all spawned desktop tasks/processes reaped; PID 1 remains\n");
+    serial_write_string(
+        "M37 native desktop session startup acceptance passed.\n");
+    x86_64_halt_forever();
 }
 
 void m37_desktop_test_run(
@@ -202,8 +213,6 @@ void m37_desktop_test_run(
     struct vfs_path root = {NULL, NULL};
     struct ring3_user_mapping_info entry_info;
     struct ring3_user_mapping_info stack_info;
-    struct process_stats processes;
-    bool children_seen = false;
 
     init_state = (struct m37_init_state){0};
     active = false;
@@ -246,24 +255,6 @@ void m37_desktop_test_run(
     serial_write_string(
         "m37-desktop: PID 1 scheduler task ready; desktop children must come from BoringFS\n");
 
-    for (;;) {
-        if ((init_state.process == NULL) ||
-            (init_state.process->state != PROCESS_ALIVE) ||
-            !process_get_stats(&processes)) {
-            fail("PID 1 lifetime");
-        }
-        if (processes.created_processes >= 3ULL) {
-            children_seen = true;
-        }
-        if (children_seen && (processes.active_processes == 1ULL) &&
-            (processes.created_processes == processes.finished_processes + 1ULL)) {
-            break;
-        }
-        task_yield();
-    }
-
-    verify_drained();
-    serial_write_string(
-        "M37 native desktop session startup acceptance passed.\n");
-    x86_64_halt_forever();
+    task_yield();
+    fail("PID 1 unexpectedly returned to bootstrap");
 }
