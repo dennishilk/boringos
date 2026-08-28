@@ -1,0 +1,106 @@
+name: M38 one-shot closeout
+
+on:
+  push:
+    branches:
+      - agent/native-desktop-session-supervision
+    paths:
+      - .github/workflows/m38-closeout-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  closeout:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/native-desktop-session-supervision
+          fetch-depth: 1
+      - name: Apply audited M38 closeout
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          expected = {
+              "README.md": 1,
+              "README.de.md": 1,
+              "kernel/core/syscall.c": 1,
+              "kernel/core/boringfs_ro_test.c": 1,
+              "tests/boot-qemu.sh": 1,
+              "tests/block-device-qemu.sh": 1,
+              "tests/framebuffer-qemu.sh": 1,
+              "tests/exception-pagefault-qemu.sh": 1,
+              "tests/persistent-root-qemu.sh": 3,
+              "tests/runtime-qemu.sh": 1,
+              "tests/boringfs-ro-qemu.sh": 1,
+              "tests/ramfs-qemu.sh": 1,
+              "tests/shell-host-test.c": 1,
+              "tests/syscall-qemu.sh": 1,
+              "tests/exception-divide-qemu.sh": 1,
+              "tests/ring3-qemu.sh": 1,
+              "tests/boringfs-rw-qemu.sh": 1,
+              "tests/virtio-block-qemu.sh": 1,
+              "tests/elf-qemu.sh": 1,
+              "tests/shell-qemu.sh": 2,
+              "tests/m36-spawn-qemu.sh": 1,
+              "tests/init-qemu.sh": 1,
+              "tests/validate-m36-terminal-screenshot.py": 1,
+              "tests/vfs-qemu.sh": 1,
+              "tests/console-qemu.sh": 1,
+          }
+          old = "0.0.38-dev"
+          new = "0.0.39-dev"
+          assert sum(expected.values()) == 28
+          for name, count in expected.items():
+              path = Path(name)
+              text = path.read_text()
+              actual = text.count(old)
+              assert actual == count, (name, actual, count)
+              path.write_text(text.replace(old, new))
+
+          roadmap = Path("docs/roadmap.md")
+          text = roadmap.read_text()
+          active_banner = "The accepted development banner is now:\n\n```text\nBoringKernel 0.0.38-dev\n```"
+          assert text.count(active_banner) == 1
+          text = text.replace(active_banner,
+                              "The accepted development banner is now:\n\n```text\nBoringKernel 0.0.39-dev\n```",
+                              1)
+
+          m37_summary = (
+              "M37 completes native desktop session startup without extending the ABI: PID 1 is the sole userspace boot module, starts `/bin/boring-display` and `/bin/boringwm` from persistent BoringFS through existing syscall 43 `SPAWN`, waits for and reaps both children, and remains alive after the real graphical terminal session drains. There is still no partition layer, networking, POSIX TTY/job-control model, restart policy or general desktop supervision.\n"
+          )
+          assert text.count(m37_summary) == 1
+          m38_summary = (
+              "M38 adds bounded PID 1 desktop-session supervision without extending syscall numbering: `WAITPID(0, status)` waits for any waitable direct child while exact-PID `WAITPID` remains unchanged. PID 1 tracks the display/WM session through STARTING, RUNNING, FAILED/DRAINING and DRAINED, reaps both central children regardless of exit order, and survives normal, WM-first and display-first drains. There is still no restart policy, general service manager, login manager, signals, networking, audio or M39 work.\n"
+          )
+          text = text.replace(m37_summary, m37_summary + m38_summary, 1)
+
+          assert "# Stage 22 — bounded desktop session supervision" not in text
+          text = text.rstrip() + "\n\n---\n\n# Stage 22 — bounded desktop session supervision\n\n## Milestone 38: native desktop session supervision — implementation COMPLETE, Semantic Frozen\n\nM38 keeps the M37 desktop architecture and syscall numbering intact while making\nPID 1 a bounded two-child desktop-session supervisor. Existing syscall 17\n`WAITPID` gains the compatible selector `WAITPID(0, status)` for any waitable\ndirect child; exact-PID waits retain their previous contract. PID 1 records the\ndisplay and WM child identities, observes whichever central child exits first,\nreaps each exactly once, drains the surviving desktop stack through existing\nIPC/PTY/buffer/input/framebuffer teardown, and remains alive after the session.\n\nReal QEMU acceptance covers the normal M37-compatible lifecycle plus deterministic\nunexpected WM-first and display-first Ring3 exits. Every scenario proves concrete\nreap order/status, one surviving PID1 process/task, complete IPC/M32/input/\nframebuffer/PTY resource drain, and zero resume/fault residue. No restart loop or\ngeneral service-manager semantics are introduced. See\n[m38-session-supervision.md](m38-session-supervision.md).\n\n## M38 Semantic Freeze record\n\n- Base: `2662aa44dc00e2d1b1577576f27522554291316d`\n- Freeze SHA: `56b80bacf52e04b8f7b2f89830f578cfb9da2765`\n- Freeze tree: `c4db3501b52a21d63cfad2d1dd678585eb11fcb6`\n- M38 exact-head supervision CI: **Run #6 / 33181145205 / SUCCESS**\n- M37 exact-head regression: **Run #39 / 33181145272 / SUCCESS**\n- BoringKernel full regression: **Run #505 / 33181145165 / SUCCESS**\n- Event: `pull_request`; branch: `agent/native-desktop-session-supervision`; frozen version: `0.0.38-dev`\n- Freeze evidence artifact: `boringos-m38-desktop-reference`, ID `9689752268`\n- Artifact ZIP SHA-256: `7eb5d4d49cbdc6db443e31b25fcdc451946fed0f7758737f6b29bf02b319589d`\n- PR: [#49](https://github.com/dennishilk/boringos/pull/49)\n\nAll intended M38 runtime semantics and every inherited regression gate passed on\nthe exact freeze head before closeout. Closeout changes only this roadmap and the\nactive current-version witnesses to **BoringKernel 0.0.39-dev**. No M39\nimplementation is included.\n"
+          roadmap.write_text(text)
+          PY
+
+          rm .github/workflows/m38-closeout-once.yml
+          git diff --check
+
+          if grep -RIn --exclude-dir=.git --include='*.sh' --include='*.py' --include='*.c' --include='*.h' --include='*.yml' --include='*.yaml' '0\.0\.38-dev' kernel user tests .github Makefile 2>/dev/null; then
+            echo 'stale active 0.0.38-dev witness remains' >&2
+            exit 1
+          fi
+
+          mapfile -t historical < <(grep -RIl --exclude-dir=.git '0\.0\.38-dev' README.md README.de.md docs kernel user tests .github Makefile 2>/dev/null | sort || true)
+          expected_historical=(docs/roadmap.md)
+          printf '%s\n' "${historical[@]}" > /tmp/historical
+          printf '%s\n' "${expected_historical[@]}" | sort > /tmp/expected_historical
+          sort -o /tmp/historical /tmp/historical
+          diff -u /tmp/expected_historical /tmp/historical
+
+          git config user.name 'M38 Closeout'
+          git config user.email '81433681+dennishilk@users.noreply.github.com'
+          git add -A
+          git commit -m 'Close out M38 at 0.0.39-dev'
+          git push origin HEAD:agent/native-desktop-session-supervision
