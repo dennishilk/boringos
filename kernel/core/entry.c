@@ -26,6 +26,7 @@
 #include <boring/ring3_test.h>
 #include <boring/serial.h>
 #include <boring/shell_test.h>
+#include <boring/smbios.h>
 #include <boring/syscall_test.h>
 #include <boring/task.h>
 #include <boring/timer.h>
@@ -989,12 +990,14 @@ void boring_kernel_entry(void) {
 
     serial_init();
     serial_write_string("BoringOS booting...\n");
-    serial_write_string("BoringKernel 0.0.45-dev\n");
+    serial_write_string("BoringKernel 0.0.46-dev\n");
     serial_write_string("Arch: x86_64\n");
     serial_write_string("Hello from BoringKernel.\n\n");
 
     boring_cpu_inventory_init();
     boring_pci_inventory_init();
+    boring_smbios_boot_init(limine_hhdm_request.response,
+                            limine_memmap_request.response);
 
     framebuffer_status = boring_framebuffer_boot_init();
     framebuffer_surface = boring_framebuffer_get();
@@ -1148,7 +1151,7 @@ void boring_kernel_entry(void) {
     if (framebuffer_surface != NULL) {
         const struct boring_boot_dashboard_info dashboard_info = {
             .kernel_name = "BoringKernel",
-            .kernel_version = "0.0.45-dev",
+            .kernel_version = "0.0.46-dev",
             .arch = "x86_64",
             .memory_bytes = pmm_stats.usable_bytes,
             .root_fs = "N/A",
