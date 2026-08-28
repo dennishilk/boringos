@@ -18,6 +18,7 @@
 #include <boring/irq.h>
 #include <boring/kernel.h>
 #include <boring/pmm.h>
+#include <boring/pci_inventory.h>
 #include <boring/preemption_test.h>
 #include <boring/process.h>
 #include <boring/process_test.h>
@@ -993,6 +994,7 @@ void boring_kernel_entry(void) {
     serial_write_string("Hello from BoringKernel.\n\n");
 
     boring_cpu_inventory_init();
+    boring_pci_inventory_init();
 
     framebuffer_status = boring_framebuffer_boot_init();
     framebuffer_surface = boring_framebuffer_get();
