@@ -1,0 +1,28 @@
+name: M37 one-shot current-version audit
+
+on:
+  push:
+    branches:
+      - agent/native-desktop-session-startup
+    paths:
+      - .github/workflows/m37-version-audit-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/native-desktop-session-startup
+          fetch-depth: 1
+      - name: List remaining 0.0.37-dev witnesses
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== ALL 0.0.37-dev matches ==='
+          grep -RIn --exclude-dir=.git --exclude='m37-version-audit-once.yml' '0\.0\.37-dev' . || true
+          echo '=== ACTIVE CODE/TEST/CI matches only ==='
+          grep -RIn --exclude-dir=.git --include='*.sh' --include='*.py' --include='*.c' --include='*.h' --include='*.yml' --include='*.yaml' '0\.0\.37-dev' kernel user tests .github Makefile 2>/dev/null || true
