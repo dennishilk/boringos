@@ -1,6 +1,6 @@
 # M43 — real CPUID hardware inventory
 
-Status: implementation candidate; exact-head CI and Semantic Freeze pending.
+Status: implementation COMPLETE and Semantic Frozen; runtime-neutral closeout to 0.0.44-dev.
 
 Verified base main `0f6a35e0d182ef76dd7d5cda7a737f82661df178`, tree `df3fb4cb43c96ffd59a8d9641a98da4e0d918d89`, BoringKernel 0.0.43-dev; all seven exact-main push workflows SUCCESS.
 
@@ -58,7 +58,8 @@ reference remains one `qemu64,apic=off` CPU with legacy PIC/PIT. No SMP/APIC fix
 is included or claimed. The single-CPU full permanent regression is unchanged.
 
 No physical-machine evidence, new executable or userspace ABI extension.
-Version stays 0.0.43-dev until a proven Semantic Freeze permits closeout.
+Implementation stayed at 0.0.43-dev; the proven freeze permits the separate
+runtime-neutral closeout to 0.0.44-dev.
 
 
 Local real guest results: standard qemu64 reports vendor AuthenticAMD, brand
@@ -66,4 +67,15 @@ QEMU Virtual CPU version 2.5+, family/model/stepping 15/107/1; the changed
 single-CPU variant reports BoringCPU123 and 15/42/7. Both complete normal boot.
 The additional four-CPU inventory reports logical_per_package_max=4.
 These values describe these emulated CPUs, not the host or a physical PC.
-Exact-head permanent CI and Semantic Freeze remain pending.
+All exact-head implementation gates completed SUCCESS; the freeze is recorded below.
+
+
+## Semantic Freeze
+
+Implementation: `2973b2bba0a86da0332008c1feacb0201baca791`.
+Tree: `bd0b4cf05027c020be55459206bcf0e90cd1f30c`.
+Exact-head SUCCESS: M43 #1 / 33194111893; M42 #5 / 33194111742;
+M41 #9 / 33194111733; M40 #12 / 33194111694; M39 #15 / 33194111690;
+M38 #26 / 33194111726; M37 #59 / 33194111685; complete Boot #525 / 33194111719.
+This separate closeout changes only documentation and active version witnesses.
+Exact-head closeout CI and guarded merge remain required.

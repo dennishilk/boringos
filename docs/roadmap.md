@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.43-dev
+BoringKernel 0.0.44-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1287,3 +1287,35 @@ Exact-head closeout CI and guarded merge remain required.
 Active version after this runtime-neutral closeout: **BoringKernel 0.0.43-dev**.
 M43 must wait for exact-head closeout CI, guarded squash and main-push SUCCESS.
 See [m42-client-foundation.md](m42-client-foundation.md).
+
+
+## Milestone 43: real boot CPU CPUID inventory — COMPLETE, Semantic Frozen
+
+A bounded BoringOS-owned collector executes actual x86_64 CPUID and records
+vendor, optional brand, family/model/stepping, initial APIC ID, raw relevant
+feature registers and maximum addressable logical IDs per package. Unsupported
+leaves are not queried and validity flags distinguish absent data. At most
+eight CPUID queries, fixed strings, no allocation, no userspace ABI change.
+Serial output reports the boot CPU's actual inventory; no QEMU identity constants
+exist in the production collector and no advertised feature is enabled by it.
+
+Real QEMU acceptance requires complete normal boots on two single-CPU variants,
+including deliberately varied vendor/family/model/stepping, plus an explicitly
+inventory-only four-CPU probe. Host fixtures cover bounds, absence and decoding.
+The preexisting four-CPU PIC/PIT runtime stall was reproduced on the M42 base;
+there is no SMP-runtime or real-PC readiness claim.
+
+
+## Semantic Freeze
+
+Implementation: `2973b2bba0a86da0332008c1feacb0201baca791`.
+Tree: `bd0b4cf05027c020be55459206bcf0e90cd1f30c`.
+Exact-head SUCCESS: M43 #1 / 33194111893; M42 #5 / 33194111742;
+M41 #9 / 33194111733; M40 #12 / 33194111694; M39 #15 / 33194111690;
+M38 #26 / 33194111726; M37 #59 / 33194111685; complete Boot #525 / 33194111719.
+This separate closeout changes only documentation and active version witnesses.
+Exact-head closeout CI and guarded merge remain required.
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.44-dev**.
+M44 must wait for closeout CI, guarded merge and main-push SUCCESS.
+See [m43-cpuid-inventory.md](m43-cpuid-inventory.md).
