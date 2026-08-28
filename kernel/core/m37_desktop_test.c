@@ -165,6 +165,108 @@ static bool mount_root(struct vfs_path *root_out) {
            (vfs_get_root(root_out) == VFS_RESULT_OK);
 }
 
+static void report_drain_stats(bool ipc_ok, const struct boring_ipc_stats *ipc,
+                               bool memory_ok,
+                               const struct user_memory_global_stats *memory,
+                               bool input_ok, const struct boring_input_stats *input,
+                               bool framebuffer_ok,
+                               const struct boring_framebuffer_user_stats *framebuffer,
+                               bool pty_ok, const struct pty_stats *pty,
+                               bool processes_ok,
+                               const struct process_stats *processes,
+                               bool tasks_ok, const struct task_stats *tasks) {
+    serial_write_string("m37-desktop: drain diagnostics state active=");
+    serial_write_u64(active ? 1ULL : 0ULL);
+    serial_write_string(" pid1_ptr=");
+    serial_write_u64((init_state.process != NULL) ? 1ULL : 0ULL);
+    serial_write_string(" current_pid=");
+    serial_write_u64((process_current() != NULL) ? process_current()->pid : UINT64_MAX);
+    serial_write_string(" init_task=");
+    serial_write_u64(init_state.task_id);
+    serial_write_string(" image_loaded=");
+    serial_write_u64(init_state.image_loaded ? 1ULL : 0ULL);
+    serial_write_string("\n");
+
+    serial_write_string("m37-desktop: drain diagnostics getters ipc/mem/input/fb/pty/proc/task=");
+    serial_write_u64(ipc_ok ? 1ULL : 0ULL);
+    serial_write_string("/");
+    serial_write_u64(memory_ok ? 1ULL : 0ULL);
+    serial_write_string("/");
+    serial_write_u64(input_ok ? 1ULL : 0ULL);
+    serial_write_string("/");
+    serial_write_u64(framebuffer_ok ? 1ULL : 0ULL);
+    serial_write_string("/");
+    serial_write_u64(pty_ok ? 1ULL : 0ULL);
+    serial_write_string("/");
+    serial_write_u64(processes_ok ? 1ULL : 0ULL);
+    serial_write_string("/");
+    serial_write_u64(tasks_ok ? 1ULL : 0ULL);
+    serial_write_string("\n");
+
+    if (ipc_ok) {
+        serial_write_string("m37-desktop: drain diagnostics ipc services/connections/queued/attachments=");
+        serial_write_u64((uint64_t)ipc->live_services);
+        serial_write_string("/");
+        serial_write_u64((uint64_t)ipc->live_connections);
+        serial_write_string("/");
+        serial_write_u64((uint64_t)ipc->queued_messages);
+        serial_write_string("/");
+        serial_write_u64((uint64_t)ipc->retained_buffer_attachments);
+        serial_write_string("\n");
+    }
+    if (memory_ok) {
+        serial_write_string("m37-desktop: drain diagnostics memory active_objects=");
+        serial_write_u64((uint64_t)memory->active_objects);
+        serial_write_string("\n");
+    }
+    if (input_ok && framebuffer_ok) {
+        serial_write_string("m37-desktop: drain diagnostics input_owned/fb_claimed=");
+        serial_write_u64(input->owned ? 1ULL : 0ULL);
+        serial_write_string("/");
+        serial_write_u64(framebuffer->claimed ? 1ULL : 0ULL);
+        serial_write_string("\n");
+    }
+    if (pty_ok) {
+        serial_write_string("m37-desktop: drain diagnostics pty pairs/refs/waiters/bytes=");
+        serial_write_u64((uint64_t)pty->active_pairs);
+        serial_write_string("/");
+        serial_write_u64(pty->references);
+        serial_write_string("/");
+        serial_write_u64((uint64_t)pty->read_waiters);
+        serial_write_string("/");
+        serial_write_u64((uint64_t)pty->queued_bytes);
+        serial_write_string("\n");
+    }
+    if (processes_ok) {
+        serial_write_string("m37-desktop: drain diagnostics proc active/created/finished/current=");
+        serial_write_u64(processes->active_processes);
+        serial_write_string("/");
+        serial_write_u64(processes->created_processes);
+        serial_write_string("/");
+        serial_write_u64(processes->finished_processes);
+        serial_write_string("/");
+        serial_write_u64(processes->current_pid);
+        serial_write_string("\n");
+    }
+    if (tasks_ok) {
+        serial_write_string("m37-desktop: drain diagnostics task active/created/finished/current/pid/resume/fault=");
+        serial_write_u64(tasks->active_tasks);
+        serial_write_string("/");
+        serial_write_u64(tasks->created_tasks);
+        serial_write_string("/");
+        serial_write_u64(tasks->finished_tasks);
+        serial_write_string("/");
+        serial_write_u64(tasks->current_task_id);
+        serial_write_string("/");
+        serial_write_u64(tasks->current_process_pid);
+        serial_write_string("/");
+        serial_write_u64(tasks->finished_resume_count);
+        serial_write_string("/");
+        serial_write_u64(tasks->scheduler_fault_count);
+        serial_write_string("\n");
+    }
+}
+
 void m37_desktop_test_finish_from_pid1(void) {
     struct boring_ipc_stats ipc;
     struct user_memory_global_stats memory;
@@ -173,30 +275,40 @@ void m37_desktop_test_finish_from_pid1(void) {
     struct pty_stats pty;
     struct process_stats processes;
     struct task_stats tasks;
+    const bool ipc_ok = boring_ipc_get_stats(&ipc);
+    const bool memory_ok = user_memory_get_global_stats(&memory);
+    const bool input_ok = boring_input_get_stats(&input);
+    const bool framebuffer_ok = boring_framebuffer_user_get_stats(&framebuffer);
+    const bool pty_ok = pty_get_stats(&pty);
+    const bool processes_ok = process_get_stats(&processes);
+    const bool tasks_ok = task_get_stats(&tasks);
 
     if (!active || (init_state.process == NULL) ||
         (process_current() != init_state.process) ||
         (init_state.process->pid != 1ULL) ||
         (init_state.process->state != PROCESS_ALIVE) ||
         !init_state.image_loaded ||
-        !boring_ipc_get_stats(&ipc) || (ipc.live_services != 0U) ||
+        !ipc_ok || (ipc.live_services != 0U) ||
         (ipc.live_connections != 0U) || (ipc.queued_messages != 0U) ||
         (ipc.retained_buffer_attachments != 0U) ||
-        !user_memory_get_global_stats(&memory) || (memory.active_objects != 0U) ||
-        !boring_input_get_stats(&input) || input.owned ||
-        !boring_framebuffer_user_get_stats(&framebuffer) || framebuffer.claimed ||
-        !pty_get_stats(&pty) || (pty.active_pairs != 0U) ||
+        !memory_ok || (memory.active_objects != 0U) ||
+        !input_ok || input.owned ||
+        !framebuffer_ok || framebuffer.claimed ||
+        !pty_ok || (pty.active_pairs != 0U) ||
         (pty.references != 0ULL) || (pty.read_waiters != 0U) ||
         (pty.queued_bytes != 0U) ||
-        !process_get_stats(&processes) || (processes.active_processes != 1ULL) ||
+        !processes_ok || (processes.active_processes != 1ULL) ||
         (processes.created_processes != processes.finished_processes + 1ULL) ||
         (processes.current_pid != 1ULL) ||
-        !task_get_stats(&tasks) || (tasks.active_tasks != 1ULL) ||
+        !tasks_ok || (tasks.active_tasks != 1ULL) ||
         (tasks.created_tasks != tasks.finished_tasks + 1ULL) ||
         (tasks.current_task_id != init_state.task_id) ||
         (tasks.current_process_pid != 1ULL) ||
         (tasks.finished_resume_count != 0ULL) ||
         (tasks.scheduler_fault_count != 0ULL)) {
+        report_drain_stats(ipc_ok, &ipc, memory_ok, &memory, input_ok, &input,
+                           framebuffer_ok, &framebuffer, pty_ok, &pty,
+                           processes_ok, &processes, tasks_ok, &tasks);
         fail("desktop drain accounting in PID 1");
     }
     serial_write_string(
