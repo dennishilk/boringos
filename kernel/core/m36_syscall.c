@@ -52,6 +52,9 @@ void x86_64_enter_ring3_argv(uintptr_t user_rip,
                              uint16_t user_ss,
                              size_t argc,
                              uintptr_t argv) __attribute__((noreturn));
+#if defined(BORING_M37_DESKTOP_ACCEPTANCE)
+void m37_desktop_test_finish_from_pid1(void) __attribute__((noreturn));
+#endif
 
 static uint64_t m36_error(int error_number) {
     return (uint64_t)(-(int64_t)error_number);
@@ -143,6 +146,31 @@ static bool m36_copy_to_user(uintptr_t address, const void *buffer, size_t size)
     return m36_copy_process(process_current(), address, (void *)buffer, size,
                             true);
 }
+
+#if defined(BORING_M37_DESKTOP_ACCEPTANCE)
+static void m37_observe_console_write(uint64_t user_buffer,
+                                      uint64_t raw_length) {
+    static const char marker[] = "boring-init: desktop session drained\n";
+    char observed[sizeof(marker) - 1U];
+    size_t index;
+
+    if (raw_length != (uint64_t)(sizeof(marker) - 1U)) {
+        return;
+    }
+    if (!m36_copy_from_user(observed, (uintptr_t)user_buffer,
+                            sizeof(observed))) {
+        serial_write_string(
+            "M37 desktop FAILED: cannot observe PID 1 drain witness\n");
+        x86_64_halt_forever();
+    }
+    for (index = 0U; index < sizeof(observed); ++index) {
+        if (observed[index] != marker[index]) {
+            return;
+        }
+    }
+    m37_desktop_test_finish_from_pid1();
+}
+#endif
 
 static int m36_copy_string(uint64_t user_address,
                            uint64_t raw_length,
@@ -757,6 +785,11 @@ void x86_64_syscall_dispatch_m36(struct x86_64_syscall_frame *frame) {
 
     x86_64_syscall_dispatch_events(frame);
     m36_reap_detached();
+#if defined(BORING_M37_DESKTOP_ACCEPTANCE)
+    if (number == (uint64_t)BORING_SYS_CONSOLE_WRITE) {
+        m37_observe_console_write(frame->rdi, frame->rsi);
+    }
+#endif
 
     if (number == (uint64_t)BORING_SYS_PTY_CREATE) {
         result = m36_pty_create(frame->rdi);
