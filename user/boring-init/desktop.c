@@ -51,6 +51,21 @@ static long init_spawn(const char *path, size_t length) {
     return boring_spawn(path, length, argv, 1U, &stdio_config);
 }
 
+static bool init_write_wait_success(const char *label, size_t label_length) {
+    char line[96];
+    size_t index;
+
+    if ((label == NULL) || (label_length + 2U > sizeof(line))) {
+        return false;
+    }
+    for (index = 0U; index < label_length; ++index) {
+        line[index] = label[index];
+    }
+    line[label_length] = '0';
+    line[label_length + 1U] = '\n';
+    return init_write_exact(line, label_length + 2U);
+}
+
 static void init_wait_child(long child_pid, const char *label,
                             size_t label_length) {
     long waited;
@@ -58,9 +73,7 @@ static void init_wait_child(long child_pid, const char *label,
 
     waited = boring_waitpid((uint64_t)child_pid, &status);
     if ((waited != child_pid) || (status != 0) ||
-        !init_write_exact(label, label_length) ||
-        !init_write_u64((uint64_t)(uint32_t)status) ||
-        !init_write_exact("\n", 1U)) {
+        !init_write_wait_success(label, label_length)) {
         init_fail();
     }
 }
