@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.41-dev
+BoringKernel 0.0.42-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1230,3 +1230,28 @@ M38 #15 / 33188713568; M37 #48 / 33188713596; full Boot #514 / 33188713599.
 This runtime-neutral closeout advances active version witnesses to
 **BoringKernel 0.0.41-dev**. Exact-head closeout CI and guarded merge must pass
 before M41 begins. See [native-boringfiles.md](native-boringfiles.md).
+
+
+## Milestone 41: BoringWM application shortcuts — COMPLETE, Semantic Frozen
+
+Super+Return launches `/bin/boring-terminal`, Super+E `/bin/boring-edit`, and
+Super+F `/bin/boring-files` through existing detached SPAWN. Only exact Super
+key-down events launch; repeats, key releases and extra modifiers are ignored.
+Missing executables report unavailable without placeholder windows. Existing
+focus, tiling, reorder, graceful Super+Q and unsaved-editor semantics remain.
+No new binary, syscall ABI or display/WM wire protocol.
+
+Real QEMU acceptance launches three independent Ring3 clients by shortcuts,
+checks focused terminal/editor input and Files navigation in actual framebuffer
+pixels, saves exact `edit` bytes, closes each client with Super+Q and drains all
+resources to PID1. Additive host tests cover mappings and modifier/repeat guards.
+
+Semantic Freeze: `e1bfa94c2909e155acb2ad2d23b85ae752efff3f`.
+Tree: `c9742ea6cb6f82300b5a588a79af121b009dd00b`.
+Exact-head SUCCESS: M41 #1 / 33190350272; M40 #4 / 33190350188;
+M39 #7 / 33190350202; M38 #18 / 33190350190; M37 #51 / 33190350187;
+complete Boot #517 / 33190350219.
+
+This runtime-neutral closeout advances active version witnesses to
+**BoringKernel 0.0.42-dev**. Exact-head closeout CI and guarded merge remain
+required before M42 begins. See [m41-application-shortcuts.md](m41-application-shortcuts.md).

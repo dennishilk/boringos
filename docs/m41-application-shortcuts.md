@@ -1,6 +1,6 @@
 # M41 — BoringWM application shortcuts
 
-Status: implementation in progress; no Semantic Freeze or closeout claimed.
+Status: implementation COMPLETE and Semantic Frozen; runtime-neutral closeout to 0.0.42-dev. Exact-head closeout CI and guarded merge remain required.
 
 Verified main base `81dc02ea4d42f39b5a8106406b3203e11acb1018`, tree `c2e3c6fb156633afd74127b3c3efca1cb5c38c58`, BoringKernel 0.0.41-dev; all five merged-main push workflows SUCCESS.
 
@@ -28,5 +28,14 @@ independent managed Ring3 clients, only the focused terminal/editor received
 its text, Files received navigation, the saved document contains exactly
 `edit`, and all three closed individually through Super+Q. Final process/task
 accounting was 7 created, 6 finished, PID1 alone; all desktop counters zero.
-The full-frame bitmap oracle and additive WM host checks passed. Exact-head
-CI and Semantic Freeze remain pending.
+The full-frame bitmap oracle and additive WM host checks passed. All exact-head implementation gates completed SUCCESS; Semantic Freeze is recorded below.
+
+
+## Semantic Freeze
+
+Implementation: `e1bfa94c2909e155acb2ad2d23b85ae752efff3f`.
+Tree: `c9742ea6cb6f82300b5a588a79af121b009dd00b`.
+Exact-head SUCCESS: M41 #1 / 33190350272; M40 #4 / 33190350188;
+M39 #7 / 33190350202; M38 #18 / 33190350190; M37 #51 / 33190350187;
+complete Boot #517 / 33190350219.
+The separate closeout changes only documentation and active version witnesses.
