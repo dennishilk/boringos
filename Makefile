@@ -74,6 +74,7 @@ BORINGFSCK := $(BUILD_DIR)/boringfsck
 BORINGFS_FIXTURE := $(BUILD_DIR)/boringfs-fixture
 BORINGFS_VFS_HOST_TEST := $(BUILD_DIR)/boringfs-vfs-host-test
 SHELL_HOST_TEST := $(BUILD_DIR)/shell-host-test
+BORINGFETCH_HOST_TEST := $(BUILD_DIR)/boringfetch-host-test
 FD_HOST_TEST := $(BUILD_DIR)/fd-host-test
 PTY_HOST_TEST := $(BUILD_DIR)/pty-host-test
 FRAMEBUFFER_HOST_TEST := $(BUILD_DIR)/framebuffer-host-test
@@ -429,6 +430,10 @@ display-audit: $(BORING_DISPLAY_ELF) $(DISPLAY_CLIENT_A_ELF) $(DISPLAY_CLIENT_B_
 shell-host-test: $(SHELL_HOST_TEST)
 	$(SHELL_HOST_TEST)
 
+.PHONY: boringfetch-host-test
+boringfetch-host-test: $(BORINGFETCH_HOST_TEST)
+	$(BORINGFETCH_HOST_TEST)
+
 fd-host-test: $(FD_HOST_TEST)
 	$(FD_HOST_TEST)
 
@@ -518,6 +523,14 @@ $(SHELL_HOST_TEST): tests/shell-host-test.c user/boring-shell/main.c \
 	@mkdir -p $(dir $@)
 	$(HOST_CC) -Iuser/runtime/include -Ikernel/include $(HOST_CFLAGS) \
 		tests/shell-host-test.c -o $@
+
+$(BORINGFETCH_HOST_TEST): tests/boringfetch-host-test.c \
+		user/boringfetch/main.c user/runtime/string.c \
+		user/runtime/include/boring/syscall.h kernel/include/boring/syscall_abi.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Iuser/runtime/include -Ikernel/include $(HOST_CFLAGS) \
+		tests/boringfetch-host-test.c user/boringfetch/main.c \
+		user/runtime/string.c -o $@
 
 $(FD_HOST_TEST): tests/fd-host-test.c kernel/core/fd.c kernel/core/pty.c \
 		kernel/include/boring/fd.h kernel/include/boring/vfs.h \

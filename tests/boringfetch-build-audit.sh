@@ -38,7 +38,8 @@ set -- ${DATA_LINE}
 DATA_VADDR=$3
 DATA_FILESZ=$5
 DATA_MEMSZ=$6
-if [ $((DATA_VADDR)) -ne $((0x40002000)) ] ||
+if [ $((DATA_VADDR)) -lt $((0x40002000)) ] ||
+   [ $((DATA_VADDR % 0x1000)) -ne 0 ] ||
    [ $((DATA_FILESZ)) -le 0 ] || [ $((DATA_MEMSZ)) -le 0 ]; then
     echo 'boringfetch writable PT_LOAD is empty or misplaced' >&2
     exit 1

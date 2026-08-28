@@ -3,21 +3,26 @@
 #include <stdint.h>
 
 #include <boring/cpu.h>
+#include <boring/cpu_inventory.h>
 #include <boring/descriptor.h>
 #include <boring/elf_loader.h>
 #include <boring/elf_vfs.h>
 #include <boring/fd.h>
+#include <boring/framebuffer.h>
 #include <boring/input.h>
 #include <boring/process.h>
+#include <boring/pci_inventory.h>
 #include <boring/pmm.h>
 #include <boring/ring3_memory.h>
 #include <boring/serial.h>
+#include <boring/smbios.h>
 #include <boring/syscall.h>
 #include <boring/timer.h>
 #include <boring/task.h>
 #include <boring/user_memory.h>
 #include <boring/vfs.h>
 #include <boring/vmm.h>
+#include <boring/virtio_blk.h>
 
 #define IA32_EFER 0xc0000080U
 #define IA32_STAR 0xc0000081U
@@ -196,6 +201,140 @@ static bool syscall_copy_literal(char *destination,
     return false;
 }
 
+static bool syscall_system_hardware(struct boring_system_info *info) {
+    const struct boring_cpu_inventory *cpu;
+    const struct boring_platform_identity *platform;
+    const struct boring_pci_inventory *pci;
+    const struct boring_framebuffer *framebuffer;
+    const struct block_device *storage;
+    struct virtio_blk_stats storage_stats;
+    size_t index;
+
+    if (info == NULL) {
+        return false;
+    }
+    cpu = boring_cpu_inventory_get();
+    if ((cpu != NULL) && cpu->leaf1_valid && (cpu->vendor[0] != '\0') &&
+        syscall_copy_literal(info->cpu_vendor, sizeof(info->cpu_vendor),
+                             cpu->vendor) &&
+        syscall_copy_literal(info->cpu_brand, sizeof(info->cpu_brand),
+                             cpu->brand)) {
+        info->hardware_flags |= BORING_SYSTEM_HW_CPU;
+        info->cpu_family = cpu->family;
+        info->cpu_model = cpu->model;
+        info->cpu_stepping = cpu->stepping;
+    }
+
+    platform = boring_platform_identity_get();
+    if ((platform != NULL) && platform->available) {
+        if (((platform->system_manufacturer[0] != '\0') ||
+             (platform->system_product[0] != '\0')) &&
+            syscall_copy_literal(info->system_manufacturer,
+                                 sizeof(info->system_manufacturer),
+                                 platform->system_manufacturer) &&
+            syscall_copy_literal(info->system_product,
+                                 sizeof(info->system_product),
+                                 platform->system_product)) {
+            info->hardware_flags |= BORING_SYSTEM_HW_SYSTEM;
+        }
+        if (((platform->board_manufacturer[0] != '\0') ||
+             (platform->board_product[0] != '\0')) &&
+            syscall_copy_literal(info->board_manufacturer,
+                                 sizeof(info->board_manufacturer),
+                                 platform->board_manufacturer) &&
+            syscall_copy_literal(info->board_product,
+                                 sizeof(info->board_product),
+                                 platform->board_product)) {
+            info->hardware_flags |= BORING_SYSTEM_HW_BOARD;
+        }
+        if (((platform->firmware_vendor[0] != '\0') ||
+             (platform->firmware_version[0] != '\0')) &&
+            syscall_copy_literal(info->firmware_vendor,
+                                 sizeof(info->firmware_vendor),
+                                 platform->firmware_vendor) &&
+            syscall_copy_literal(info->firmware_version,
+                                 sizeof(info->firmware_version),
+                                 platform->firmware_version)) {
+            info->hardware_flags |= BORING_SYSTEM_HW_FIRMWARE;
+        }
+        if (platform->memory_info_available) {
+            info->hardware_flags |= BORING_SYSTEM_HW_SMBIOS_MEMORY;
+            if (platform->memory_size_complete) {
+                info->hardware_flags |=
+                    BORING_SYSTEM_HW_SMBIOS_MEMORY_COMPLETE;
+            }
+            info->smbios_memory_bytes = platform->memory_bytes;
+            info->smbios_memory_slots = platform->memory_device_slots;
+            info->smbios_memory_devices_present =
+                platform->memory_devices_present;
+        }
+    }
+
+    pci = boring_pci_inventory_get();
+    if ((pci != NULL) && (pci->complete || (pci->total != 0U))) {
+        info->hardware_flags |= BORING_SYSTEM_HW_PCI;
+        if (pci->complete && !pci->truncated) {
+            info->hardware_flags |= BORING_SYSTEM_HW_PCI_COMPLETE;
+        }
+        info->pci_device_count = pci->total;
+        info->pci_sample_count = pci->stored;
+        if (info->pci_sample_count > BORING_SYSTEM_PCI_SAMPLE_MAX) {
+            info->pci_sample_count = BORING_SYSTEM_PCI_SAMPLE_MAX;
+        }
+        for (index = 0U; index < (size_t)info->pci_sample_count; ++index) {
+            const struct boring_pci_entry *source = &pci->entries[index];
+            struct boring_system_pci_sample *destination =
+                &info->pci_samples[index];
+
+            destination->vendor_id = source->vendor_id;
+            destination->device_id = source->device_id;
+            destination->bus = source->bdf.bus;
+            destination->device = source->bdf.device;
+            destination->function = source->bdf.function;
+            destination->class_code = source->class_code;
+            destination->subclass = source->subclass;
+            destination->prog_if = source->prog_if;
+            destination->revision = source->revision;
+        }
+    }
+
+    framebuffer = boring_framebuffer_get();
+    if ((framebuffer != NULL) &&
+        (framebuffer->width <= UINT32_MAX) &&
+        (framebuffer->height <= UINT32_MAX) &&
+        (framebuffer->pitch <= UINT32_MAX)) {
+        info->hardware_flags |= BORING_SYSTEM_HW_FRAMEBUFFER;
+        info->framebuffer_width = (uint32_t)framebuffer->width;
+        info->framebuffer_height = (uint32_t)framebuffer->height;
+        info->framebuffer_pitch = (uint32_t)framebuffer->pitch;
+        info->framebuffer_bpp = framebuffer->bpp;
+    }
+
+    storage = virtio_blk_device();
+    if ((storage != NULL) && (storage->name != NULL) &&
+        (storage->logical_block_size != 0U) &&
+        (storage->block_count <=
+         (UINT64_MAX / (uint64_t)storage->logical_block_size)) &&
+        syscall_copy_literal(info->storage_name,
+                             sizeof(info->storage_name), storage->name)) {
+        info->hardware_flags |= BORING_SYSTEM_HW_STORAGE;
+        info->storage_logical_block_size = storage->logical_block_size;
+        info->storage_bytes = storage->block_count *
+            (uint64_t)storage->logical_block_size;
+        info->storage_read_only = storage->read_only ? 1U : 0U;
+        if (virtio_blk_get_stats(&storage_stats) &&
+            storage_stats.pci_discovered) {
+            info->hardware_flags |= BORING_SYSTEM_HW_STORAGE_PCI;
+            info->storage_pci_vendor_id = storage_stats.pci_vendor_id;
+            info->storage_pci_device_id = storage_stats.pci_device_id;
+            info->storage_pci_bus = storage_stats.pci_bus;
+            info->storage_pci_device = storage_stats.pci_device;
+            info->storage_pci_function = storage_stats.pci_function;
+        }
+    }
+    return true;
+}
+
 static size_t syscall_text_length(const char *text, size_t maximum) {
     size_t length;
 
@@ -248,6 +387,9 @@ static uint64_t syscall_system_info(uint64_t user_info) {
         !syscall_copy_literal(info.kernel_version, sizeof(info.kernel_version),
                               "0.0.46-dev") ||
         !syscall_copy_literal(info.arch, sizeof(info.arch), "x86_64")) {
+        return syscall_error(BORING_SYSCALL_EIO);
+    }
+    if (!syscall_system_hardware(&info)) {
         return syscall_error(BORING_SYSCALL_EIO);
     }
 #if (BORING_TEST_MODE == 10) || (BORING_TEST_MODE == 13) || (BORING_TEST_MODE == 14)
