@@ -46,7 +46,7 @@ make TEST_MODE=m36-desktop \
 RAW_STDOUT=build/m37-iso-audit-xorriso.stdout
 RAW_STDERR=build/m37-iso-audit-xorriso.stderr
 if ! xorriso -indev build/boringos.iso \
-    -find /boot/user -type f -print >"${RAW_STDOUT}" 2>"${RAW_STDERR}"; then
+    -find /boot/user -type f >"${RAW_STDOUT}" 2>"${RAW_STDERR}"; then
     printf '%s\n' 'M37 ISO audit: xorriso file listing failed.' >&2
     printf '%s\n' '--- xorriso stdout ---' >&2
     cat "${RAW_STDOUT}" >&2
