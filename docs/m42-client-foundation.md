@@ -1,6 +1,6 @@
 # M42 — native desktop client foundation
 
-Status: implementation candidate; exact-head CI and Semantic Freeze pending.
+Status: implementation COMPLETE and Semantic Frozen; runtime-neutral closeout to 0.0.43-dev.
 
 Verified base main `df412114c38af9d6d87f9d3992ff1c72a2a8836d`, tree `8dd2fe7698be6249e5a530431fb85b8d5ec7b7ec`, BoringKernel 0.0.42-dev; all six exact-main push workflows SUCCESS.
 
@@ -50,5 +50,16 @@ Geometry is bounded before buffer size arithmetic. No title/UX changes.
 - Permanent M39/M40 regressions continue to verify real BoringFS navigation,
   editor reopen/save/failure retention and independent guest cat reads.
 
-No new executable, no kernel or ABI change, no hardware support claim. Version
-remains 0.0.42-dev until exact-head implementation CI proves Semantic Freeze.
+No new executable, no kernel or ABI change, no hardware support claim. Implementation remained at 0.0.42-dev; the proven freeze now permits the separate
+runtime-neutral closeout to 0.0.43-dev.
+
+
+## Semantic Freeze
+
+Implementation: `7c9054e8c0c339c1c8a168c85bc0d6998b4708c8`.
+Tree: `04ff69250b70850f698bb5cbde4aafac38e8f383`.
+All exact-head gates SUCCESS: M42 #1 / 33192303081; M41 #5 / 33192303109;
+M40 #8 / 33192303056; M39 #11 / 33192302977; M38 #22 / 33192302988;
+M37 #55 / 33192302974; complete Boot #521 / 33192303044.
+This separate closeout changes only documentation and active version witnesses.
+Exact-head closeout CI and guarded merge remain required.

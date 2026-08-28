@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.42-dev
+BoringKernel 0.0.43-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1255,3 +1255,35 @@ complete Boot #517 / 33190350219.
 This runtime-neutral closeout advances active version witnesses to
 **BoringKernel 0.0.42-dev**. Exact-head closeout CI and guarded merge remain
 required before M42 begins. See [m41-application-shortcuts.md](m41-application-shortcuts.md).
+
+
+## Milestone 42: native desktop client foundation — COMPLETE, Semantic Frozen
+
+The real Terminal/Edit/Files clients now share a small BoringOS-owned C helper
+for display/WM connection, bounded surface buffer mapping, surface publication,
+checked IPC envelopes, commit, unregister and release. Each application retains
+its own EVENT_WAIT/input policy, text model, existing bitmap renderer, PTY or
+file I/O and unsaved-document decisions. No new executable, kernel change,
+syscall ABI, wire protocol or widget framework.
+
+The three app main files shrink from 1,177 to 625 lines. Shared implementation:
+178 C + 30 header lines. Real QEMU proves all three apps simultaneously,
+focused input, exact saved bytes and complete PID1-only resource drain; the
+original M39/M40 independent cat/save/navigation scenarios also pass. The new
+host transport test covers 21 injected failures and malformed envelope/lifecycle
+cases. Actual framebuffer evidence is retained by the permanent M42 workflow.
+
+
+## Semantic Freeze
+
+Implementation: `7c9054e8c0c339c1c8a168c85bc0d6998b4708c8`.
+Tree: `04ff69250b70850f698bb5cbde4aafac38e8f383`.
+All exact-head gates SUCCESS: M42 #1 / 33192303081; M41 #5 / 33192303109;
+M40 #8 / 33192303056; M39 #11 / 33192302977; M38 #22 / 33192302988;
+M37 #55 / 33192302974; complete Boot #521 / 33192303044.
+This separate closeout changes only documentation and active version witnesses.
+Exact-head closeout CI and guarded merge remain required.
+
+Active version after this runtime-neutral closeout: **BoringKernel 0.0.43-dev**.
+M43 must wait for exact-head closeout CI, guarded squash and main-push SUCCESS.
+See [m42-client-foundation.md](m42-client-foundation.md).
