@@ -151,7 +151,7 @@ make -C "${ROOT}" TEST_MODE=boringfs-rw
 
 start_vm "${MAIN_IMAGE}" first
 for line in \
-    'BoringKernel 0.0.44-dev' \
+    'BoringKernel 0.0.45-dev' \
     '  real-virtio-volume: PASS' \
     'BoringFS writable:' \
     '  synchronous-mutations-enabled: PASS' \

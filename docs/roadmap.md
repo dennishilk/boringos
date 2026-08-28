@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.44-dev
+BoringKernel 0.0.45-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1319,3 +1319,38 @@ Exact-head closeout CI and guarded merge remain required.
 Active version after runtime-neutral closeout: **BoringKernel 0.0.44-dev**.
 M44 must wait for closeout CI, guarded merge and main-push SUCCESS.
 See [m43-cpuid-inventory.md](m43-cpuid-inventory.md).
+
+
+## Milestone 44: real bounded PCI hardware inventory — COMPLETE, Semantic Frozen
+
+A BoringOS-owned allocation-free collector performs read-only x86 CF8/CFC
+enumeration of segment zero across all 256 buses, 32 slots and functions 1–7
+only when function zero advertises multifunction. It records real numeric BDF,
+vendor/device ID, class/subclass/prog-if, revision and header type. Storage is
+bounded to 256 records with explicit total, truncation, config-read and partial
+error state. It performs no writes, BAR sizing, bridge configuration, driver
+binding or userspace ABI extension.
+
+Host fixtures prove absent/sparse/multifunction functions, the last BDF, the
+65,536-function scan bound, 256-record cap, read failures and canaries. Real
+QEMU acceptance correlates the dynamically selected 1AF4:1042 VirtIO block BDF
+with exactly one inventory entry while retaining actual I/O, persistence and
+neighbor-sector checks. Numeric identities are evidence, not device-name or
+physical-hardware support claims.
+
+## Semantic Freeze
+
+Implementation: `737e11b65902b5cff39a319ca7e4d7585f125c89`.
+Tree: `d9f2fd550b1426d1ec7c856ed5b9735345dc2f39`.
+Exact-head SUCCESS: M44 #1 / 33195749180; M43 #5 / 33195749066;
+M42 #9 / 33195749078; M41 #13 / 33195749024; M40 #16 / 33195749033;
+M39 #19 / 33195749009; M38 #30 / 33195749001; M37 #63 / 33195748983;
+complete Boot #529 / 33195749063.
+Evidence: `boringos-m44-pci-reference`, artifact 9695677267, GitHub ZIP SHA-256
+`18b0e6c60b7586a7f8599d921f50e0231694ef70f25f68dea89e699d018b43cf`.
+This separate closeout changes only documentation and active version witnesses.
+Exact-head closeout CI and guarded merge remain required.
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.45-dev**.
+M45 must wait for closeout CI, guarded merge and main-push SUCCESS.
+See [m44-pci-inventory.md](m44-pci-inventory.md).

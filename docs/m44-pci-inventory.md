@@ -1,6 +1,6 @@
 # M44 — real PCI inventory
 
-Status: implementation candidate; exact-head CI and Semantic Freeze pending.
+Status: implementation COMPLETE and Semantic Frozen; runtime-neutral closeout to 0.0.45-dev.
 
 Verified base main `a13e9409d755efbbf7363b1857e9056bf04308ff`, tree `b425e2c2061861780a0296e68fb2e490f1a1ebb7`, BoringKernel 0.0.44-dev; all eight exact-main push workflows SUCCESS.
 
@@ -55,4 +55,20 @@ passes locally with leak detection disabled for the worker inspection limit.
 The PCI access implementation and VirtIO driver/test themselves are unchanged.
 
 No new OS executable, userspace ABI, device-name database or hardware support
-claim. Version remains 0.0.44-dev until exact-head Semantic Freeze.
+claim. Implementation stayed at 0.0.44-dev; the proven freeze permits the
+separate runtime-neutral closeout to 0.0.45-dev.
+
+## Semantic Freeze
+
+Implementation: `737e11b65902b5cff39a319ca7e4d7585f125c89`.
+Tree: `d9f2fd550b1426d1ec7c856ed5b9735345dc2f39`.
+Exact-head SUCCESS: M44 #1 / 33195749180; M43 #5 / 33195749066;
+M42 #9 / 33195749078; M41 #13 / 33195749024; M40 #16 / 33195749033;
+M39 #19 / 33195749009; M38 #30 / 33195749001; M37 #63 / 33195748983;
+complete Boot #529 / 33195749063.
+
+Evidence artifact: `boringos-m44-pci-reference`, artifact ID `9695677267`.
+GitHub ZIP SHA-256:
+`18b0e6c60b7586a7f8599d921f50e0231694ef70f25f68dea89e699d018b43cf`.
+This separate closeout changes only documentation and active version witnesses.
+Exact-head closeout CI and guarded merge remain required.
