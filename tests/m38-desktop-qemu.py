@@ -24,7 +24,7 @@ def sha256(path):
 
 def run_scenario(name, root_image):
     out = OUT / name
-    out.mkdir(parents=True)
+    out.mkdir(parents=True, exist_ok=True)
     serial = out / "serial.log"
     serial.write_text("")
     iso = ROOT / "build/boringos.iso"
@@ -245,7 +245,7 @@ def run_scenario(name, root_image):
             key("q", super_key=True)
             witness("boring-terminal: CLOSE received")
             witness("boring-terminal: graceful cleanup complete")
-            single = latest(1, switched["frame"])
+            latest(1, switched["frame"])
             key("q", super_key=True)
             witness("boring-terminal: CLOSE received", 2)
             witness("boring-terminal: graceful cleanup complete", 2)
