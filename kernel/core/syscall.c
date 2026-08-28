@@ -246,7 +246,7 @@ static uint64_t syscall_system_info(uint64_t user_info) {
         !syscall_copy_literal(info.kernel_name, sizeof(info.kernel_name),
                               "BoringKernel") ||
         !syscall_copy_literal(info.kernel_version, sizeof(info.kernel_version),
-                              "0.0.37-dev") ||
+                              "0.0.38-dev") ||
         !syscall_copy_literal(info.arch, sizeof(info.arch), "x86_64")) {
         return syscall_error(BORING_SYSCALL_EIO);
     }
