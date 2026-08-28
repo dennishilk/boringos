@@ -61,11 +61,16 @@ absolute VFS path into a bounded user buffer. `PROCESS_SNAPSHOT` enumerates
 real PID, PPID, RUNNING/WAITING/ZOMBIE state and process name; end of the
 bounded table is reported without inventing rows.
 
-`INFO` ABI v2 is a fixed 256-byte structure containing real PMM usable/free
+`INFO` ABI v3 is a fixed 1,024-byte structure containing real PMM usable/free
 memory, PIT ticks and effective frequency when available, active process
 count, current PID, hostname, current-process username, OS/kernel/version and
 architecture strings, plus root-filesystem and root-device identity selected
-by the actual boot mode. It contains no fabricated CPU or network data.
+by the actual boot mode. Bounded availability flags additionally expose the
+kernel's CPUID inventory, SMBIOS platform and memory facts, up to eight numeric
+PCI samples plus the real total, active framebuffer geometry and an initialized
+VirtIO block device's detected geometry/PCI identity. Fixed strings and
+reserved bytes are copied by value; no kernel pointers, inferred driver support
+or fabricated hardware names cross the boundary.
 
 `EXIT` applies only to the active `LAUNCH` child. It preserves the 32-bit exit
 status, resumes the saved parent frame, unloads the child ELF mappings and

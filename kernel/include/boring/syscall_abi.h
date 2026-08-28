@@ -103,6 +103,23 @@
 #define BORING_SYSTEM_ARCH_CAPACITY 16U
 #define BORING_SYSTEM_FS_CAPACITY 16U
 #define BORING_SYSTEM_DEVICE_CAPACITY 32U
+#define BORING_SYSTEM_CPU_VENDOR_CAPACITY 16U
+#define BORING_SYSTEM_CPU_BRAND_CAPACITY 64U
+#define BORING_SYSTEM_PLATFORM_CAPACITY 64U
+#define BORING_SYSTEM_STORAGE_NAME_CAPACITY 32U
+#define BORING_SYSTEM_PCI_SAMPLE_MAX 8U
+
+#define BORING_SYSTEM_HW_CPU (1ULL << 0)
+#define BORING_SYSTEM_HW_SYSTEM (1ULL << 1)
+#define BORING_SYSTEM_HW_BOARD (1ULL << 2)
+#define BORING_SYSTEM_HW_FIRMWARE (1ULL << 3)
+#define BORING_SYSTEM_HW_SMBIOS_MEMORY (1ULL << 4)
+#define BORING_SYSTEM_HW_SMBIOS_MEMORY_COMPLETE (1ULL << 5)
+#define BORING_SYSTEM_HW_PCI (1ULL << 6)
+#define BORING_SYSTEM_HW_PCI_COMPLETE (1ULL << 7)
+#define BORING_SYSTEM_HW_FRAMEBUFFER (1ULL << 8)
+#define BORING_SYSTEM_HW_STORAGE (1ULL << 9)
+#define BORING_SYSTEM_HW_STORAGE_PCI (1ULL << 10)
 
 #define BORING_SYSCALL_ENOSYS 1
 #define BORING_SYSCALL_EFAULT 2
@@ -161,7 +178,20 @@ struct boring_process_info {
     char name[BORING_PROCESS_NAME_CAPACITY];
 };
 
-#define BORING_SYSTEM_INFO_ABI_VERSION 2U
+#define BORING_SYSTEM_INFO_ABI_VERSION 3U
+
+struct boring_system_pci_sample {
+    uint16_t vendor_id;
+    uint16_t device_id;
+    uint8_t bus;
+    uint8_t device;
+    uint8_t function;
+    uint8_t class_code;
+    uint8_t subclass;
+    uint8_t prog_if;
+    uint8_t revision;
+    uint8_t reserved;
+};
 
 struct boring_system_info {
     uint32_t abi_version;
@@ -180,6 +210,38 @@ struct boring_system_info {
     char arch[BORING_SYSTEM_ARCH_CAPACITY];
     char root_fs[BORING_SYSTEM_FS_CAPACITY];
     char root_device[BORING_SYSTEM_DEVICE_CAPACITY];
+    uint64_t hardware_flags;
+    uint32_t cpu_family;
+    uint32_t cpu_model;
+    uint32_t cpu_stepping;
+    char cpu_vendor[BORING_SYSTEM_CPU_VENDOR_CAPACITY];
+    char cpu_brand[BORING_SYSTEM_CPU_BRAND_CAPACITY];
+    char system_manufacturer[BORING_SYSTEM_PLATFORM_CAPACITY];
+    char system_product[BORING_SYSTEM_PLATFORM_CAPACITY];
+    char board_manufacturer[BORING_SYSTEM_PLATFORM_CAPACITY];
+    char board_product[BORING_SYSTEM_PLATFORM_CAPACITY];
+    char firmware_vendor[BORING_SYSTEM_PLATFORM_CAPACITY];
+    char firmware_version[BORING_SYSTEM_PLATFORM_CAPACITY];
+    uint64_t smbios_memory_bytes;
+    uint32_t smbios_memory_slots;
+    uint32_t smbios_memory_devices_present;
+    uint32_t pci_device_count;
+    uint32_t pci_sample_count;
+    struct boring_system_pci_sample pci_samples[BORING_SYSTEM_PCI_SAMPLE_MAX];
+    uint32_t framebuffer_width;
+    uint32_t framebuffer_height;
+    uint32_t framebuffer_pitch;
+    uint16_t framebuffer_bpp;
+    uint16_t storage_pci_vendor_id;
+    uint16_t storage_pci_device_id;
+    uint8_t storage_pci_bus;
+    uint8_t storage_pci_device;
+    uint8_t storage_pci_function;
+    uint8_t storage_read_only;
+    uint32_t storage_logical_block_size;
+    uint64_t storage_bytes;
+    char storage_name[BORING_SYSTEM_STORAGE_NAME_CAPACITY];
+    uint8_t reserved_hardware[88];
 };
 
 _Static_assert(BORING_SYS_GETPID == 0,
@@ -276,7 +338,9 @@ _Static_assert(sizeof(struct boring_spawn_stdio) == 16U,
                "M36 spawn stdio ABI size must remain fixed");
 _Static_assert(sizeof(struct boring_ipc_receive_result) == 16U,
                "M33 IPC receive ABI size must remain fixed");
-_Static_assert(sizeof(struct boring_system_info) == 256U,
+_Static_assert(sizeof(struct boring_system_pci_sample) == 12U,
+               "BoringOS PCI sample ABI size must remain fixed");
+_Static_assert(sizeof(struct boring_system_info) == 1024U,
                "BoringOS system-info ABI size must remain fixed");
 _Static_assert(sizeof(struct boring_process_info) == 56U,
                "BoringOS process snapshot ABI size must remain fixed");

@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.46-dev
+BoringKernel 0.0.47-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1392,3 +1392,42 @@ Exact-head closeout CI and guarded merge remain required.
 Active version after runtime-neutral closeout: **BoringKernel 0.0.46-dev**.
 M46 must wait for closeout CI, guarded merge and main-push SUCCESS.
 See [m45-smbios-platform.md](m45-smbios-platform.md).
+
+
+## Milestone 46: boringfetch hardware edition — COMPLETE, Semantic Frozen
+
+The standalone Ring 3 `boringfetch` now renders real bounded facts already
+owned by BoringOS. Versioned `INFO` ABI v3 copies a fixed 1,024-byte snapshot
+containing CPUID vendor/brand/signature fields, optional SMBIOS system/board/
+firmware and memory facts, the complete PCI count plus at most eight numeric
+samples, active framebuffer geometry and initialized VirtIO block geometry.
+Availability and completeness bits keep absent or partial data explicit; no
+kernel pointers, device-name database, driver inference or fabricated hardware
+crosses the syscall boundary.
+
+Host tests prove exact uppercase numeric formatting, omitted unavailable facts,
+bounded sample counts and unterminated-string rejection. Real QEMU acceptance
+cross-checks every visible hardware line against independent boot inventory in
+an exact-pixel framebuffer capture after `Super+Return`. The same gate proves
+the shipped terminal, BoringEdit and BoringFiles shortcuts, isolated focus,
+persisted editor bytes, graceful close and final PID-1-only resource drain.
+
+## Semantic Freeze
+
+Implementation: `2d10161debaa964f872b2f287382773d81dc2b8f`.
+Tree: `0b506f0d61f9f89e081c765b07408b4835d5472c`.
+Exact-head SUCCESS: M46 #1 / 33203162251; M45 #5 / 33203162242;
+M44 #10 / 33203162037; M43 #14 / 33203162020;
+M42 #18 / 33203162188; M41 #22 / 33203162095;
+M40 #25 / 33203162058; M39 #28 / 33203161993;
+M38 #39 / 33203161997; M37 #72 / 33203162049;
+complete Boot #538 / 33203161996.
+Evidence: `boringos-m46-boringfetch-reference`, artifact 9698590846, GitHub
+ZIP SHA-256
+`4686494b2987012ca6a3a2b4bdcb61c4b151dc5a6024b5b1301ea3253269f8d6`.
+This separate closeout changes only documentation and active version witnesses.
+Exact-head closeout CI and guarded merge remain required.
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.47-dev**.
+M47 must wait for closeout CI, guarded merge and main-push SUCCESS.
+See [m46-boringfetch-hardware.md](m46-boringfetch-hardware.md).
