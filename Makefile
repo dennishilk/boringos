@@ -291,6 +291,8 @@ DISPLAY_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 	-T user/memory-test/linker.ld
 
 KERNEL_C_SOURCES := \
+	kernel/core/cpu_inventory.c \
+	kernel/core/cpu_inventory_x86.c \
 	kernel/core/entry.c \
 	kernel/core/framebuffer.c \
 	kernel/core/framebuffer_user.c \
@@ -1027,3 +1029,10 @@ client-host-test: $(BUILD_DIR)/client-host-test
 $(BUILD_DIR)/client-host-test: tests/client-host-test.c user/runtime/client.c user/runtime/include/boring/client.h
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(RUNTIME_USER_CPPFLAGS) $(HOST_CFLAGS) tests/client-host-test.c user/runtime/client.c -o $@
+
+.PHONY: cpu-inventory-host-test
+cpu-inventory-host-test: $(BUILD_DIR)/cpu-inventory-host-test
+	$<
+$(BUILD_DIR)/cpu-inventory-host-test: tests/cpu-inventory-host-test.c kernel/core/cpu_inventory.c kernel/include/boring/cpu_inventory.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) tests/cpu-inventory-host-test.c kernel/core/cpu_inventory.c -o $@

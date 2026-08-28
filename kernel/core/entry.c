@@ -9,6 +9,7 @@
 #include <boring/framebuffer.h>
 #include <boring/context.h>
 #include <boring/cpu.h>
+#include <boring/cpu_inventory.h>
 #include <boring/exception.h>
 #include <boring/elf_boot.h>
 #include <boring/heap.h>
@@ -990,6 +991,8 @@ void boring_kernel_entry(void) {
     serial_write_string("BoringKernel 0.0.43-dev\n");
     serial_write_string("Arch: x86_64\n");
     serial_write_string("Hello from BoringKernel.\n\n");
+
+    boring_cpu_inventory_init();
 
     framebuffer_status = boring_framebuffer_boot_init();
     framebuffer_surface = boring_framebuffer_get();
