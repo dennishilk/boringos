@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.39-dev
+BoringKernel 0.0.40-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1176,3 +1176,32 @@ All intended M38 runtime semantics and every inherited regression gate passed on
 the exact freeze head before closeout. Closeout changes only this roadmap and the
 active current-version witnesses to **BoringKernel 0.0.39-dev**. No M39
 implementation is included.
+
+
+## Milestone 39: native BoringEdit — COMPLETE, Semantic Frozen
+
+`/bin/boring-edit [path]` is a native Ring3 boring.display client, managed by
+BoringWM and launched through the existing shell SPAWN path. It provides a
+bounded 4096-byte plain ASCII/LF document, visible cursor, letters, spaces,
+newlines, backspace and horizontal cursor movement. Ctrl+S saves to real
+BoringFS through existing file syscalls; FD_OPEN/READ/CLOSE load documents.
+No path starts empty with the visible `/untitled.txt` save destination.
+Oversized/non-text files are rejected before writes; failed saves retain the
+dirty document. Dirty close waits for save-and-close or explicit discard.
+
+Real QEMU acceptance proves the existing terminal and editor tiled together,
+keyboard-driven editing, exact framebuffer pixels, independent Ring3 cat,
+shorter rewrites with exact persisted bytes, an empty saved file, failed-save
+retention, and complete IPC/input/framebuffer/shared-buffer/PTY/task/process
+drain to PID1 only. No syscall ABI change or new kernel storage implementation.
+Save remains non-atomic under the current truncate/write API.
+
+Semantic Freeze: `332d4a9f235fb219cd0e2cc3798217044c4531aa`.
+Tree: `0e80ba24b0ac32c71f1fc678097bef672e537e0b`.
+Exact-head SUCCESS: M39 #1 / 33186371956; M37 #45 / 33186371793;
+M38 #12 / 33186371785; full Boot #511 / 33186371797.
+
+This runtime-neutral closeout advances active current-version witnesses to
+**BoringKernel 0.0.40-dev**. Exact-head closeout CI and guarded merge are
+required before M40 begins. See [native-boringedit.md](native-boringedit.md)
+for operation, bounds, acceptance, and the human-runnable QEMU command.

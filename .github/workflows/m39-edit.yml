@@ -1,0 +1,39 @@
+name: M39 native BoringEdit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  editor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Install build and QEMU dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential binutils xorriso qemu-system-x86 python3
+      - name: Bounded editor and inherited renderer model tests
+        run: make edit-host-test terminal-host-test terminal-render-host-test
+      - name: Real input, framebuffer, BoringFS save, independent cat and full drain
+        run: python3 tests/m39-edit-qemu.py
+      - name: Upload actual M39 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boringos-m39-edit-reference
+          path: |
+            build/m39-edit-reference/
+            build/m39-bundle/geometry.txt
+            build/m39-bundle/boringfsck.txt
+          if-no-files-found: error
+          retention-days: 30

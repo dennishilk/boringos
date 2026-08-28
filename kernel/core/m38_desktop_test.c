@@ -155,7 +155,11 @@ static bool mount_root(struct vfs_path *root_out) {
     if ((virtio_blk_init() != VIRTIO_BLK_RESULT_OK) ||
         ((disk = block_device_find("vblk0")) == NULL) ||
         (disk != virtio_blk_device()) || (disk->logical_block_size != 512U) ||
+#if defined(BORING_M39_EDIT_ACCEPTANCE)
+        (boringfs_vfs_create_writable(disk, M38_BORINGFS_ID,
+#else
         (boringfs_vfs_create_readonly(disk, M38_BORINGFS_ID,
+#endif
                                       &disk_boringfs,
                                       &validation_error) != VFS_RESULT_OK)) {
         return false;

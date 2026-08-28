@@ -980,3 +980,20 @@ spawn-stack-host-test: $(BUILD_DIR)/spawn-stack-host-test
 $(BUILD_DIR)/spawn-stack-host-test: tests/spawn-stack-host-test.c kernel/core/spawn_stack.c kernel/include/boring/spawn_stack.h kernel/include/boring/elf_loader.h kernel/include/boring/syscall_abi.h
 	@mkdir -p $(dir $@)
 	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) tests/spawn-stack-host-test.c kernel/core/spawn_stack.c -o $@
+
+# M39 native editor; reuse the existing bounded glyph renderer and key mapping.
+EDIT_MAIN_OBJECT := $(USER_BUILD_DIR)/boring-edit/main.o
+EDIT_ENGINE_OBJECT := $(USER_BUILD_DIR)/boring-edit/editor.o
+EDIT_ELF := $(USER_BUILD_DIR)/boring-edit.elf
+.PHONY: user-boring-edit edit-host-test
+user-boring-edit: $(EDIT_ELF)
+$(USER_BUILD_DIR)/boring-edit/%.o: user/boring-edit/%.c user/boring-edit/editor.h user/boring-terminal/terminal.h user/boring-terminal/render.h user/boring-terminal/input.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+$(EDIT_ELF): $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(TERMINAL_ENGINE_OBJECT) $(TERMINAL_RENDER_OBJECT) $(TERMINAL_INPUT_OBJECT) $(EDIT_ENGINE_OBJECT) $(EDIT_MAIN_OBJECT)
+	$(LD) $(DISPLAY_LDFLAGS) $^ -o $@
+$(BUILD_DIR)/edit-host-test: tests/edit-host-test.c user/boring-edit/editor.c user/boring-edit/editor.h user/boring-terminal/terminal.c
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Iuser/boring-edit $(HOST_CFLAGS) tests/edit-host-test.c user/boring-edit/editor.c user/boring-terminal/terminal.c -o $@
+edit-host-test: $(BUILD_DIR)/edit-host-test
+	./$(BUILD_DIR)/edit-host-test
