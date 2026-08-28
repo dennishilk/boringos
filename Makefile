@@ -291,6 +291,8 @@ DISPLAY_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 	-T user/memory-test/linker.ld
 
 KERNEL_C_SOURCES := \
+	kernel/core/smbios.c \
+	kernel/core/smbios_limine.c \
 	kernel/core/pci_inventory.c \
 	kernel/core/pci_inventory_x86.c \
 	kernel/core/cpu_inventory.c \
@@ -1045,3 +1047,10 @@ pci-inventory-host-test: $(BUILD_DIR)/pci-inventory-host-test
 $(BUILD_DIR)/pci-inventory-host-test: tests/pci-inventory-host-test.c kernel/core/pci_inventory.c kernel/include/boring/pci_inventory.h kernel/include/boring/pci.h
 	@mkdir -p $(dir $@)
 	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) tests/pci-inventory-host-test.c kernel/core/pci_inventory.c -o $@
+
+.PHONY: smbios-host-test
+smbios-host-test: $(BUILD_DIR)/smbios-host-test
+	$<
+$(BUILD_DIR)/smbios-host-test: tests/smbios-host-test.c kernel/core/smbios.c kernel/include/boring/smbios.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) tests/smbios-host-test.c kernel/core/smbios.c -o $@

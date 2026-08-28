@@ -39,6 +39,9 @@
 #define BORING_LIMINE_FRAMEBUFFER_REQUEST_ID \
     { BORING_LIMINE_COMMON_MAGIC, \
       0x9d5827dcd881dd75ULL, 0xa3148604f6fab11bULL }
+#define BORING_LIMINE_SMBIOS_REQUEST_ID \
+    { BORING_LIMINE_COMMON_MAGIC, \
+      0x9e9046f11e095391ULL, 0xaa4a520fefbde5eeULL }
 
 #define BORING_LIMINE_FRAMEBUFFER_RGB 1U
 
@@ -166,6 +169,18 @@ struct boring_limine_framebuffer_request {
     uint64_t id[4];
     uint64_t revision;
     struct boring_limine_framebuffer_response *response;
+};
+
+struct boring_limine_smbios_response {
+    uint64_t revision;
+    void *entry_32;
+    void *entry_64;
+};
+
+struct boring_limine_smbios_request {
+    uint64_t id[4];
+    uint64_t revision;
+    struct boring_limine_smbios_response *response;
 };
 
 struct boring_limine_internal_module {

@@ -26,6 +26,7 @@
 #include <boring/ring3_test.h>
 #include <boring/serial.h>
 #include <boring/shell_test.h>
+#include <boring/smbios.h>
 #include <boring/syscall_test.h>
 #include <boring/task.h>
 #include <boring/timer.h>
@@ -995,6 +996,8 @@ void boring_kernel_entry(void) {
 
     boring_cpu_inventory_init();
     boring_pci_inventory_init();
+    boring_smbios_boot_init(limine_hhdm_request.response,
+                            limine_memmap_request.response);
 
     framebuffer_status = boring_framebuffer_boot_init();
     framebuffer_surface = boring_framebuffer_get();
