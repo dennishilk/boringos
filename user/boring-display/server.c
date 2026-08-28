@@ -1,6 +1,7 @@
 #include <boring/desktop_log.h>
 #include <boring/display.h>
 #include <boring/event.h>
+#include <boring/input_abi.h>
 #include <boring/ipc.h>
 #include <boring/wm.h>
 #include "managed.h"
@@ -149,6 +150,14 @@ static void input(void) {
     struct boring_input_event event;
     struct display_event message = {0};
     if (boring_input_read(&event, 1U) != 1L) { desktop_fail("display M31 read"); }
+#ifdef BORING_M38_DISPLAY_DEATH_ACCEPTANCE
+    if ((event.type == BORING_INPUT_EVENT_KEY) &&
+        (event.code == BORING_KEY_F11) &&
+        (event.value1 == BORING_KEY_DOWN_VALUE)) {
+        desktop_say("display: M38 test-only unexpected Ring3 exit\n");
+        boring_exit(73);
+    }
+#endif
     if (event.type == BORING_INPUT_EVENT_MOUSE_MOVE) {
         boring_display_cursor_move(&core, event.value1, event.value2); present();
     }
