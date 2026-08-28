@@ -1,6 +1,6 @@
 # M39 — native BoringEdit
 
-Status: implementation in progress; no Semantic Freeze or closeout claimed.
+Status: implementation COMPLETE and Semantic Frozen; runtime-neutral closeout to 0.0.40-dev. Exact-head closeout CI and guarded merge remain required.
 
 Base: 456e2c9c5f4b142f17217f58b49101ba367b4f5a (tree d85a932a393ec24e29759182efe06bf0bdb1625a), BoringKernel 0.0.39-dev. Main M38, M37 and complete Boot workflows verified SUCCESS before starting.
 
@@ -20,4 +20,13 @@ The editor shares only the established bitmap renderer and key translation code 
 
 ## Implementation candidate acceptance
 
-Local real-QEMU acceptance passed: three-line loaded/edited document, full-pixel editor and independent cat screenshots, shorter rewrite with exact persisted bytes `seed\n hello\nos`, empty `/untitled.txt`, missing-parent save failure retaining `keep`, explicit discard, and inherited M38 IPC/input/framebuffer/shared-buffer/PTY/process/task drain to PID1 only. The bounded editor and inherited terminal host tests passed. ASan/UBSan passed with LeakSanitizer disabled because this runtime cannot inspect `/proc` task metadata. CI Semantic Freeze remains pending until every exact-head gate succeeds.
+Local real-QEMU acceptance passed: three-line loaded/edited document, full-pixel editor and independent cat screenshots, shorter rewrite with exact persisted bytes `seed\n hello\nos`, empty `/untitled.txt`, missing-parent save failure retaining `keep`, explicit discard, and inherited M38 IPC/input/framebuffer/shared-buffer/PTY/process/task drain to PID1 only. The bounded editor and inherited terminal host tests passed. ASan/UBSan passed with LeakSanitizer disabled because this runtime cannot inspect `/proc` task metadata. All exact-head implementation gates completed SUCCESS; the Semantic Freeze is recorded below.
+
+
+## Semantic Freeze
+
+Implementation: `332d4a9f235fb219cd0e2cc3798217044c4531aa`.
+Tree: `0e80ba24b0ac32c71f1fc678097bef672e537e0b`.
+Exact-head SUCCESS: M39 #1 / 33186371956; M37 #45 / 33186371793;
+M38 #12 / 33186371785; complete Boot #511 / 33186371797.
+The separate closeout changes only documentation and active version witnesses.
