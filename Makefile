@@ -997,3 +997,20 @@ $(BUILD_DIR)/edit-host-test: tests/edit-host-test.c user/boring-edit/editor.c us
 	$(HOST_CC) -Iuser/boring-edit $(HOST_CFLAGS) tests/edit-host-test.c user/boring-edit/editor.c user/boring-terminal/terminal.c -o $@
 edit-host-test: $(BUILD_DIR)/edit-host-test
 	./$(BUILD_DIR)/edit-host-test
+
+# M40 native directory browser using existing VFS/display/syscall contracts.
+FILES_MAIN_OBJECT := $(USER_BUILD_DIR)/boring-files/main.o
+FILES_ENGINE_OBJECT := $(USER_BUILD_DIR)/boring-files/files.o
+FILES_ELF := $(USER_BUILD_DIR)/boring-files.elf
+.PHONY: user-boring-files files-host-test
+user-boring-files: $(FILES_ELF)
+$(USER_BUILD_DIR)/boring-files/%.o: user/boring-files/%.c user/boring-files/files.h user/boring-terminal/terminal.h user/boring-terminal/render.h
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
+$(FILES_ELF): $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(TERMINAL_ENGINE_OBJECT) $(TERMINAL_RENDER_OBJECT) $(FILES_ENGINE_OBJECT) $(FILES_MAIN_OBJECT)
+	$(LD) $(DISPLAY_LDFLAGS) $^ -o $@
+$(BUILD_DIR)/files-host-test: tests/files-host-test.c user/boring-files/files.c user/boring-files/files.h user/boring-terminal/terminal.c
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Ikernel/include -Iuser/boring-files $(HOST_CFLAGS) tests/files-host-test.c user/boring-files/files.c user/boring-terminal/terminal.c -o $@
+files-host-test: $(BUILD_DIR)/files-host-test
+	./$(BUILD_DIR)/files-host-test
