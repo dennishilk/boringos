@@ -8,6 +8,7 @@
 #include <boring/elf_vfs.h>
 #include <boring/event_syscall.h>
 #include <boring/fd.h>
+#include <boring/framebuffer_user.h>
 #include <boring/input.h>
 #include <boring/ipc.h>
 #include <boring/m36_syscall.h>
@@ -699,6 +700,7 @@ static bool m36_exit(struct x86_64_syscall_frame *frame) {
     struct process *const process = process_current();
     struct m36_spawn_record *record;
     struct user_memory_cleanup_stats memory_cleanup;
+    bool framebuffer_released = false;
     bool input_released = false;
 
     if ((frame == NULL) ||
@@ -711,7 +713,12 @@ static bool m36_exit(struct x86_64_syscall_frame *frame) {
         return false;
     }
     record->exit_status = (int32_t)frame->rdi;
-    (void)boring_input_process_teardown(process->pid, &input_released);
+    if (!boring_framebuffer_user_process_teardown(process->pid,
+                                                  &framebuffer_released) ||
+        !boring_input_process_teardown(process->pid, &input_released)) {
+        serial_write_string("m36: process device cleanup failed\n");
+        x86_64_halt_forever();
+    }
     boring_ipc_process_cleanup(process);
     if (user_memory_process_cleanup(process, &memory_cleanup) !=
         USER_MEMORY_RESULT_OK) {
