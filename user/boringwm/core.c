@@ -183,6 +183,13 @@ bool wm_pointer(struct wm_core *wm, uint32_t x, uint32_t y) {
     return false;
 }
 
+const char *wm_application_path(uint32_t key) {
+    if (key == BORING_KEY_ENTER) { return "/bin/boring-terminal"; }
+    if (key == BORING_KEY_E) { return "/bin/boring-edit"; }
+    if (key == BORING_KEY_F) { return "/bin/boring-files"; }
+    return NULL;
+}
+
 enum wm_action wm_key(struct wm_core *wm, const struct boring_input_event *event) {
     int direction = 0;
     if ((wm == NULL) || (event == NULL) ||
@@ -206,7 +213,7 @@ enum wm_action wm_key(struct wm_core *wm, const struct boring_input_event *event
         return wm_focus_step(wm, direction) ? WM_FOCUS : WM_NONE;
     }
     if (event->modifiers != BORING_MOD_SUPER) { return WM_NONE; }
-    if (event->code == BORING_KEY_ENTER) { return WM_NO_LAUNCHER; }
+    if (wm_application_path(event->code) != NULL) { return WM_NO_LAUNCHER; }
     if ((event->code == BORING_KEY_Q) && (wm_lookup(wm, wm->focus) != NULL)) {
         struct wm_client *client = &wm->clients[(wm->focus & 255U) - 1U];
         if (!client->closing) {

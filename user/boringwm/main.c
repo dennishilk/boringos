@@ -166,19 +166,25 @@ static void handle_input(const struct display_event *message) {
         desktop_say("wm: terminal unavailable; no configured launcher\n");
         desktop_say("wm: dedicated negative acceptance exits WM\n"); boring_exit(0);
 #else
-        static const char terminal_path[] = "/bin/boring-terminal";
-        const char *terminal_argv[1] = { terminal_path };
+        const char *path = wm_application_path(message->input.code);
+        const char *argv[1] = { path };
         const struct boring_spawn_stdio stdio_config = {
             BORING_FD_STDIN, BORING_FD_STDOUT, BORING_FD_STDERR,
             BORING_SPAWN_FLAG_DETACHED
         };
-        const long terminal_pid = boring_spawn(terminal_path,
-            sizeof(terminal_path) - 1U, terminal_argv, 1U, &stdio_config);
-        if (terminal_pid <= 0L) {
+        const long child_pid = path == NULL ? -1L : boring_spawn(path,
+            boring_strlen(path), argv, 1U, &stdio_config);
+        if (child_pid <= 0L) {
             /* Preserves the historical M35 no-launcher acceptance root. */
-            desktop_say("wm: terminal unavailable; no configured launcher\n");
-        } else {
+            desktop_say(message->input.code == BORING_KEY_ENTER ?
+                "wm: terminal unavailable; no configured launcher\n" :
+                "wm: requested application unavailable\n");
+        } else if (message->input.code == BORING_KEY_ENTER) {
             desktop_say("wm: Super+Return spawned /bin/boring-terminal\n");
+        } else if (message->input.code == BORING_KEY_E) {
+            desktop_say("wm: Super+E spawned /bin/boring-edit\n");
+        } else {
+            desktop_say("wm: Super+F spawned /bin/boring-files\n");
         }
 #endif
     } else if ((message->input.type == BORING_INPUT_EVENT_KEY) &&
