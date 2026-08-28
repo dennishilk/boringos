@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.37-dev
+BoringKernel 0.0.38-dev
 ```
 
 The current syscall ABI is exactly:
@@ -145,7 +145,7 @@ M36 adds generation-safe bounded PTY descriptors, scheduler-owned VFS `SPAWN`
 with explicit stdio and guarded generic stacks, plus the native Ring3 graphical
 terminal launched by real BoringWM Super+Return. There is still no partition
 layer, networking, POSIX TTY/job-control model or general desktop supervision.
-M37 has not begun.
+M37 completes native desktop session startup without extending the ABI: PID 1 is the sole userspace boot module, starts `/bin/boring-display` and `/bin/boringwm` from persistent BoringFS through existing syscall 43 `SPAWN`, waits for and reaps both children, and remains alive after the real graphical terminal session drains. There is still no partition layer, networking, POSIX TTY/job-control model, restart policy or general desktop supervision.
 
 Every milestone must keep all earlier acceptance checks green and add a focused proof for the new capability.
 
@@ -1088,3 +1088,51 @@ Temporary diagnostic/transport paths are absent. The GitHub sanitizer gate is
 green and unchanged; the local runtime's ptrace `/proc` restriction prevented
 LSan startup rather than reporting a leak. Closeout changes only active version
 witnesses to **BoringKernel 0.0.37-dev** and documentation. M37 is not included.
+
+---
+
+# Stage 21 — native desktop session startup
+
+## Milestone 37: native desktop session startup — implementation COMPLETE, Semantic Frozen
+
+M37 turns the already-real M36 desktop into a real PID 1 startup path without
+adding or renumbering syscalls. The ISO boots exactly one userspace module,
+`/boot/user/boring-init.elf`. PID 1 mounts the real persistent BoringFS root and
+uses existing syscall 43 `SPAWN` to start `/bin/boring-display` and
+`/bin/boringwm` as ordinary waitable children. BoringWM discovers the existing
+`boring.display` service and retains the M35/M36 policy and protocol unchanged.
+
+The exact QEMU acceptance drives the existing real QMP -> PS/2 -> M31 input path,
+opens `/bin/boring-terminal` with Super+Return, runs a separate PTY-backed
+`/bin/boring-shell`, executes `/bin/boringfetch`, validates exact 800x600
+framebuffer pixels, proves two terminals plus focus/input isolation, and closes
+the complete session with Super+Q. PID 1 waits for and reaps BoringWM and display;
+all seven desktop children are finished/reaped while PID 1 remains the sole live
+userspace process/task. Final accounting proves zero IPC services/connections/
+queued messages/attachments, zero M32 active objects, no input owner, no
+framebuffer claim and zero PTY pairs/references/waiters/queued bytes.
+
+The measured M37 BoringFS bundle is 46 blocks and rejects 45 blocks. `boringfsck`
+reports VALID. The contained programs are `/bin/boring-display`, `/bin/boringwm`,
+`/bin/boring-terminal`, `/bin/boring-shell` and `/bin/boringfetch`; the ISO audit
+proves exactly one userspace boot module. The syscall ABI remains exactly 0..43;
+legacy `LAUNCH` is not used for the M37 desktop startup path.
+
+## M37 Semantic Freeze record
+
+- Base: `6bbdb94bd0f0a7990af9a37e7a93eef58073f0b9`
+- Freeze SHA: `823510dbb9be69abdaa0e90e783c11738c7252c3`
+- Freeze tree: `b60d7e3f91f1af2f4591c87361ba6c37a13b03a7`
+- M37 exact-head CI: **Run #13 / 33170928371 / SUCCESS**
+- Permanent regression CI: **BoringKernel boot test Run #479 / 33170928387 / SUCCESS**
+- Event: `pull_request`; branch: `agent/native-desktop-session-startup`; version: `0.0.37-dev`
+- Final evidence artifact: `boringos-m37-desktop-reference`, ID `9685574167`
+- Artifact ZIP SHA-256: `20a72174806f47458a9da2c1b3ac9e950df72a1a68c8bc512845580573f1109e`
+- ISO SHA-256: `e8c752181d52a288eebb285327f6f54b84867f1c52194a13eb2d76e6c897bc5c`
+- BoringFS root SHA-256: `a2970b431a9d6d81051aa3b76bbbdba54d494250e4b0896ae6044224cd1716bf`
+- PR: [#48](https://github.com/dennishilk/boringos/pull/48)
+
+All intended M37 runtime semantics and every M0–M36 regression gate passed on
+the exact freeze head before closeout. Closeout changes only the active current
+version witnesses to **BoringKernel 0.0.38-dev** and this documentation. No M38
+implementation is included.
