@@ -43,7 +43,45 @@ make TEST_MODE=m36-desktop \
     BOOT_LIMINE_CONF=limine-m37-desktop.conf \
     build/boringos.iso
 
-FILES=$(xorriso -indev build/boringos.iso -find /boot/user -type f -print 2>/dev/null | \
-    tr -d "'" | grep '^/boot/user/' | sort -u)
-[ "${FILES}" = '/boot/user/boring-init.elf' ]
+RAW_STDOUT=build/m37-iso-audit-xorriso.stdout
+RAW_STDERR=build/m37-iso-audit-xorriso.stderr
+if ! xorriso -indev build/boringos.iso \
+    -find /boot/user -type f -print >"${RAW_STDOUT}" 2>"${RAW_STDERR}"; then
+    printf '%s\n' 'M37 ISO audit: xorriso file listing failed.' >&2
+    printf '%s\n' '--- xorriso stdout ---' >&2
+    cat "${RAW_STDOUT}" >&2
+    printf '%s\n' '--- xorriso stderr ---' >&2
+    cat "${RAW_STDERR}" >&2
+    exit 1
+fi
+printf '%s\n' 'M37 ISO audit: raw xorriso stdout:'
+cat "${RAW_STDOUT}"
+printf '%s\n' 'M37 ISO audit: raw xorriso stderr:'
+cat "${RAW_STDERR}"
+
+AUDIT_DIR=build/m37-iso-audit
+rm -rf "${AUDIT_DIR}"
+mkdir -p "${AUDIT_DIR}"
+if ! xorriso -osirrox on -indev build/boringos.iso \
+    -extract /boot/user "${AUDIT_DIR}" \
+    >build/m37-iso-audit-extract.stdout \
+    2>build/m37-iso-audit-extract.stderr; then
+    printf '%s\n' 'M37 ISO audit: extracting /boot/user from ISO failed.' >&2
+    cat build/m37-iso-audit-extract.stdout >&2
+    cat build/m37-iso-audit-extract.stderr >&2
+    exit 1
+fi
+
+FILES=$(find "${AUDIT_DIR}" -type f -printf '/boot/user/%P\n' | LC_ALL=C sort -u)
+printf '%s\n' 'M37 ISO audit: normalized /boot/user files:'
+if [ -n "${FILES}" ]; then
+    printf '%s\n' "${FILES}"
+else
+    printf '%s\n' '<none>'
+fi
+if [ "${FILES}" != '/boot/user/boring-init.elf' ]; then
+    printf '%s\n' 'M37 ISO audit FAILED: expected exactly /boot/user/boring-init.elf.' >&2
+    exit 1
+fi
+printf '%s\n' 'M37 ISO audit: exactly one userspace boot module verified.'
 printf '%s\n' 'M37 desktop init audit and one-module ISO build passed.'
