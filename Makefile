@@ -291,6 +291,8 @@ DISPLAY_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 	-T user/memory-test/linker.ld
 
 KERNEL_C_SOURCES := \
+	kernel/core/pci_inventory.c \
+	kernel/core/pci_inventory_x86.c \
 	kernel/core/cpu_inventory.c \
 	kernel/core/cpu_inventory_x86.c \
 	kernel/core/entry.c \
@@ -1036,3 +1038,10 @@ cpu-inventory-host-test: $(BUILD_DIR)/cpu-inventory-host-test
 $(BUILD_DIR)/cpu-inventory-host-test: tests/cpu-inventory-host-test.c kernel/core/cpu_inventory.c kernel/include/boring/cpu_inventory.h
 	@mkdir -p $(dir $@)
 	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) tests/cpu-inventory-host-test.c kernel/core/cpu_inventory.c -o $@
+
+.PHONY: pci-inventory-host-test
+pci-inventory-host-test: $(BUILD_DIR)/pci-inventory-host-test
+	$<
+$(BUILD_DIR)/pci-inventory-host-test: tests/pci-inventory-host-test.c kernel/core/pci_inventory.c kernel/include/boring/pci_inventory.h kernel/include/boring/pci.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) tests/pci-inventory-host-test.c kernel/core/pci_inventory.c -o $@

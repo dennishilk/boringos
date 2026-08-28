@@ -18,6 +18,7 @@
 #include <boring/irq.h>
 #include <boring/kernel.h>
 #include <boring/pmm.h>
+#include <boring/pci_inventory.h>
 #include <boring/preemption_test.h>
 #include <boring/process.h>
 #include <boring/process_test.h>
@@ -988,11 +989,12 @@ void boring_kernel_entry(void) {
 
     serial_init();
     serial_write_string("BoringOS booting...\n");
-    serial_write_string("BoringKernel 0.0.44-dev\n");
+    serial_write_string("BoringKernel 0.0.45-dev\n");
     serial_write_string("Arch: x86_64\n");
     serial_write_string("Hello from BoringKernel.\n\n");
 
     boring_cpu_inventory_init();
+    boring_pci_inventory_init();
 
     framebuffer_status = boring_framebuffer_boot_init();
     framebuffer_surface = boring_framebuffer_get();
@@ -1146,7 +1148,7 @@ void boring_kernel_entry(void) {
     if (framebuffer_surface != NULL) {
         const struct boring_boot_dashboard_info dashboard_info = {
             .kernel_name = "BoringKernel",
-            .kernel_version = "0.0.44-dev",
+            .kernel_version = "0.0.45-dev",
             .arch = "x86_64",
             .memory_bytes = pmm_stats.usable_bytes,
             .root_fs = "N/A",
