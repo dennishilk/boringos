@@ -1,7 +1,7 @@
 # M46 — boringfetch hardware edition
 
-Status: implementation complete on BoringKernel 0.0.46-dev; Semantic Freeze
-pending exact-head CI.
+Status: implementation COMPLETE and Semantic Frozen; runtime-neutral closeout
+to BoringKernel 0.0.47-dev.
 
 Verified base main `4411bef3930450b9b5593641be3e40cdfe4c8f8e`, tree
 `1d2e4f2b35dbc595341214aeaf406c579da15b48`, with all ten exact-main push
@@ -77,3 +77,20 @@ processes; focused input stayed isolated, editor bytes persisted, `Super+Q`
 closed each client gracefully and all resources drained back to PID 1. Host
 tests separately cover exact hardware formatting, unavailable-field omission,
 sample bounds and unterminated snapshots.
+
+## Semantic Freeze
+
+Implementation: `2d10161debaa964f872b2f287382773d81dc2b8f`.
+Tree: `0b506f0d61f9f89e081c765b07408b4835d5472c`.
+Exact-head SUCCESS: M46 #1 / 33203162251; M45 #5 / 33203162242;
+M44 #10 / 33203162037; M43 #14 / 33203162020;
+M42 #18 / 33203162188; M41 #22 / 33203162095;
+M40 #25 / 33203162058; M39 #28 / 33203161993;
+M38 #39 / 33203161997; M37 #72 / 33203162049;
+complete Boot #538 / 33203161996.
+
+Evidence: `boringos-m46-boringfetch-reference`, artifact 9698590846, GitHub
+ZIP SHA-256
+`4686494b2987012ca6a3a2b4bdcb61c4b151dc5a6024b5b1301ea3253269f8d6`.
+This separate closeout changes only documentation and active version witnesses.
+Exact-head closeout CI and guarded merge remain required.
