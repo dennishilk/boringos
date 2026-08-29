@@ -8,7 +8,142 @@
 
 #define M49_EXPECTED_ATTACHED_DEVICES 2U
 
-#ifdef BORING_M51_CONFIGURATION_ACCEPTANCE
+#ifdef BORING_M52_HID_ACCEPTANCE
+
+static void fail(const char *reason) __attribute__((noreturn));
+static void fail(const char *reason) {
+    serial_write_string("M52 xHCI HID reports FAILED: ");
+    serial_write_string(reason);
+    serial_write_string("\n");
+    x86_64_halt_forever();
+}
+
+void xhci_address_test_run(void) {
+    struct xhci_state state;
+    uint32_t submitted = 0U;
+    uint32_t completed = 0U;
+    uint32_t report_bytes = 0U;
+    uint32_t decoded = 0U;
+    uint32_t key_presses = 0U;
+    uint32_t key_releases = 0U;
+    uint32_t pointer_reports = 0U;
+    uint8_t index;
+
+    if (!xhci_init(&state)) { fail("controller initialization"); }
+    if (!xhci_address_connected(&state)) { fail("M49 addressing"); }
+    if ((state.addressed_count != M49_EXPECTED_ATTACHED_DEVICES) ||
+        state.addressing_truncated) {
+        fail("M49 addressed prerequisite");
+    }
+    if (!xhci_discover_descriptors(&state)) { fail("M50 descriptors"); }
+    if (!xhci_configure_hid_devices(&state)) { fail("M51 configuration"); }
+
+    serial_write_string("M52 USB HID transfers ready; inject real USB input now.\n");
+    if (!xhci_poll_hid_reports(&state, 3U)) {
+        fail("real Interrupt-IN transfer completion");
+    }
+
+    for (index = 0U; index < state.addressed_count; ++index) {
+        const struct xhci_addressed_device *device = &state.addressed[index];
+        uint8_t endpoint_index;
+        if (!device->addressed || !device->descriptors_ready ||
+            !device->device_configured || !device->hid_endpoint_ready) {
+            fail("inherited configured state");
+        }
+        for (endpoint_index = 0U;
+             endpoint_index < device->hid_configuration.endpoint_count;
+             ++endpoint_index) {
+            const struct xhci_hid_endpoint_descriptor *endpoint =
+                &device->hid_configuration.endpoints[endpoint_index];
+            const struct xhci_hid_endpoint_runtime *runtime =
+                &device->hid_runtime[endpoint_index];
+            if ((runtime->report_buffer_physical == 0ULL) ||
+                (runtime->submitted_transfers == 0U) ||
+                (runtime->completed_transfers == 0U) ||
+                (runtime->decoded_reports != runtime->completed_transfers) ||
+                (runtime->report_bytes == 0U) ||
+                (runtime->last_report_length == 0U) ||
+                (runtime->last_report_length > endpoint->max_packet) ||
+                (runtime->submitted_transfers < runtime->completed_transfers)) {
+                fail("bounded endpoint report state");
+            }
+            if ((UINT32_MAX - submitted < runtime->submitted_transfers) ||
+                (UINT32_MAX - completed < runtime->completed_transfers) ||
+                (UINT32_MAX - report_bytes < runtime->report_bytes) ||
+                (UINT32_MAX - decoded < runtime->decoded_reports) ||
+                (UINT32_MAX - key_presses < runtime->key_presses) ||
+                (UINT32_MAX - key_releases < runtime->key_releases) ||
+                (UINT32_MAX - pointer_reports < runtime->pointer_reports)) {
+                fail("counter overflow");
+            }
+            submitted += runtime->submitted_transfers;
+            completed += runtime->completed_transfers;
+            report_bytes += runtime->report_bytes;
+            decoded += runtime->decoded_reports;
+            key_presses += runtime->key_presses;
+            key_releases += runtime->key_releases;
+            pointer_reports += runtime->pointer_reports;
+
+            serial_write_string("M52 HID report slot=");
+            serial_write_u64((uint64_t)device->slot_id);
+            serial_write_string(" endpoint_id=");
+            serial_write_u64((uint64_t)endpoint->endpoint_id);
+            serial_write_string(" protocol=");
+            serial_write_u64((uint64_t)endpoint->protocol);
+            serial_write_string(" submitted=");
+            serial_write_u64((uint64_t)runtime->submitted_transfers);
+            serial_write_string(" completed=");
+            serial_write_u64((uint64_t)runtime->completed_transfers);
+            serial_write_string(" bytes=");
+            serial_write_u64((uint64_t)runtime->report_bytes);
+            serial_write_string(" short=");
+            serial_write_u64((uint64_t)runtime->short_packets);
+            serial_write_string("\n");
+
+            if (endpoint->protocol == 1U) {
+                serial_write_string("M52 keyboard transitions presses=");
+                serial_write_u64((uint64_t)runtime->key_presses);
+                serial_write_string(" releases=");
+                serial_write_u64((uint64_t)runtime->key_releases);
+                serial_write_string(" last_usage=");
+                serial_write_u64((uint64_t)runtime->last_key_usage);
+                serial_write_string(" last_down=");
+                serial_write_u64(runtime->last_key_down ? 1ULL : 0ULL);
+                serial_write_string("\n");
+            } else if ((endpoint->protocol == 0U) ||
+                       (endpoint->protocol == 2U)) {
+                if (!runtime->pointer_valid) {
+                    fail("pointer report was not decoded");
+                }
+                serial_write_string("M52 pointer report x=");
+                serial_write_u64((uint64_t)runtime->last_pointer_x);
+                serial_write_string(" y=");
+                serial_write_u64((uint64_t)runtime->last_pointer_y);
+                serial_write_string(" buttons=");
+                serial_write_u64((uint64_t)runtime->last_pointer_buttons);
+                serial_write_string("\n");
+            }
+        }
+    }
+    if ((completed < 3U) || (decoded != completed) ||
+        (submitted < completed) || (report_bytes == 0U) ||
+        (key_presses == 0U) || (key_releases == 0U) ||
+        (pointer_reports == 0U)) {
+        fail("dynamic decoded input evidence");
+    }
+    serial_write_string("M52 real Interrupt-IN submissions: ");
+    serial_write_u64((uint64_t)submitted);
+    serial_write_string("\nM52 real Interrupt-IN completions: ");
+    serial_write_u64((uint64_t)completed);
+    serial_write_string("\nM52 real HID report bytes: ");
+    serial_write_u64((uint64_t)report_bytes);
+    serial_write_string("\nM52 decoded HID reports: ");
+    serial_write_u64((uint64_t)decoded);
+    serial_write_string("\nM52 xHCI HID interrupt-IN QEMU passed.\n");
+    x86_64_halt_forever();
+}
+
+#elif defined(BORING_M51_CONFIGURATION_ACCEPTANCE)
 
 static void fail(const char *reason) __attribute__((noreturn));
 static void fail(const char *reason) {

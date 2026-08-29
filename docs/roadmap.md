@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.52-dev
+BoringKernel 0.0.53-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1567,3 +1567,13 @@ Semantic Freeze: `67bf133ecd8c849bd7e3e3b4793b1efcafbf7700`, tree `6413aab58139d
 
 Active version after runtime-neutral closeout: **BoringKernel 0.0.52-dev**. No M52 implementation is included.
 See [m51-usb-hid-endpoint-setup.md](m51-usb-hid-endpoint-setup.md).
+
+
+## Milestone 52: real xHCI HID interrupt-IN report transport — COMPLETE, Semantic Frozen
+
+M52 takes M51-configured direct-root-port HID Interrupt-IN endpoints through real xHCI Normal-TRB report transfers and real Transfer Events. Each endpoint uses bounded PMM-owned report DMA, producer-cycle tracking, Link-TRB ring wrap, exact slot/DCI/TRB-pointer/completion validation, residual-length accounting and bounded re-arm. Keyboard Boot reports and the observed six-byte QEMU absolute-tablet report are decoded only after controller completion. No input-queue delivery, desktop USB input, hubs, storage or M53 semantics are included.
+
+Semantic Freeze: `bc00930901c218cb6409a686a19a898d20233ebb`, tree `d25179a63df620741606ecfb24381813921db12c`. Focused real-QEMU acceptance run `33231871215` proved four Interrupt-IN submissions, three real Transfer completions, 22 report bytes and three decoded reports, including an `A` press/release and absolute pointer position 12345 x 23456. Observed slots, endpoint IDs, lengths and counts are evidence only. All 17 PR workflows on the frozen runtime head were terminal SUCCESS before closeout.
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.53-dev**. No M53 implementation is included.
+See [m52-xhci-hid-reports.md](m52-xhci-hid-reports.md).

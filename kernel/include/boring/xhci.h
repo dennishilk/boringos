@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include <boring/pci.h>
+#include <boring/usb_hid.h>
 
 #define XHCI_MMIO_WINDOW_SIZE 65536U
 #define XHCI_MAX_PORTS 64U
@@ -16,7 +17,9 @@
 #define XHCI_DESCRIPTOR_BUFFER_BYTES 4096U
 #define XHCI_INTERRUPT_RING_USABLE 252U
 #define XHCI_MAX_HID_ENDPOINTS 4U
+#define XHCI_HID_REPORT_BUFFER_BYTES 4096U
 
+#define XHCI_TRB_TYPE_NORMAL 1U
 #define XHCI_TRB_TYPE_SETUP_STAGE 2U
 #define XHCI_TRB_TYPE_DATA_STAGE 3U
 #define XHCI_TRB_TYPE_STATUS_STAGE 4U
@@ -68,6 +71,30 @@ struct xhci_hid_configuration {
     uint8_t endpoint_count;
 };
 
+struct xhci_hid_endpoint_runtime {
+    uint64_t report_buffer_physical;
+    uint64_t expected_trb_physical;
+    struct usb_hid_keyboard_state keyboard_state;
+    uint32_t submitted_transfers;
+    uint32_t completed_transfers;
+    uint32_t short_packets;
+    uint32_t report_bytes;
+    uint32_t decoded_reports;
+    uint32_t key_presses;
+    uint32_t key_releases;
+    uint32_t pointer_reports;
+    uint16_t producer_index;
+    uint16_t last_report_length;
+    uint16_t last_pointer_x;
+    uint16_t last_pointer_y;
+    uint8_t last_key_usage;
+    uint8_t last_pointer_buttons;
+    bool producer_cycle;
+    bool transfer_outstanding;
+    bool last_key_down;
+    bool pointer_valid;
+};
+
 struct xhci_control_td {
     struct xhci_trb setup;
     struct xhci_trb data;
@@ -89,6 +116,7 @@ struct xhci_addressed_device {
     uint64_t expected_status_trb_physical;
     struct xhci_usb_descriptor_facts descriptors;
     struct xhci_hid_configuration hid_configuration;
+    struct xhci_hid_endpoint_runtime hid_runtime[XHCI_MAX_HID_ENDPOINTS];
     uint32_t transfer_events;
     uint32_t descriptor_bytes;
     uint32_t short_packets;
@@ -211,11 +239,25 @@ bool xhci_build_configure_endpoint_command(
     struct xhci_trb *command, uint64_t input_context_physical,
     uint8_t max_slots, uint8_t slot_id);
 
+/* Pure M52 interrupt-transfer helpers. They do not issue hardware traffic. */
+bool xhci_build_interrupt_in_trb(
+    struct xhci_trb *trb, uint64_t ring_physical,
+    uint16_t producer_index, bool producer_cycle,
+    uint64_t buffer_physical, uint16_t length,
+    uint64_t *trb_physical, uint16_t *next_producer_index,
+    bool *next_producer_cycle);
+bool xhci_validate_interrupt_transfer_event(
+    const struct xhci_trb *event, uint64_t ring_physical,
+    uint8_t expected_slot_id, uint8_t expected_endpoint_id,
+    uint64_t expected_trb_physical, uint16_t requested_length,
+    uint16_t *actual_length, bool *short_packet);
+
 /* Initializes one segment-zero xHCI controller through PCI BAR0. */
 bool xhci_init(struct xhci_state *state);
 bool xhci_address_connected(struct xhci_state *state);
 bool xhci_discover_descriptors(struct xhci_state *state);
 bool xhci_configure_hid_devices(struct xhci_state *state);
+bool xhci_poll_hid_reports(struct xhci_state *state, uint32_t completion_goal);
 const struct xhci_state *xhci_get_state(void);
 
 _Static_assert(sizeof(struct xhci_trb) == XHCI_TRB_SIZE,
