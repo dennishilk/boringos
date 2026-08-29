@@ -45,7 +45,7 @@ done
 
 status=0
 for line in \
-    'BoringKernel 0.0.53-dev' \
+    'BoringKernel 0.0.54-dev' \
     'BoringKernel physical memory test passed.' \
     'BoringKernel virtual memory test passed.' \
     'BoringKernel heap test passed.' \

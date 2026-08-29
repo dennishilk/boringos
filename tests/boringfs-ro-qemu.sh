@@ -113,7 +113,7 @@ PID=$!
 wait_for_prompt 1
 
 for line in \
-    'BoringKernel 0.0.53-dev' \
+    'BoringKernel 0.0.54-dev' \
     '  real-virtio-volume: PASS' \
     'BoringFS over VirtIO:' \
     '  4096-to-512-mapping: PASS' \
