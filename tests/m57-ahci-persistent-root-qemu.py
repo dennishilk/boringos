@@ -100,6 +100,16 @@ def run_session(name, root_image, expect_existing):
         qmp("input-send-event", {"events": events})
         time.sleep(0.025)
 
+    def usb_inject(events):
+        qmp("input-send-event", {"events": events})
+        time.sleep(0.12)
+
+    def usb_abs(axis, value):
+        return {"type": "abs", "data": {"axis": axis, "value": value}}
+
+    def usb_button(name, down):
+        return {"type": "btn", "data": {"down": down, "button": name}}
+
     def frames():
         return WM["frames"](text())
 
@@ -183,6 +193,13 @@ def run_session(name, root_image, expect_existing):
         witness("m54-desktop: q35 i8042-free xHCI USB keyboard/tablet path online")
         witness("boring-spawn: VFS executable source /bin/boring-display")
         witness("boring-spawn: VFS executable source /bin/boringwm")
+        usb_inject([usb_abs("x", 10000), usb_abs("y", 20000)])
+        usb_inject([usb_abs("x", 12345), usb_abs("y", 23456)])
+        usb_inject([usb_button("left", True)])
+        usb_inject([usb_button("left", False)])
+        witness("display: M54 USB tablet movement reached Ring3 desktop")
+        witness("display: M54 USB left button down reached Ring3 desktop")
+        witness("display: M54 USB left button up reached Ring3 desktop")
         key("ret", super_key=True)
         witness("wm: Super+Return spawned /bin/boring-terminal")
         witness("boring-spawn: VFS executable source /bin/boring-terminal")
