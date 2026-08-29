@@ -18,6 +18,9 @@ struct pmm_stats {
 
 bool pmm_init(const struct boring_limine_memmap_response *memory_map);
 bool pmm_alloc_frame(uint64_t *physical_address);
+bool pmm_alloc_frame_in_range(uint64_t minimum_physical_address,
+                              uint64_t maximum_physical_address_exclusive,
+                              uint64_t *physical_address);
 bool pmm_free_frame(uint64_t physical_address);
 bool pmm_frame_is_usable(uint64_t physical_address);
 bool pmm_get_stats(struct pmm_stats *stats);
