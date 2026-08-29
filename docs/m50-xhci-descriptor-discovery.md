@@ -97,6 +97,11 @@ runtime-neutral closeout is limited to this documentation, the roadmap and the
 established active version witnesses, advancing `BoringKernel 0.0.50-dev` to
 `BoringKernel 0.0.51-dev`. No M51 implementation is included.
 
-
 Active version after runtime-neutral closeout: **BoringKernel 0.0.51-dev**.
 No M51 work is included.
+
+Closeout witness commit: `c02cb9af15628f0d93197cda4898b96d57c2f3cb`.
+Closeout witness tree: `04a446cad230fdca2de1989f5fcb5613086fb9cb`.
+The following documentation-only closeout verification commit exists solely to
+trigger exact-head PR CI after the self-removing closeout helper; it changes no
+runtime semantics and no active version witness.
