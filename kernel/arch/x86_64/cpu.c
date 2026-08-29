@@ -147,6 +147,10 @@ void x86_64_write_msr(uint32_t msr, uint64_t value) {
                       : "memory");
 }
 
+void x86_64_memory_barrier(void) {
+    __asm__ volatile ("mfence" : : : "memory");
+}
+
 void x86_64_pause(void) {
     __asm__ volatile ("pause");
 }

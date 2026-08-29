@@ -19,6 +19,7 @@ bool x86_64_nx_enabled(void);
 bool x86_64_enable_nx(void);
 uint64_t x86_64_read_msr(uint32_t msr);
 void x86_64_write_msr(uint32_t msr, uint64_t value);
+void x86_64_memory_barrier(void);
 void x86_64_pause(void);
 void x86_64_enable_and_halt(void);
 void x86_64_halt_forever(void) __attribute__((noreturn));
