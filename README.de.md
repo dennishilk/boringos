@@ -14,10 +14,10 @@ Es ist **keine Linux-Distribution**, **kein BSD** und **basiert nicht auf dem Ke
 Der aktuelle Main-Stand ist:
 
 ```text
-BoringKernel 0.0.56-dev
+BoringKernel 0.0.57-dev
 ```
 
-Die Entwicklung ist bis einschließlich **Milestone 55** abgeschlossen.
+Die Entwicklung ist bis einschließlich **Milestone 56** abgeschlossen.
 
 BoringOS ist längst nicht mehr nur ein früher Boot-Kernel: Unter QEMU bootet inzwischen eine echte native Ring-3-Desktop-Session mit eigenem Display-Service, Tiling-Window-Manager, grafischem Terminal, Shell, Editor, Dateimanager, persistentem BoringFS, Hardware-Inventar und einem wachsenden BoringOS-eigenen xHCI-/USB-Stack.
 

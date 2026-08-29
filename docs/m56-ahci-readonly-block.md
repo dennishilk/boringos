@@ -40,3 +40,13 @@ The focused M56 QEMU test must use a deterministic RAW SATA image with known sec
 M56 does not add writes, flush/persistence semantics, a writable AHCI device, BoringFS root over AHCI, partition parsing (MBR/GPT), NCQ, hotplug, port multipliers, ATAPI, asynchronous or interrupt-driven AHCI I/O, NVMe, networking, or M57 work.
 
 M57 persistent writable AHCI root work is explicitly out of scope until M56 is Semantic Frozen, runtime-neutrally closed, guarded-squash merged, and fully green on merged main.
+
+## Semantic Freeze and closeout
+
+The M56 runtime is frozen at commit `8625ea926e378c666001cb882e8171fa1401b589`, tree `b71bedec6041fb5ce5d38b22e97a87fa99a54478`.
+
+Focused workflow run `33249981735` proved the host IDENTIFY/FIS/bounds fixtures under the normal compiler and ASAN/UBSAN, then booted the production-wired kernel on q35 with a real AHCI controller and deterministic RAW SATA disk. The device completed IDENTIFY on port 0 and reported 16,384 logical blocks, 512-byte logical sectors, LBA48 and an eight-block/4-KiB transfer maximum. First, middle, last and four-sector reads passed through read-only `sata0` and the existing M21 API. Out-of-range and PRDT-bound requests were rejected, writes remained rejected, and the four successful reads produced four real DMA read completions.
+
+The host RAW image remained byte-for-byte unchanged with SHA-256 `36e22f4b9332c930dc02e238719525dabb0f8bead4392d3aa68f03615077b581`. All 21 exact-head PR workflows were terminal SUCCESS at freeze, including full BoringKernel boot run `33249981866` (#642), M52, M54 and M55 regression gates.
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.57-dev**. Writable AHCI, cache flush and persistent BoringFS root semantics remain M57 work.
