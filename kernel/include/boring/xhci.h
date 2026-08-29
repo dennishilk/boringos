@@ -11,10 +11,20 @@
 #define XHCI_MAX_ADDRESSED_DEVICES 8U
 #define XHCI_TRB_SIZE 16U
 #define XHCI_COMMAND_RING_USABLE 252U
+#define XHCI_EP0_RING_USABLE 252U
 #define XHCI_EVENT_RING_TRBS 256U
+#define XHCI_DESCRIPTOR_BUFFER_BYTES 4096U
 
+#define XHCI_TRB_TYPE_SETUP_STAGE 2U
+#define XHCI_TRB_TYPE_DATA_STAGE 3U
+#define XHCI_TRB_TYPE_STATUS_STAGE 4U
+#define XHCI_TRB_TYPE_EVALUATE_CONTEXT 13U
+#define XHCI_TRB_TYPE_TRANSFER_EVENT 32U
 #define XHCI_TRB_TYPE_COMMAND_COMPLETION_EVENT 33U
 #define XHCI_COMPLETION_SUCCESS 1U
+#define XHCI_COMPLETION_SHORT_PACKET 13U
+#define XHCI_USB_DESCRIPTOR_DEVICE 1U
+#define XHCI_USB_DESCRIPTOR_CONFIGURATION 2U
 
 struct xhci_trb {
     uint64_t parameter;
@@ -22,13 +32,50 @@ struct xhci_trb {
     uint32_t control;
 };
 
+struct xhci_usb_descriptor_facts {
+    uint16_t usb_version;
+    uint16_t vendor_id;
+    uint16_t product_id;
+    uint16_t configuration_length;
+    uint16_t ep0_max_packet;
+    uint8_t device_class;
+    uint8_t configuration_count;
+    uint8_t interface_count;
+    uint8_t b_max_packet_size0;
+};
+
+struct xhci_control_td {
+    struct xhci_trb setup;
+    struct xhci_trb data;
+    struct xhci_trb status;
+    uint64_t setup_physical;
+    uint64_t data_physical;
+    uint64_t status_physical;
+    uint16_t next_producer_index;
+    bool next_producer_cycle;
+};
+
 struct xhci_addressed_device {
     uint64_t input_context_physical;
     uint64_t device_context_physical;
     uint64_t ep0_ring_physical;
+    uint64_t descriptor_buffer_physical;
+    uint64_t expected_data_trb_physical;
+    uint64_t expected_status_trb_physical;
+    struct xhci_usb_descriptor_facts descriptors;
+    uint32_t transfer_events;
+    uint32_t descriptor_bytes;
+    uint32_t short_packets;
+    uint32_t evaluate_context_completions;
+    uint16_t ep0_producer_index;
+    uint16_t ep0_max_packet;
+    uint16_t outstanding_length;
     uint8_t root_port_id;
     uint8_t slot_id;
     uint8_t speed;
+    bool ep0_producer_cycle;
+    bool control_outstanding;
+    bool descriptors_ready;
     bool addressed;
 };
 
@@ -79,12 +126,44 @@ bool xhci_validate_command_completion(const struct xhci_trb *event,
                                       uint8_t max_slots,
                                       uint8_t *slot_id);
 
-/* Initializes one segment-zero xHCI controller through PCI BAR0. The current
- * M48 foundation establishes command/event transport and observes ports; it
- * does not claim USB device addressing or HID endpoint support.
- */
+/* Pure M50 model helpers. They do not issue hardware traffic. */
+bool xhci_build_get_descriptor_control_td(struct xhci_control_td *td,
+                                          uint64_t ep0_ring_physical,
+                                          uint16_t producer_index,
+                                          bool producer_cycle,
+                                          uint64_t buffer_physical,
+                                          uint8_t descriptor_type,
+                                          uint8_t descriptor_index,
+                                          uint16_t length);
+bool xhci_validate_control_transfer_event(
+    const struct xhci_trb *event, uint64_t ep0_ring_physical,
+    uint8_t expected_slot_id, uint64_t expected_data_trb_physical,
+    uint64_t expected_status_trb_physical, uint16_t requested_length,
+    bool expect_status_only, uint16_t *actual_length, bool *short_packet);
+bool xhci_descriptor_ep0_max_packet(uint8_t speed, uint8_t descriptor_value,
+                                    uint16_t *max_packet);
+bool xhci_build_evaluate_ep0_context(void *buffer, uint32_t length,
+                                     bool context_64_bytes,
+                                     uint8_t max_slots, uint8_t slot_id,
+                                     uint16_t max_packet,
+                                     uint64_t ep0_ring_physical);
+bool xhci_validate_device_descriptor_prefix(const uint8_t *bytes,
+                                            uint16_t received,
+                                            uint8_t speed,
+                                            uint16_t *max_packet);
+bool xhci_validate_device_descriptor(const uint8_t *bytes, uint16_t received,
+                                     uint8_t speed,
+                                     struct xhci_usb_descriptor_facts *facts);
+bool xhci_configuration_total_length(const uint8_t *bytes, uint16_t received,
+                                     uint16_t *total_length);
+bool xhci_validate_configuration_descriptor(
+    const uint8_t *bytes, uint16_t received,
+    struct xhci_usb_descriptor_facts *facts);
+
+/* Initializes one segment-zero xHCI controller through PCI BAR0. */
 bool xhci_init(struct xhci_state *state);
 bool xhci_address_connected(struct xhci_state *state);
+bool xhci_discover_descriptors(struct xhci_state *state);
 const struct xhci_state *xhci_get_state(void);
 
 _Static_assert(sizeof(struct xhci_trb) == XHCI_TRB_SIZE,
