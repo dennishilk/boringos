@@ -27,6 +27,10 @@
 #include <boring/vfs.h>
 #include <boring/virtio_blk.h>
 #include <boring/vmm.h>
+#if defined(BORING_M57_AHCI_ROOT)
+#include <boring/ahci.h>
+#include <boring/ahci_block.h>
+#endif
 #if defined(BORING_M54_USB_ONLY_DESKTOP)
 #include <boring/xhci.h>
 #include <boring/timer.h>
@@ -261,6 +265,25 @@ static bool mount_root(struct vfs_path *root_out) {
     struct boringfs_validation_error validation_error;
 
     block_device_init();
+#if defined(BORING_M57_AHCI_ROOT)
+    {
+        struct ahci_state controller;
+        struct ahci_block_stats stats;
+        if (!ahci_init(&controller) ||
+            (ahci_block_init(&controller) != AHCI_BLOCK_RESULT_OK) ||
+            ((disk = block_device_find(AHCI_BLOCK_DEVICE_NAME)) == NULL) ||
+            (disk != ahci_block_device()) || disk->read_only ||
+            (disk->logical_block_size != 512U) ||
+            !ahci_block_get_stats(&stats) || !stats.identify_complete ||
+            (boringfs_vfs_create_writable(disk, M37_BORINGFS_ID,
+                                          &disk_boringfs,
+                                          &validation_error) != VFS_RESULT_OK)) {
+            return false;
+        }
+        serial_write_string(
+            "m57-desktop: writable BoringFS root mounted through AHCI sata0\n");
+    }
+#else
     if ((virtio_blk_init() != VIRTIO_BLK_RESULT_OK) ||
         ((disk = block_device_find("vblk0")) == NULL) ||
         (disk != virtio_blk_device()) || (disk->logical_block_size != 512U) ||
@@ -269,6 +292,7 @@ static bool mount_root(struct vfs_path *root_out) {
                                       &validation_error) != VFS_RESULT_OK)) {
         return false;
     }
+#endif
     filesystem = boringfs_vfs_get_vfs(disk_boringfs);
     return (filesystem != NULL) && (vfs_init(filesystem) == VFS_RESULT_OK) &&
            (vfs_get_root(root_out) == VFS_RESULT_OK);
@@ -430,6 +454,22 @@ void m37_desktop_test_finish_from_pid1(void) {
         "m37-desktop: IPC/input/framebuffer/M32/PTY desktop resources drained\n");
     serial_write_string(
         "m37-desktop: all spawned desktop tasks/processes reaped; PID 1 remains\n");
+#if defined(BORING_M57_AHCI_ROOT)
+    {
+        struct ahci_block_stats ahci_stats;
+        if (!ahci_block_get_stats(&ahci_stats) ||
+            (ahci_stats.writes_completed == 0ULL) ||
+            !ahci_stats.write_cache_enabled ||
+            (ahci_stats.flushes_completed == 0ULL)) {
+            fail("M57 AHCI write/flush accounting");
+        }
+        serial_write_string("m57-desktop: AHCI writes/flushes=");
+        serial_write_u64(ahci_stats.writes_completed);
+        serial_write_string("/");
+        serial_write_u64(ahci_stats.flushes_completed);
+        serial_write_string("\nM57 writable AHCI persistent-root desktop passed.\n");
+    }
+#endif
 #if defined(BORING_M54_USB_ONLY_DESKTOP)
     serial_write_string(
         "M54 USB-only graphical desktop acceptance passed.\n");

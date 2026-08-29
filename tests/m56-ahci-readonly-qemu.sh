@@ -46,14 +46,13 @@ for marker in \
     'M56 AHCI logical sector size: 512' \
     'M56 AHCI LBA48: yes' \
     'M56 AHCI max blocks per transfer: 8' \
-    'M56 M21 block device: sata0 read-only' \
+    'M56 M21 read path preserved on sata0' \
     'M56 first read: PASS' \
     'M56 middle read: PASS' \
     'M56 last read: PASS' \
     'M56 multi-sector read: PASS' \
     'M56 out-of-range rejection: PASS' \
     'M56 PRDT transfer bound: PASS' \
-    'M56 write rejection: PASS' \
     'M56 real read completions: 4' \
     'M56 AHCI synchronous read-only block path QEMU passed.'
 do

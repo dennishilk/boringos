@@ -78,7 +78,7 @@ void ahci_block_test_run(void) {
 
     device = ahci_block_device();
     if ((device == NULL) || (device != block_device_find(AHCI_BLOCK_DEVICE_NAME)) ||
-        (block_device_count() != 1U) || !device->read_only ||
+        (block_device_count() != 1U) || device->read_only ||
         (device->logical_block_size != stats.logical_block_size) ||
         (device->block_count != stats.capacity_blocks)) {
         fail("M21 registration");
@@ -95,7 +95,7 @@ void ahci_block_test_run(void) {
     serial_write_string(stats.lba48 ? "yes\n" : "no\n");
     serial_write_string("M56 AHCI max blocks per transfer: ");
     serial_write_u64((uint64_t)stats.max_blocks_per_transfer);
-    serial_write_string("\nM56 M21 block device: sata0 read-only\n");
+    serial_write_string("\nM56 M21 read path preserved on sata0\n");
 
     if (!verify_read(device, 0ULL, 1U)) {
         fail("first valid region");
@@ -134,12 +134,6 @@ void ahci_block_test_run(void) {
         fail("PRDT transfer bound");
     }
     serial_write_string("M56 PRDT transfer bound: PASS\n");
-
-    if (block_device_write(device, 0ULL, 1U, read_buffer) !=
-        BLOCK_DEVICE_RESULT_READ_ONLY) {
-        fail("read-only write rejection");
-    }
-    serial_write_string("M56 write rejection: PASS\n");
 
     if (!ahci_block_get_stats(&stats) ||
         (stats.reads_completed != 4ULL) ||

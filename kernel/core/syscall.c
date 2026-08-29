@@ -401,7 +401,11 @@ static uint64_t syscall_system_info(uint64_t user_info) {
 #elif (BORING_TEST_MODE == 15) || defined(BORING_M36_DESKTOP_ACCEPTANCE)
     if (!syscall_copy_literal(info.root_fs, sizeof(info.root_fs), "BoringFS") ||
         !syscall_copy_literal(info.root_device, sizeof(info.root_device),
+#if defined(BORING_M57_AHCI_ROOT)
+                              "ahci-sata0")) {
+#else
                               "virtio-blk")) {
+#endif
         return syscall_error(BORING_SYSCALL_EIO);
     }
 #endif
