@@ -31,6 +31,7 @@ run_qemu() {
 }
 
 run_qemu "$LOG1"
+grep -Fq 'M57 AHCI write LBA/PRDT/null bounds: PASS' "$LOG1"
 grep -Fq 'M57 AHCI WRITE DMA completion: PASS' "$LOG1"
 grep -Fq 'M57 AHCI FLUSH CACHE completion: PASS' "$LOG1"
 grep -Fq 'M57 AHCI immediate readback: PASS' "$LOG1"

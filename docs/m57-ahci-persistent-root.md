@@ -19,6 +19,14 @@ Required runtime proof:
 - a real existing-userland file mutation, host-side BoringFS validation and exact reboot persistence
 - intact neighboring data and complete session/resource drain
 
+The acceptance image is booted twice without regeneration. The first USB-only
+desktop session creates `/persist` and writes `survived\n` through the existing
+shell, VFS, BoringFS, M21 block-device and AHCI layers. With QEMU stopped, the
+host validates the whole image and exact file bytes. The second session reads
+the file before any write, validates those bytes from the rendered terminal,
+then performs an identical rewrite only to exercise the closeout write/flush
+accounting; the final whole-image hash must remain identical.
+
 ## Strict non-goals
 
 M57 does not add MBR/GPT, partitions, NCQ, hotplug, port multipliers, ATAPI, RAID, asynchronous or interrupt-driven AHCI redesign, NVMe, networking, audio, SMP, physical-hardware success claims or M58 work.

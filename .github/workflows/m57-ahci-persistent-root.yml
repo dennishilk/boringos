@@ -12,7 +12,7 @@ permissions:
 jobs:
   ahci-persistence:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Install focused QEMU dependencies
@@ -37,3 +37,5 @@ jobs:
           ASAN_OPTIONS=detect_leaks=0 ./build/ahci-block-host-test-sanitized
       - name: Real q35 WRITE DMA flush and reboot persistence
         run: ./tests/m57-ahci-persistence-qemu.sh
+      - name: AHCI-root USB-only desktop mutation and reboot
+        run: ./tests/m57-ahci-persistent-root-qemu.py

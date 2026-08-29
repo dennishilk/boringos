@@ -57,6 +57,15 @@ void ahci_persistence_test_run(void) {
         (M57_TEST_LBA + M57_TEST_BLOCKS > device->block_count)) {
         fail("writable M21 geometry");
     }
+    if ((block_device_write(device, device->block_count - 1ULL, 2U,
+                            buffer) != BLOCK_DEVICE_RESULT_OUT_OF_RANGE) ||
+        (block_device_write(device, 64ULL, 9U,
+                            buffer) != BLOCK_DEVICE_RESULT_IO_ERROR) ||
+        (block_device_write(device, 64ULL, 1U,
+                            NULL) != BLOCK_DEVICE_RESULT_INVALID_ARGUMENT)) {
+        fail("write bounds rejection");
+    }
+    serial_write_string("M57 AHCI write LBA/PRDT/null bounds: PASS\n");
     if (block_device_read(device, M57_TEST_LBA, M57_TEST_BLOCKS,
                           buffer) != BLOCK_DEVICE_RESULT_OK) {
         fail("pre-write read");
