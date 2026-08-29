@@ -129,10 +129,9 @@ def run_session(name, root_image, expect_existing):
             witness(marker, before + 1)
 
     def command(value):
-        prior = frames()[-1]["frame"]
         type_text(value)
         key("ret")
-        return latest(1, after=prior)
+        return frames()[-1]
 
     def cat_persist():
         source_count = text().count("boring-spawn: VFS executable source /bin/cat")
@@ -145,7 +144,7 @@ def run_session(name, root_image, expect_existing):
                 r"boring-spawn: parent pid \d+ child pid (\d+) task \d+ foreground",
                 current)) > child_count else None), "new persisted cat child")
         witness(f"boring-spawn: child pid {child} exited status 0")
-        return latest(1, after=command_frame["frame"])
+        return command_frame
 
     def capture_persisted(frame):
         geometry = re.search(r"boring-framebuffer: (\d+)x(\d+)x(?:24|32)", text())
@@ -177,7 +176,7 @@ def run_session(name, root_image, expect_existing):
             except ValueError:
                 if time.monotonic() >= deadline:
                     raise
-                frame = latest(1, after=frame["frame"])
+                time.sleep(0.1)
 
     try:
         witness("m57-desktop: writable BoringFS root mounted through AHCI sata0")
