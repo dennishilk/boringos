@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   closeout:
-    if: github.event.head_commit.message == 'M58: stage runtime-neutral closeout helper'
+    if: ${{ github.event.head_commit.message == 'M58: stage runtime-neutral closeout helper v2' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out exact feature branch
