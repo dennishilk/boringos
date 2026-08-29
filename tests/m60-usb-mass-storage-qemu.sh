@@ -44,7 +44,7 @@ sha256sum "$BEFORE" | tee "$OUT/sha256-before.txt"
     -cdrom build/boringos.iso -boot d \
     -display none -serial "file:$LOG" -monitor none \
     -no-reboot -no-shutdown \
-    -device qemu-xhci,id=xhci \
+    -device qemu-xhci,id=xhci,p3=0 \
     -device usb-kbd,bus=xhci.0,port=1 \
     -device usb-tablet,bus=xhci.0,port=2 \
     -drive "file=$IMAGE,if=none,format=raw,id=m60usb,cache=writeback" \
