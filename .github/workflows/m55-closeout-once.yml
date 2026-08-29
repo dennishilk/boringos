@@ -61,34 +61,10 @@ jobs:
               sed -i 's/0\.0\.55-dev/0.0.56-dev/g' "$path"
             fi
           done
-
           sed -i 's/Development is complete through \*\*Milestone 54\*\*\./Development is complete through **Milestone 55**./' README.md
           sed -i 's/Die Entwicklung ist bis einschließlich \*\*Milestone 54\*\* abgeschlossen\./Die Entwicklung ist bis einschließlich **Milestone 55** abgeschlossen./' README.de.md
-
-          cat >> docs/m55-ahci-sata-foundation.md <<'EOF'
-
-## Semantic Freeze and closeout
-
-Runtime Semantic Freeze: `9769aaa2acb44163749fc90ffb905038f891a427`, tree `c7d42d3e294ad577f33b7e3f79af4a4da361f587`. All 20 PR workflows on that exact runtime head were terminal SUCCESS before closeout, including focused M55 run `33247857135` and complete boot run `33247857153`.
-
-The focused q35 run discovered the controller through the existing M44 PCI inventory at dynamic BDF `00:1f.2` (observed QEMU device `8086:2922`, evidence only), used real ABAR `0x00000000FEBD5000`, captured CAP `0xC0141F05`, CAP2 `0x00000000`, VS `0x00010000`, GHC `0x80000000`, PI `0x0000003F`, and found a real ATA SATA device on dynamically inspected port 0 with PxSSTS `0x00000113`, PxSIG `0x00000101`, DET=3 and IPM=1. M55 performed no sector read or write.
-
-Active version after runtime-neutral closeout: **BoringKernel 0.0.56-dev**. No M56 implementation is included.
-EOF
-
-          cat >> docs/roadmap.md <<'EOF'
-
-
-## Milestone 55: bounded AHCI / SATA controller foundation — COMPLETE, Semantic Frozen
-
-M55 adds the bounded hardware-controller foundation for one segment-zero PCI SATA AHCI controller beneath the existing M21 generic block-device architecture. It reuses M44 PCI inventory and the existing cache-disabled MMIO mapper, performs timeout-bounded ownership/controller handling, and inspects only CAP.NP/PI/BoringOS-bounded ports. It does not implement sector I/O.
-
-Semantic Freeze: `9769aaa2acb44163749fc90ffb905038f891a427`, tree `c7d42d3e294ad577f33b7e3f79af4a4da361f587`. Focused real-QEMU acceptance run `33247857135` on q35 discovered AHCI BDF `00:1f.2`, real ABAR `0xFEBD5000`, CAP `0xC0141F05`, VS `0x00010000`, PI `0x0000003F`, and a present ATA SATA device on dynamically inspected port 0 from PxSSTS/PxSIG. All 20 PR workflows on the frozen runtime head were terminal SUCCESS, including complete boot run `33247857153`.
-
-Active version after runtime-neutral closeout: **BoringKernel 0.0.56-dev**. No M56 implementation is included.
-See [m55-ahci-sata-foundation.md](m55-ahci-sata-foundation.md).
-EOF
-
+          printf '%s\n' '' '## Semantic Freeze and closeout' '' 'Runtime Semantic Freeze: `9769aaa2acb44163749fc90ffb905038f891a427`, tree `c7d42d3e294ad577f33b7e3f79af4a4da361f587`. All 20 PR workflows on that exact runtime head were terminal SUCCESS before closeout, including focused M55 run `33247857135` and complete boot run `33247857153`.' '' 'The focused q35 run discovered the controller through the existing M44 PCI inventory at dynamic BDF `00:1f.2` (observed QEMU device `8086:2922`, evidence only), used real ABAR `0x00000000FEBD5000`, captured CAP `0xC0141F05`, CAP2 `0x00000000`, VS `0x00010000`, GHC `0x80000000`, PI `0x0000003F`, and found a real ATA SATA device on dynamically inspected port 0 with PxSSTS `0x00000113`, PxSIG `0x00000101`, DET=3 and IPM=1. M55 performed no sector read or write.' '' 'Active version after runtime-neutral closeout: **BoringKernel 0.0.56-dev**. No M56 implementation is included.' >> docs/m55-ahci-sata-foundation.md
+          printf '%s\n' '' '' '## Milestone 55: bounded AHCI / SATA controller foundation — COMPLETE, Semantic Frozen' '' 'M55 adds the bounded hardware-controller foundation for one segment-zero PCI SATA AHCI controller beneath the existing M21 generic block-device architecture. It reuses M44 PCI inventory and the existing cache-disabled MMIO mapper, performs timeout-bounded ownership/controller handling, and inspects only CAP.NP/PI/BoringOS-bounded ports. It does not implement sector I/O.' '' 'Semantic Freeze: `9769aaa2acb44163749fc90ffb905038f891a427`, tree `c7d42d3e294ad577f33b7e3f79af4a4da361f587`. Focused real-QEMU acceptance run `33247857135` on q35 discovered AHCI BDF `00:1f.2`, real ABAR `0xFEBD5000`, CAP `0xC0141F05`, VS `0x00010000`, PI `0x0000003F`, and a present ATA SATA device on dynamically inspected port 0 from PxSSTS/PxSIG. All 20 PR workflows on the frozen runtime head were terminal SUCCESS, including complete boot run `33247857153`.' '' 'Active version after runtime-neutral closeout: **BoringKernel 0.0.56-dev**. No M56 implementation is included.' 'See [m55-ahci-sata-foundation.md](m55-ahci-sata-foundation.md).' >> docs/roadmap.md
           git diff --check
           test "$(git grep -l '0.0.55-dev' -- README.de.md README.md docs/roadmap.md kernel/core/boringfs_ro_test.c kernel/core/entry.c kernel/core/syscall.c tests || true | wc -l)" -eq 0
           git config user.name 'github-actions[bot]'
