@@ -151,10 +151,6 @@ void x86_64_pause(void) {
     __asm__ volatile ("pause");
 }
 
-void x86_64_memory_barrier(void) {
-    __asm__ volatile ("mfence" : : : "memory");
-}
-
 void x86_64_enable_and_halt(void) {
     __asm__ volatile ("sti; hlt" : : : "memory");
 }
