@@ -27,3 +27,5 @@ Runtime Semantic Freeze: `8063bea362f5191a23f3a6f6465d7ec55ad3e084`, tree `50031
 The focused real-QEMU witness used `q35,i8042=off`, `qemu-xhci`, `usb-kbd` and `usb-tablet`. It completed 10 real USB HID transfers, decoded 10 reports, produced exactly seven events in the existing canonical input queue, dropped zero events and finished with no modifiers held. The exact witnessed queue ordering was Left Super down, A down, tablet movement 2345 x 3456, left button down, A up, left button up and Left Super up.
 
 Active version after runtime-neutral closeout: **BoringKernel 0.0.54-dev**. No M54 implementation is included and no full PS/2-free desktop claim is made by M53.
+
+Runtime-neutral closeout publication commit: `20357a6783541cd1b34d6dbfe2bb7a3cce645050`, tree `21656ae2b3df2d2151ded20e93d4170b8c775810`. This publication changes only established version/status/documentation witnesses; the Runtime Semantic Freeze remains `8063bea362f5191a23f3a6f6465d7ec55ad3e084`.
