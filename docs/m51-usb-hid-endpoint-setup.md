@@ -65,3 +65,7 @@ Exact-head SUCCESS before freeze documentation:
 - complete Boot #572 / 33230074383
 
 After this Semantic Freeze no M51 runtime semantics may change. The remaining M51 lifecycle is restricted to documentation and the established active-version witnesses advancing `BoringKernel 0.0.51-dev` to `BoringKernel 0.0.52-dev`. No M52 implementation is included.
+
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.52-dev**.
+No M52 implementation is included.
