@@ -1,0 +1,21 @@
+name: M59 Cthulhu physical smoke readiness
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  physical-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install focused QEMU dependencies
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 xorriso
+      - name: q35 physical-smoke equivalent at normal RAM and 32 GiB
+        run: sh tests/m59-physical-smoke-qemu.sh
