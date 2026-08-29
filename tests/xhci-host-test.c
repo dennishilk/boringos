@@ -451,6 +451,158 @@ static void descriptor_validation_test(void) {
           "wrong configuration descriptor type");
 }
 
+static void m51_configuration_test(void) {
+    uint8_t configuration[37] = {
+        9U, 2U, 37U, 0U, 1U, 1U, 0U, 0x80U, 50U,
+        9U, 4U, 0U, 0U, 1U, 3U, 1U, 1U, 0U,
+        9U, 0x21U, 0x11U, 0x01U, 0U, 1U, 0x22U, 63U, 0U,
+        3U, 0x30U, 0xaaU,
+        7U, 5U, 0x81U, 3U, 8U, 0U, 10U
+    };
+    struct xhci_hid_configuration parsed = {0};
+    struct xhci_hid_configuration good;
+    struct xhci_control_td td;
+    struct xhci_control_td td_before;
+    struct xhci_trb event;
+    struct xhci_trb command;
+    uint8_t context[2304];
+    uint64_t rings[XHCI_MAX_HID_ENDPOINTS] = {0x50000ULL, 0ULL, 0ULL, 0ULL};
+    uint8_t value = 0U;
+    size_t index;
+
+    check(xhci_parse_hid_configuration(configuration, sizeof(configuration),
+                                       3U, &parsed), "M51 HID descriptor walk");
+    check((parsed.configuration_value == 1U) && (parsed.endpoint_count == 1U) &&
+          (parsed.endpoints[0].interface_number == 0U) &&
+          (parsed.endpoints[0].protocol == 1U) &&
+          (parsed.endpoints[0].endpoint_address == 0x81U) &&
+          (parsed.endpoints[0].endpoint_id == 3U) &&
+          (parsed.endpoints[0].max_packet == 8U) &&
+          (parsed.endpoints[0].interval == 10U) &&
+          (parsed.endpoints[0].xhci_interval == 9U),
+          "M51 dynamic HID endpoint facts");
+    good = parsed;
+    check(xhci_usb_endpoint_id(0x81U, &value) && value == 3U &&
+          xhci_usb_endpoint_id(0x02U, &value) && value == 4U &&
+          !xhci_usb_endpoint_id(0x80U, &value) &&
+          !xhci_usb_endpoint_id(0x91U, &value),
+          "M51 USB endpoint to xHCI DCI mapping");
+
+    configuration[30] = 0U;
+    check(!xhci_parse_hid_configuration(configuration, sizeof(configuration), 3U, &parsed) &&
+          memcmp(&parsed, &good, sizeof(parsed)) == 0,
+          "M51 zero-length descriptor leaves state");
+    configuration[30] = 8U;
+    check(!xhci_parse_hid_configuration(configuration, sizeof(configuration), 3U, &parsed) &&
+          memcmp(&parsed, &good, sizeof(parsed)) == 0,
+          "M51 descriptor overrun leaves state");
+    configuration[30] = 3U;
+    configuration[32] = 0x01U;
+    check(!xhci_parse_hid_configuration(configuration, sizeof(configuration), 3U, &parsed),
+          "M51 HID OUT endpoint rejected");
+    configuration[32] = 0x81U;
+    configuration[33] = 2U;
+    check(!xhci_parse_hid_configuration(configuration, sizeof(configuration), 3U, &parsed),
+          "M51 non-interrupt endpoint rejected");
+    configuration[33] = 3U;
+    configuration[34] = 0U;
+    configuration[35] = 0U;
+    check(!xhci_parse_hid_configuration(configuration, sizeof(configuration), 3U, &parsed),
+          "M51 zero max packet rejected");
+    configuration[34] = 8U;
+    configuration[36] = 17U;
+    check(!xhci_parse_hid_configuration(configuration, sizeof(configuration), 3U, &parsed),
+          "M51 invalid HS interval rejected");
+    configuration[36] = 10U;
+    check(!xhci_parse_hid_configuration(configuration, 36U, 3U, &parsed),
+          "M51 truncated configuration rejected");
+    check(!xhci_parse_hid_configuration(configuration, sizeof(configuration), 4U, &parsed),
+          "M51 unsupported SuperSpeed companion path rejected");
+    {
+        uint8_t duplicate[44];
+        memcpy(duplicate, configuration, sizeof(configuration));
+        duplicate[2] = 44U;
+        duplicate[3] = 0U;
+        duplicate[13] = 2U;
+        memcpy(&duplicate[37], &configuration[30], 7U);
+        check(!xhci_parse_hid_configuration(duplicate, sizeof(duplicate), 3U, &parsed),
+              "M51 duplicate endpoint rejected");
+    }
+
+    check(xhci_build_set_configuration_control_td(&td, 0x20000ULL, 7U, true, 5U),
+          "M51 SET_CONFIGURATION TD");
+    check((td.setup.parameter == 0x0000000000050900ULL) &&
+          (((td.setup.control >> 10U) & 0x3fU) == XHCI_TRB_TYPE_SETUP_STAGE) &&
+          (((td.setup.control >> 16U) & 3U) == 0U) &&
+          (td.data_physical == 0ULL) &&
+          (((td.status.control >> 10U) & 0x3fU) == XHCI_TRB_TYPE_STATUS_STAGE) &&
+          ((td.status.control & (1U << 16U)) != 0U) &&
+          ((td.status.control & (1U << 5U)) != 0U) &&
+          (td.next_producer_index == 9U) && td.next_producer_cycle,
+          "M51 no-data setup/status semantics");
+    check(xhci_build_set_configuration_control_td(
+              &td, 0x20000ULL, XHCI_EP0_RING_USABLE - 2U, true, 1U) &&
+          (td.next_producer_index == 0U) && !td.next_producer_cycle,
+          "M51 no-data Link TRB cycle wrap");
+    td_before = td;
+    check(!xhci_build_set_configuration_control_td(
+              &td, 0x20000ULL, XHCI_EP0_RING_USABLE - 1U, true, 1U) &&
+          memcmp(&td, &td_before, sizeof(td)) == 0,
+          "M51 no-data ring overflow rejected");
+
+    event.parameter = 0x20010ULL;
+    event.status = (uint32_t)XHCI_COMPLETION_SUCCESS << 24U;
+    event.control = ((uint32_t)XHCI_TRB_TYPE_TRANSFER_EVENT << 10U) |
+                    (1U << 16U) | (7U << 24U) | 1U;
+    check(xhci_validate_no_data_control_event(&event, 0x20000ULL, 7U, 0x20010ULL),
+          "M51 no-data completion validation");
+    event.control = ((uint32_t)XHCI_TRB_TYPE_TRANSFER_EVENT << 10U) |
+                    (3U << 16U) | (7U << 24U) | 1U;
+    check(!xhci_validate_no_data_control_event(&event, 0x20000ULL, 7U, 0x20010ULL),
+          "M51 wrong endpoint completion rejected");
+
+    for (index = 0U; index < sizeof(context); ++index) { context[index] = 0xa5U; }
+    check(xhci_build_configure_hid_context(context, sizeof(context), false,
+              32U, 7U, 8U, 5U, 3U, &good, rings),
+          "M51 32-byte Configure Endpoint input context");
+    check(get32(context, 4U) == ((1U << 0U) | (1U << 3U)), "M51 add-context flags");
+    check(get32(context, 32U) == ((3U << 20U) | (3U << 27U)),
+          "M51 slot Context Entries");
+    check(get32(context, 36U) == (5U << 16U), "M51 slot root port retained");
+    check(get32(context, 128U) == (9U << 16U) &&
+          get32(context, 132U) == ((3U << 1U) | (7U << 3U) | (8U << 16U)) &&
+          get32(context, 136U) == 0x50001U &&
+          get32(context, 144U) == (8U | (8U << 16U)),
+          "M51 Interrupt-IN endpoint context fields");
+    check(context[159] == 0U && context[160] == 0xa5U, "M51 32-byte context canary");
+
+    for (index = 0U; index < sizeof(context); ++index) { context[index] = 0x5aU; }
+    check(xhci_build_configure_hid_context(context, sizeof(context), true,
+              32U, 7U, 8U, 5U, 3U, &good, rings),
+          "M51 64-byte Configure Endpoint input context");
+    check(get32(context, 256U) == (9U << 16U) &&
+          get32(context, 260U) == ((3U << 1U) | (7U << 3U) | (8U << 16U)) &&
+          context[319] == 0U && context[320] == 0x5aU,
+          "M51 64-byte context offsets and canary");
+    rings[0] = 0x50001ULL;
+    check(!xhci_build_configure_hid_context(context, sizeof(context), false,
+              32U, 7U, 8U, 5U, 3U, &good, rings),
+          "M51 transfer-ring alignment rejected");
+    rings[0] = 0x50000ULL;
+
+    check(xhci_build_configure_endpoint_command(&command, 0x60000ULL, 32U, 7U) &&
+          (command.parameter == 0x60000ULL) &&
+          (((command.control >> 10U) & 0x3fU) == XHCI_TRB_TYPE_CONFIGURE_ENDPOINT) &&
+          ((command.control >> 24U) == 7U),
+          "M51 Configure Endpoint command construction");
+    event.parameter = 0x70000ULL;
+    event.status = (uint32_t)XHCI_COMPLETION_SUCCESS << 24U;
+    event.control = ((uint32_t)XHCI_TRB_TYPE_COMMAND_COMPLETION_EVENT << 10U) |
+                    (7U << 24U) | 1U;
+    check(xhci_validate_command_completion(&event, 0x70000ULL, 32U, &value) && value == 7U,
+          "M51 Configure Endpoint command completion");
+}
+
 int main(void) {
     capabilities_test();
     keyboard_test();
@@ -461,6 +613,7 @@ int main(void) {
     evaluate_context_test();
     packet_size_test();
     descriptor_validation_test();
+    m51_configuration_test();
     if (failures != 0U) { return 1; }
     puts("xhci-host-test: PASS");
     return 0;

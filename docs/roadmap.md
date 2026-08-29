@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.51-dev
+BoringKernel 0.0.52-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1557,3 +1557,13 @@ The focused real-QEMU gate consumed eight real Transfer Events and 138 descripto
 
 Active version after runtime-neutral closeout: **BoringKernel 0.0.51-dev**. No M51 work is included.
 See [m50-xhci-descriptor-discovery.md](m50-xhci-descriptor-discovery.md).
+
+
+## Milestone 51: bounded USB device configuration and HID endpoint setup — COMPLETE, Semantic Frozen
+
+M51 takes M50 descriptors_ready direct xHCI root-port devices through real standard SET_CONFIGURATION and real Configure Endpoint for descriptor-derived HID Interrupt-IN endpoints. Endpoint address/DCI, maximum packet size, polling interval and configuration value come from validated descriptor data; PMM-owned rings and 32/64-byte xHCI contexts remain bounded. No HID report transfers, input-queue delivery, hubs, storage or M52 work are included.
+
+Semantic Freeze: `67bf133ecd8c849bd7e3e3b4793b1efcafbf7700`, tree `6413aab58139db5c35739e68510a39b71634db50`. Real acceptance proved two dynamically discovered devices, two SET_CONFIGURATION completions, two Configure Endpoint completions and ten real Transfer Events. Observed ports/slots/endpoints/intervals are evidence only. Full inherited M37–M51 plus Boot #572 were SUCCESS before freeze.
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.52-dev**. No M52 implementation is included.
+See [m51-usb-hid-endpoint-setup.md](m51-usb-hid-endpoint-setup.md).
