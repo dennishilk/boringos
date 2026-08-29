@@ -78,3 +78,19 @@ bool usb_hid_mouse_decode(const uint8_t *report, size_t length,
     decoded->wheel = (length == 4U) ? (int8_t)report[3] : 0;
     return true;
 }
+
+bool usb_hid_absolute_tablet_decode(
+    const uint8_t *report, size_t length,
+    struct usb_hid_absolute_tablet_report *decoded) {
+    if ((report == NULL) || (decoded == NULL) ||
+        (length != USB_HID_ABSOLUTE_TABLET_REPORT_SIZE)) {
+        return false;
+    }
+    decoded->buttons = (uint8_t)(report[0] & 0x1fU);
+    decoded->x = (uint16_t)((uint16_t)report[1] |
+                            ((uint16_t)report[2] << 8U));
+    decoded->y = (uint16_t)((uint16_t)report[3] |
+                            ((uint16_t)report[4] << 8U));
+    decoded->wheel = (int8_t)report[5];
+    return true;
+}
