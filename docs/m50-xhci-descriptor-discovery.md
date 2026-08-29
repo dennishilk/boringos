@@ -96,3 +96,7 @@ After this Semantic Freeze no M50 runtime semantics may change. The separate
 runtime-neutral closeout is limited to this documentation, the roadmap and the
 established active version witnesses, advancing `BoringKernel 0.0.50-dev` to
 `BoringKernel 0.0.51-dev`. No M51 implementation is included.
+
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.51-dev**.
+No M51 work is included.

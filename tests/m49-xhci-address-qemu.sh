@@ -21,7 +21,7 @@ test "$(grep -Fc 'M49 addressed device port=' "$LOG")" -eq 2 || {
     exit 1
 }
 for marker in \
-    'BoringKernel 0.0.50-dev' \
+    'BoringKernel 0.0.51-dev' \
     'M49 real Enable Slot completions: 2' \
     'M49 real Address Device completions: 2' \
     'M49 command completions consumed: 4' \
