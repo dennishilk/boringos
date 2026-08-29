@@ -9,10 +9,16 @@
 #include <boring/ipc.h>
 #include <boring/process.h>
 #include <boring/ring3_memory.h>
+#if defined(BORING_M54_USB_ONLY_DESKTOP)
+#include <boring/serial.h>
+#endif
 #include <boring/syscall.h>
 #include <boring/syscall_abi.h>
 #include <boring/task.h>
 #include <boring/vmm.h>
+#if defined(BORING_M54_USB_ONLY_DESKTOP)
+#include <boring/xhci.h>
+#endif
 
 /* No consumption, allocation or authority transfer occurs during a wait. */
 static bool user_copy(uintptr_t address, void *buffer, size_t size, bool out) {
@@ -114,6 +120,15 @@ static long poll_watches(struct process *process,
     return ready;
 }
 
+#if defined(BORING_M54_USB_ONLY_DESKTOP)
+static bool m54_is_input_owner(const struct process *process) {
+    struct boring_input_stats input;
+    return (process != NULL) && boring_input_get_stats(&input) &&
+           input.initialized && input.owned &&
+           (input.owner_pid == process->pid);
+}
+#endif
+
 static bool arm_fd_watches(struct process *process,
                            const struct boring_event_watch *watches,
                            size_t count) {
@@ -180,6 +195,56 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
         if ((result != 0L) || (frame->rdx == BORING_EVENT_QUERY)) {
             break;
         }
+#if defined(BORING_M54_USB_ONLY_DESKTOP)
+        if (m54_is_input_owner(process)) {
+            struct xhci_state usb_state = {0};
+            x86_64_interrupts_enable();
+            const bool serviced = xhci_service_hid_reports(&usb_state);
+            static bool m54_initial_service_witness = false;
+            if (!m54_initial_service_witness) {
+                const struct xhci_state *active = xhci_get_state();
+                uint64_t submitted = 0ULL;
+                uint64_t outstanding = 0ULL;
+                uint8_t device_index;
+                if (active != NULL) {
+                    for (device_index = 0U; device_index < active->addressed_count;
+                         ++device_index) {
+                        const struct xhci_addressed_device *device =
+                            &active->addressed[device_index];
+                        uint8_t endpoint_index;
+                        for (endpoint_index = 0U;
+                             endpoint_index < device->hid_configuration.endpoint_count;
+                             ++endpoint_index) {
+                            submitted += device->hid_runtime[endpoint_index].submitted_transfers;
+                            if (device->hid_runtime[endpoint_index].transfer_outstanding) {
+                                ++outstanding;
+                            }
+                        }
+                    }
+                }
+                serial_write_string("m54-desktop: HID service submitted/outstanding=");
+                serial_write_u64(submitted);
+                serial_write_string("/");
+                serial_write_u64(outstanding);
+                serial_write_string("\n");
+                m54_initial_service_witness = true;
+            }
+            if (serviced) {
+                serial_write_string("m54-desktop: real xHCI HID completion serviced\n");
+            }
+            task_yield();
+            if (!serviced) {
+                /*
+                 * The controller/device model needs host time between bounded
+                 * observations. Sleep only until the already-established PIT
+                 * interrupt, then retry on the next cooperative pass.
+                 */
+                x86_64_enable_and_halt();
+                x86_64_interrupts_disable();
+            }
+            continue;
+        }
+#endif
         if (!arm_fd_watches(process, watches, count)) {
             result = -(long)BORING_SYSCALL_EINVAL;
             break;

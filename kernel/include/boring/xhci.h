@@ -258,6 +258,7 @@ bool xhci_address_connected(struct xhci_state *state);
 bool xhci_discover_descriptors(struct xhci_state *state);
 bool xhci_configure_hid_devices(struct xhci_state *state);
 bool xhci_poll_hid_reports(struct xhci_state *state, uint32_t completion_goal);
+bool xhci_service_hid_reports(struct xhci_state *state);
 const struct xhci_state *xhci_get_state(void);
 
 _Static_assert(sizeof(struct xhci_trb) == XHCI_TRB_SIZE,

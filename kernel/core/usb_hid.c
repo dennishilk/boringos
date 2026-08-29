@@ -596,7 +596,10 @@ static bool m52_complete_event(struct xhci_state *active,
     return false;
 }
 
-bool xhci_poll_hid_reports(struct xhci_state *state, uint32_t completion_goal) {
+static bool m52_poll_hid_reports_limit(struct xhci_state *state,
+                                        uint32_t completion_goal,
+                                        uint32_t wait_limit,
+                                        bool rearm_after_completion) {
     const struct xhci_state *published;
     struct xhci_state *active;
     volatile void *mapping = NULL;
@@ -610,7 +613,9 @@ bool xhci_poll_hid_reports(struct xhci_state *state, uint32_t completion_goal) {
     uint32_t attempt;
     uint8_t device_index;
     bool success = false;
-    if ((state == NULL) || (completion_goal == 0U)) { return false; }
+    if ((state == NULL) || (completion_goal == 0U) || (wait_limit == 0U)) {
+        return false;
+    }
     published = xhci_get_state();
     if ((published == NULL) || !published->controller_running ||
         (published->addressed_count == 0U) ||
@@ -646,7 +651,7 @@ bool xhci_poll_hid_reports(struct xhci_state *state, uint32_t completion_goal) {
     event_index = (uint16_t)(consumed % XHCI_EVENT_RING_TRBS);
     event_cycle = (((consumed / XHCI_EVENT_RING_TRBS) & 1ULL) == 0ULL);
     for (attempt = 0U;
-         (attempt < M52_EVENT_WAIT_LIMIT) && (completed < completion_goal);
+         (attempt < wait_limit) && (completed < completion_goal);
          ++attempt) {
         struct xhci_trb event;
         uint32_t control = event_ring[event_index].control;
@@ -679,7 +684,7 @@ bool xhci_poll_hid_reports(struct xhci_state *state, uint32_t completion_goal) {
             !m52_complete_event(active, &event, &completed)) {
             goto out;
         }
-        if (completed < completion_goal) {
+        if ((completed < completion_goal) || rearm_after_completion) {
             for (device_index = 0U; device_index < active->addressed_count;
                  ++device_index) {
                 struct xhci_addressed_device *device =
@@ -703,6 +708,18 @@ out:
         (void)vmm_unmap_mmio_region(mapping, M52_MMIO_WINDOW_SIZE);
     }
     return success;
+}
+
+bool xhci_poll_hid_reports(struct xhci_state *state, uint32_t completion_goal) {
+    return m52_poll_hid_reports_limit(state, completion_goal,
+                                      M52_EVENT_WAIT_LIMIT, false);
+}
+
+#define M54_SERVICE_EVENT_WAIT_LIMIT 4096U
+
+bool xhci_service_hid_reports(struct xhci_state *state) {
+    return m52_poll_hid_reports_limit(state, 1U,
+                                      M54_SERVICE_EVENT_WAIT_LIMIT, true);
 }
 
 #endif

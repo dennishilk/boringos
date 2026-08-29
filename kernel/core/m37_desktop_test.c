@@ -27,6 +27,10 @@
 #include <boring/vfs.h>
 #include <boring/virtio_blk.h>
 #include <boring/vmm.h>
+#if defined(BORING_M54_USB_ONLY_DESKTOP)
+#include <boring/xhci.h>
+#include <boring/timer.h>
+#endif
 
 #define M37_INIT_MODULE_PATH "/boot/user/boring-init.elf"
 #define M37_INIT_MODULE_STRING "boringos-boring-init"
@@ -128,7 +132,111 @@ static void init_entry(void *argument) {
                        descriptors.user_data_selector, 0U);
 }
 
+#if defined(BORING_M54_USB_ONLY_DESKTOP)
+static bool m54_hid_protocols_ready(const struct xhci_state *state) {
+    bool keyboard = false;
+    bool pointer = false;
+    uint8_t device_index;
+
+    if ((state == NULL) || !state->controller_running ||
+        (state->addressed_count == 0U)) {
+        return false;
+    }
+    for (device_index = 0U; device_index < state->addressed_count;
+         ++device_index) {
+        const struct xhci_addressed_device *device = &state->addressed[device_index];
+        uint8_t endpoint_index;
+        if (!device->device_configured || !device->hid_endpoint_ready) {
+            continue;
+        }
+        for (endpoint_index = 0U;
+             endpoint_index < device->hid_configuration.endpoint_count;
+             ++endpoint_index) {
+            const uint8_t protocol =
+                device->hid_configuration.endpoints[endpoint_index].protocol;
+            if (protocol == 1U) {
+                keyboard = true;
+            } else if ((protocol == 0U) || (protocol == 2U)) {
+                pointer = true;
+            }
+        }
+    }
+    return keyboard && pointer;
+}
+
+static bool m54_usb_runtime_evidence(void) {
+    const struct xhci_state *state = xhci_get_state();
+    uint64_t completions = 0ULL;
+    uint64_t decoded = 0ULL;
+    uint64_t key_presses = 0ULL;
+    uint64_t key_releases = 0ULL;
+    uint64_t pointer_reports = 0ULL;
+    bool keyboard = false;
+    bool pointer = false;
+    bool pointer_buttons_released = true;
+    uint8_t device_index;
+
+    if (!m54_hid_protocols_ready(state)) {
+        return false;
+    }
+    for (device_index = 0U; device_index < state->addressed_count;
+         ++device_index) {
+        const struct xhci_addressed_device *device = &state->addressed[device_index];
+        uint8_t endpoint_index;
+        for (endpoint_index = 0U;
+             endpoint_index < device->hid_configuration.endpoint_count;
+             ++endpoint_index) {
+            const struct xhci_hid_endpoint_runtime *runtime =
+                &device->hid_runtime[endpoint_index];
+            const uint8_t protocol =
+                device->hid_configuration.endpoints[endpoint_index].protocol;
+            completions += runtime->completed_transfers;
+            decoded += runtime->decoded_reports;
+            if (protocol == 1U) {
+                keyboard = true;
+                key_presses += runtime->key_presses;
+                key_releases += runtime->key_releases;
+            } else if ((protocol == 0U) || (protocol == 2U)) {
+                pointer = true;
+                pointer_reports += runtime->pointer_reports;
+                if (runtime->last_pointer_buttons != 0U) {
+                    pointer_buttons_released = false;
+                }
+            }
+        }
+    }
+    serial_write_string(
+        "m54-desktop: USB HID completions/decoded/key-down/key-up/pointer=");
+    serial_write_u64(completions);
+    serial_write_string("/"); serial_write_u64(decoded);
+    serial_write_string("/"); serial_write_u64(key_presses);
+    serial_write_string("/"); serial_write_u64(key_releases);
+    serial_write_string("/"); serial_write_u64(pointer_reports);
+    serial_write_string("\n");
+    return keyboard && pointer && pointer_buttons_released &&
+           (completions == decoded) && (decoded >= 8ULL) &&
+           (key_presses != 0ULL) && (key_releases != 0ULL) &&
+           (pointer_reports >= 4ULL);
+}
+#endif
+
 static bool input_hardware_init(void) {
+#if defined(BORING_M54_USB_ONLY_DESKTOP)
+    struct xhci_state state = {0};
+
+    x86_64_interrupts_disable();
+    if (!boring_input_init() || !irq_init() || !timer_init(100U) ||
+        !xhci_init(&state) ||
+        !xhci_address_connected(&state) ||
+        !xhci_discover_descriptors(&state) ||
+        !xhci_configure_hid_devices(&state) ||
+        !m54_hid_protocols_ready(&state)) {
+        return false;
+    }
+    serial_write_string(
+        "m54-desktop: q35 i8042-free xHCI USB keyboard/tablet path online\n");
+    return true;
+#else
     struct i8042_state state = {false};
 
     x86_64_interrupts_disable();
@@ -143,6 +251,7 @@ static bool input_hardware_init(void) {
     serial_write_string(
         "m37-desktop: real PS/2 keyboard and mouse path online\n");
     return true;
+#endif
 }
 
 static bool mount_root(struct vfs_path *root_out) {
@@ -283,7 +392,13 @@ void m37_desktop_test_finish_from_pid1(void) {
     const bool processes_ok = process_get_stats(&processes);
     const bool tasks_ok = task_get_stats(&tasks);
 
-    if (!active || (init_state.process == NULL) ||
+#if defined(BORING_M54_USB_ONLY_DESKTOP)
+    const bool m54_usb_ok = m54_usb_runtime_evidence();
+#else
+    const bool m54_usb_ok = true;
+#endif
+
+    if (!m54_usb_ok || !active || (init_state.process == NULL) ||
         (process_current() != init_state.process) ||
         (init_state.process->pid != 1ULL) ||
         (init_state.process->state != PROCESS_ALIVE) ||
@@ -315,6 +430,10 @@ void m37_desktop_test_finish_from_pid1(void) {
         "m37-desktop: IPC/input/framebuffer/M32/PTY desktop resources drained\n");
     serial_write_string(
         "m37-desktop: all spawned desktop tasks/processes reaped; PID 1 remains\n");
+#if defined(BORING_M54_USB_ONLY_DESKTOP)
+    serial_write_string(
+        "M54 USB-only graphical desktop acceptance passed.\n");
+#endif
     serial_write_string(
         "M37 native desktop session startup acceptance passed.\n");
     x86_64_halt_forever();
