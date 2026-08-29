@@ -265,7 +265,7 @@ static void mmio_write32(volatile uint8_t *base, uint32_t offset,
 
 static void mmio_write64(volatile uint8_t *base, uint32_t offset,
                          uint64_t value) {
-    mmio_write32(base, offset, (uint32_t)value);
+    mmio_write32(base, offset, (uint32_t)value;
     mmio_write32(base, offset + 4U, (uint32_t)(value >> 32U));
 }
 
@@ -364,7 +364,7 @@ static bool wait_control_status(struct xhci_addressed_device *device,
     uint32_t attempt;
     for (attempt = 0U; attempt < MSC_EVENT_WAIT_LIMIT; ++attempt) {
         struct xhci_trb event;
-        const uint8_t type;
+        uint8_t type;
         if (!take_event(&event)) { return false; }
         type = (uint8_t)((event.control >> MSC_TRB_TYPE_SHIFT) & MSC_TRB_TYPE_MASK);
         if (type == MSC_TRB_TYPE_PORT_STATUS_EVENT) {
