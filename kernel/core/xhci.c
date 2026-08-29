@@ -7,6 +7,13 @@
 #define XHCI_OPERATION_MIN_SIZE 0x40U
 #define XHCI_PORT_BASE 0x400U
 #define XHCI_PORT_STRIDE 0x10U
+#define XHCI_CONTEXT_32_SIZE 32U
+#define XHCI_CONTEXT_64_SIZE 64U
+#define XHCI_INPUT_CONTEXT_COUNT 3U
+#define XHCI_TRB_TYPE_SHIFT 10U
+#define XHCI_TRB_TYPE_MASK 0x3fU
+#define XHCI_EVENT_SLOT_SHIFT 24U
+#define XHCI_EVENT_COMPLETION_SHIFT 24U
 
 static uint8_t read8(const volatile uint8_t *base, uint32_t offset) {
     return base[offset];
@@ -58,5 +65,92 @@ bool xhci_parse_capabilities(const volatile void *mmio, uint32_t length,
         return false;
     }
     *capabilities = parsed;
+    return true;
+}
+
+bool xhci_ep0_max_packet(uint8_t speed, uint16_t *max_packet) {
+    uint16_t value;
+    if (max_packet == NULL) { return false; }
+    switch (speed) {
+        case 1U: value = 8U; break;   /* full speed before descriptors */
+        case 2U: value = 8U; break;   /* low speed */
+        case 3U: value = 64U; break;  /* high speed */
+        case 4U: value = 512U; break; /* SuperSpeed */
+        case 5U: value = 512U; break; /* SuperSpeedPlus */
+        default: return false;
+    }
+    *max_packet = value;
+    return true;
+}
+
+static void zero_bytes(uint8_t *bytes, uint32_t length) {
+    uint32_t index;
+    for (index = 0U; index < length; ++index) { bytes[index] = 0U; }
+}
+
+static void context_write32(uint8_t *context, uint32_t offset,
+                            uint32_t value) {
+    context[offset] = (uint8_t)value;
+    context[offset + 1U] = (uint8_t)(value >> 8U);
+    context[offset + 2U] = (uint8_t)(value >> 16U);
+    context[offset + 3U] = (uint8_t)(value >> 24U);
+}
+
+bool xhci_build_address_input_context(void *buffer, uint32_t length,
+                                      bool context_64_bytes,
+                                      uint8_t max_slots, uint8_t slot_id,
+                                      uint8_t max_ports, uint8_t root_port_id,
+                                      uint8_t speed,
+                                      uint64_t ep0_ring_physical) {
+    uint8_t *bytes = (uint8_t *)buffer;
+    const uint32_t context_size = context_64_bytes ?
+                                  XHCI_CONTEXT_64_SIZE : XHCI_CONTEXT_32_SIZE;
+    const uint32_t required = context_size * XHCI_INPUT_CONTEXT_COUNT;
+    uint16_t max_packet;
+    uint8_t *slot;
+    uint8_t *ep0;
+
+    if ((bytes == NULL) || (length < required) || (max_slots == 0U) ||
+        (slot_id == 0U) || (slot_id > max_slots) || (max_ports == 0U) ||
+        (root_port_id == 0U) || (root_port_id > max_ports) ||
+        ((ep0_ring_physical & 0x3fULL) != 0ULL) ||
+        !xhci_ep0_max_packet(speed, &max_packet)) {
+        return false;
+    }
+    zero_bytes(bytes, required);
+    context_write32(bytes, 4U, 3U); /* add Slot Context and EP0 Context */
+    slot = bytes + context_size;
+    ep0 = bytes + (context_size * 2U);
+    context_write32(slot, 0U, ((uint32_t)speed << 20U) | (1U << 27U));
+    context_write32(slot, 4U, (uint32_t)root_port_id << 16U);
+    context_write32(ep0, 4U, (3U << 1U) | (4U << 3U) |
+                                  ((uint32_t)max_packet << 16U));
+    context_write32(ep0, 8U,
+                    (uint32_t)(ep0_ring_physical | 1ULL));
+    context_write32(ep0, 12U,
+                    (uint32_t)((ep0_ring_physical | 1ULL) >> 32U));
+    context_write32(ep0, 16U, 8U);
+    return true;
+}
+
+bool xhci_validate_command_completion(const struct xhci_trb *event,
+                                      uint64_t expected_command_physical,
+                                      uint8_t max_slots,
+                                      uint8_t *slot_id) {
+    const uint8_t type = (event == NULL) ? 0U :
+        (uint8_t)((event->control >> XHCI_TRB_TYPE_SHIFT) & XHCI_TRB_TYPE_MASK);
+    const uint8_t completion = (event == NULL) ? 0U :
+        (uint8_t)(event->status >> XHCI_EVENT_COMPLETION_SHIFT);
+    const uint8_t slot = (event == NULL) ? 0U :
+        (uint8_t)(event->control >> XHCI_EVENT_SLOT_SHIFT);
+    if ((event == NULL) || (slot_id == NULL) ||
+        ((expected_command_physical & 0x0fULL) != 0ULL) ||
+        (event->parameter != expected_command_physical) ||
+        (type != XHCI_TRB_TYPE_COMMAND_COMPLETION_EVENT) ||
+        (completion != XHCI_COMPLETION_SUCCESS) ||
+        (max_slots == 0U) || (slot == 0U) || (slot > max_slots)) {
+        return false;
+    }
+    *slot_id = slot;
     return true;
 }

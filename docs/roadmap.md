@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.49-dev
+BoringKernel 0.0.50-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1508,3 +1508,39 @@ Exact-head closeout CI and guarded merge remain required.
 Active version after runtime-neutral closeout: **BoringKernel 0.0.49-dev**.
 No M49 work is included.
 See [m48-xhci-usb-hid-foundation.md](m48-xhci-usb-hid-foundation.md).
+
+
+## Milestone 49: bounded xHCI USB device addressing — COMPLETE, Semantic Frozen
+
+The real M48 xHCI transport now performs the smallest bounded BoringOS-owned
+addressing path for directly attached root-port devices. Connected ports are
+reset and enabled from real PORTSC state; Enable Slot and Address Device are
+issued on the command ring and accepted only after exact, successful Command
+Completion Events. The controller-provided slot ID selects PMM-owned input,
+device and EP0-ring structures, with validated 32-byte or 64-byte contexts,
+device speed, root port, EP0 packet bound and DCBAAP entry.
+
+At most eight direct root-port devices are retained as explicit port-to-slot
+addressed states. Hubs, descriptors, arbitrary control transfers, configured
+HID endpoints, transfer-event consumption, input delivery, storage drivers and
+physical-hardware success remain outside M49.
+
+## Semantic Freeze
+
+Implementation: `bc3c688991cd22bf7a644f8b6aca5f9f3733f410`.
+Tree: `04ac216fdf70fad01fcaf7048e2000719dab0733`.
+Exact-head SUCCESS: M49 #1 / 33225774605; M48 #6 / 33225774521;
+M47 #9 / 33225774614; M46 #13 / 33225774509;
+M45 #17 / 33225774495; M44 #22 / 33225774512;
+M43 #26 / 33225774510; M42 #30 / 33225774562;
+M41 #34 / 33225774505; M40 #37 / 33225774566;
+M39 #40 / 33225774609; M38 #51 / 33225774697;
+M37 #84 / 33225774493; complete Boot #550 / 33225774482.
+The focused real-QEMU gate consumed two Enable Slot and two Address Device
+completions for the attached `usb-kbd` and `usb-tablet`; observed ports, slots
+and speeds are evidence rather than constants. This separate closeout changes
+only documentation and active version witnesses.
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.50-dev**.
+No M50 work is included.
+See [m49-xhci-device-addressing.md](m49-xhci-device-addressing.md).

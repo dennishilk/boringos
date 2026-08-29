@@ -221,6 +221,9 @@ BOOT_LIMINE_CONF := limine-m36-desktop.conf
 else ifeq ($(TEST_MODE),m48-xhci)
 TEST_MODE_VALUE := 5
 TEST_HARNESS_C := kernel/core/xhci_test.c kernel/core/xhci_test_adapter.c
+else ifeq ($(TEST_MODE),m49-xhci-address)
+TEST_MODE_VALUE := 5
+TEST_HARNESS_C := kernel/core/xhci_address_test.c kernel/core/xhci_address_test_adapter.c
 else ifeq ($(TEST_MODE),m34-display)
 # Reuse the established special-test entry seam (value 5); the adapter below
 # routes it to the dedicated three-process display_test_run() harness.
@@ -249,7 +252,7 @@ BOOT_EXTRA3_USER_ELF := $(USER_BUILD_DIR)/wm-client-b.elf
 BOOT_EXTRA4_USER_ELF := $(USER_BUILD_DIR)/wm-client-c.elf
 BOOT_LIMINE_CONF := limine-wm.conf
 else
-$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, block, virtio-block, boringfs-ro, boringfs-rw, persistent-root, m33-ipc, m34-display, m35-wm, m35-wm-death, m36-spawn, m36-desktop, or m48-xhci)
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, block, virtio-block, boringfs-ro, boringfs-rw, persistent-root, m33-ipc, m34-display, m35-wm, m35-wm-death, m36-spawn, m36-desktop, m48-xhci, or m49-xhci-address)
 endif
 
 LIMINE_VERSION := 12.5.2

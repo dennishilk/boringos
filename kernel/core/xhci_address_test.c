@@ -1,0 +1,68 @@
+#include <stdbool.h>
+#include <stdint.h>
+
+#include <boring/cpu.h>
+#include <boring/serial.h>
+#include <boring/xhci.h>
+#include <boring/xhci_address_test.h>
+
+#define M49_EXPECTED_ATTACHED_DEVICES 2U
+
+static void fail(const char *reason) __attribute__((noreturn));
+static void fail(const char *reason) {
+    serial_write_string("M49 xHCI addressing FAILED: ");
+    serial_write_string(reason);
+    serial_write_string("\n");
+    x86_64_halt_forever();
+}
+
+void xhci_address_test_run(void) {
+    struct xhci_state state;
+    uint8_t index;
+    if (!xhci_init(&state)) { fail("controller initialization"); }
+    if (!xhci_address_connected(&state)) { fail("address connected devices"); }
+    if ((state.addressed_count != M49_EXPECTED_ATTACHED_DEVICES) ||
+        state.addressing_truncated ||
+        (state.command_completions !=
+         (uint32_t)M49_EXPECTED_ATTACHED_DEVICES * 2U)) {
+        fail("addressed count or command completions");
+    }
+    for (index = 0U; index < state.addressed_count; ++index) {
+        const struct xhci_addressed_device *device = &state.addressed[index];
+        uint8_t previous;
+        if (!device->addressed || (device->root_port_id == 0U) ||
+            (device->root_port_id > state.capabilities.max_ports) ||
+            (device->slot_id == 0U) ||
+            (device->slot_id > state.capabilities.max_slots) ||
+            (device->speed == 0U) || (device->speed > 5U) ||
+            ((state.connected_ports &
+              (1ULL << (device->root_port_id - 1U))) == 0ULL) ||
+            (device->input_context_physical == 0ULL) ||
+            (device->device_context_physical == 0ULL) ||
+            (device->ep0_ring_physical == 0ULL)) {
+            fail("bounded addressed-device state");
+        }
+        for (previous = 0U; previous < index; ++previous) {
+            if ((state.addressed[previous].slot_id == device->slot_id) ||
+                (state.addressed[previous].root_port_id ==
+                 device->root_port_id)) {
+                fail("unique port and slot mapping");
+            }
+        }
+        serial_write_string("M49 addressed device port=");
+        serial_write_u64((uint64_t)device->root_port_id);
+        serial_write_string(" slot=");
+        serial_write_u64((uint64_t)device->slot_id);
+        serial_write_string(" speed=");
+        serial_write_u64((uint64_t)device->speed);
+        serial_write_string("\n");
+    }
+    serial_write_string("M49 real Enable Slot completions: ");
+    serial_write_u64((uint64_t)state.addressed_count);
+    serial_write_string("\nM49 real Address Device completions: ");
+    serial_write_u64((uint64_t)state.addressed_count);
+    serial_write_string("\nM49 command completions consumed: ");
+    serial_write_u64((uint64_t)state.command_completions);
+    serial_write_string("\nM49 xHCI USB device addressing QEMU passed.\n");
+    x86_64_halt_forever();
+}
