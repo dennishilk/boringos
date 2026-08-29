@@ -24,7 +24,7 @@ fi
     printf 'bytes=%s\n' "$bytes"
     printf 'sha256=%s\n' "$sha"
     printf 'build_commit=%s\n' "$commit"
-    printf 'kernel_version=%s\n' 'BoringKernel 0.0.59-dev'
+    printf 'kernel_version=%s\n' 'BoringKernel 0.0.60-dev'
     printf '%s\n' 'flashing=MANUAL USER-VERIFIED TARGET ONLY'
     printf '%s\n' 'warning=THE TARGET USB DEVICE WILL BE DESTROYED'
 } > "$META"

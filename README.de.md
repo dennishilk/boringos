@@ -14,14 +14,14 @@ Es ist **keine Linux-Distribution**, **kein BSD** und **basiert nicht auf dem Ke
 Der aktuelle Main-Stand ist:
 
 ```text
-BoringKernel 0.0.59-dev
+BoringKernel 0.0.60-dev
 ```
 
-Die Entwicklung ist bis einschließlich **Milestone 58** abgeschlossen.
+Die Entwicklung ist bis einschließlich **Milestone 59** abgeschlossen.
 
 BoringOS ist längst nicht mehr nur ein früher Boot-Kernel: Unter QEMU bootet inzwischen eine echte native Ring-3-Desktop-Session mit eigenem Display-Service, Tiling-Window-Manager, grafischem Terminal, Shell, Editor, Dateimanager, persistentem BoringFS, Hardware-Inventar und einem wachsenden BoringOS-eigenen xHCI-/USB-Stack.
 
-Es bleibt ein experimentelles Forschungs-/Lernbetriebssystem. QEMU ist weiterhin die primär verifizierte Plattform. Die Unterstützung echter PCs wird bewusst schrittweise aufgebaut und ist **noch keine Behauptung, dass BoringOS bereits auf physischer Hardware erfolgreich läuft**.
+Es bleibt ein experimentelles Forschungs-/Lernbetriebssystem. QEMU ist weiterhin die primär verifizierte Plattform. M59 beweist einen begrenzten Repository-/QEMU-Physical-Smoke-Kandidaten samt UEFI-USB-Image; **die physische Cthulhu-Validierung wartet weiterhin auf den Hardware-Test des Benutzers**.
 
 Die detaillierte Quelle der Wahrheit ist [`docs/roadmap.md`](docs/roadmap.md).
 
@@ -62,14 +62,16 @@ Zu den implementierten und verifizierten Grundlagen gehören:
 - Prozessidentität, unabhängige Page-Table-Roots, CR3-Wechsel, CPL3 und TSS/RSP0-Übergänge
 - natives x86_64-`SYSCALL` / `SYSRETQ`
 - validiertes statisches ELF64-Userspace-Loading und eine BoringOS-eigene freestanding C-Runtime
-- VFS, veränderbares RAMFS, schreibbares persistentes BoringFS, generisches Block-I/O und moderner VirtIO-Block-Storage
+- VFS, veränderbares RAMFS, schreibbares persistentes BoringFS, generisches Block-I/O, VirtIO und begrenzter synchroner AHCI-/SATA-Storage
 - PID 1 `boring-init`, native `boring-shell`, Prozess-Lifecycle, PTYs, File Descriptors/stdio und Scheduler-eigenes `SPAWN`
 - anonymer Ring-3-Speicher, kleiner Userspace-Heap, Shared Buffer, native Service Registry und IPC
 - Framebuffer-Ownership/Presentation, natives `boring-display`, Software-Komposition und Cursor
 - nativer C-**BoringWM** mit begrenztem Tiling, Fokus, Reorder und Lifecycle-Behandlung
 - natives grafisches **BoringTerminal**, **BoringEdit**, **BoringFiles**, `/bin/boringfetch` und `/bin/cat`
 - echtes CPUID-, PCI- und SMBIOS-Plattforminventar, das `boringfetch` ohne erfundene Hardwarewerte anzeigt
-- begrenztes xHCI-Controller-Ownership, USB-Geräteadressierung, Descriptor Discovery, `SET_CONFIGURATION`, HID-Interrupt-IN-Endpoint-Setup, echte Interrupt-IN-Transfer-Events und begrenzte HID-Report-Decodierung bis Milestone 52
+- begrenztes xHCI-Controller-Ownership, USB-Geräteadressierung, Descriptor Discovery, `SET_CONFIGURATION`, HID-Interrupt-IN-Endpoint-Setup, echte Interrupt-IN-Transfer-Events, Integration in die kanonische Inputqueue und ein vollständiger i8042-freier grafischer Desktop-Beweis bis Milestone 54
+- begrenzte 32-GiB-PMM-Kapazität mit realem QEMU-Speicher oberhalb 4 GiB
+- ein schreibgeschützter M59-Physical-Smoke-Bootpfad samt exaktem UEFI-USB-Image-Kandidaten und deaktivierten internen Storage-Writes
 
 ## Nativer Desktop
 
@@ -106,13 +108,13 @@ INFO    → begrenzter versionierter Userspace-Snapshot
 
 Milestone 58 entfernt die alte ~4-GiB-Entwicklungsgrenze des PMM für das begrenzte Referenzziel. Der bestehende PMM besitzt jetzt Kapazität für **8.388.608 4-KiB-Frames = 32 GiB**, und eine reale QEMU-`-m 32G`-Acceptance beweist nutzbaren Speicher oberhalb 4 GiB sowie einen verwalteten physischen Frame bei `0x0000000100000000`. Maps jenseits der konfigurierten 32-GiB-PMM-Kapazität bleiben bewusst begrenzt/gecappt; daraus wird kein beliebig skalierender Memory-Support abgeleitet.
 
-Das erste physische PC-Ziel bleibt ein begrenzter UEFI-Bring-up: Limine → BoringKernel → Firmware-Framebuffer → Hardware-Inventar → nativer Desktop. Interne Datenträger sollen nicht als beschreibbar behandelt werden, solange dafür kein ausdrücklich unterstützter Storage-Pfad existiert.
+Milestone 59 ergänzt den begrenzten Physical-Smoke-Kandidaten: Das exakte Image wurde unter OVMF als schreibgeschützter xHCI-USB-Massenspeicher gebootet, während der Gast PMM/VMM/Heap, Framebuffer, Hardware-Inventar und USB-HID-Input prüft, ohne den normalen Block-Root-Pfad zu betreten. Interne Storage-Writes sind ausdrücklich deaktiviert. Das ist ausschließlich Repository-/QEMU-Readiness; der physische Cthulhu-Test steht noch aus.
 
 ## xHCI-/USB-Stand
 
 Der moderne USB-Pfad ist inzwischen deutlich weiter als reine PCI-Erkennung.
 
-Milestones 48–52 liefern aktuell:
+Milestones 48–54 liefern aktuell:
 
 ```text
 xHCI PCI Discovery / BAR- + MMIO-Validierung
@@ -140,11 +142,15 @@ Configure Endpoint
 PMM-eigene Report-DMA-Puffer + Normal TRBs
         ↓
 echte Transfer Events + begrenzte HID-Report-Decodierung
+        ↓
+kanonische BoringOS-Inputqueue
+        ↓
+vollständige i8042-freie grafische Desktop-Acceptance
 ```
 
-Die aktuelle Grenze ist bewusst eng: **M52 empfängt und decodiert echte USB-Tastatur- und QEMU-Absolute-Tablet-Reports erst nach echten xHCI Transfer Events, speist diese decodierten Reports aber noch nicht in die normale BoringOS-Inputqueue ein.** Der normale grafische Desktop verwendet deshalb weiterhin den bereits bewiesenen Legacy-i8042-/PS/2-Inputpfad.
+M59 verwendet diesen bestehenden Pfad für einen Storage-Write-deaktivierten Physical-Smoke-Kandidaten wieder; es fügt keinen USB-Mass-Storage-Treiber hinzu. USB-Tastatur-/Tablet-Verhalten bleibt unter QEMU einschließlich des i8042-freien grafischen Desktops bewiesen.
 
-USB-Hubs und USB-Massenspeicher werden noch nicht unterstützt.
+USB-Hubs und ein BoringOS-eigener USB-Mass-Storage-Blocktreiber werden noch nicht unterstützt. Dieser Transport beginnt erst in M60 und wird nicht rückwirkend in M59 hineingezogen.
 
 ## Storage und Dateisysteme
 
@@ -152,23 +158,25 @@ BoringOS besitzt mit **BoringFS** ein eigenes kleines Dateisystemformat. Das Rep
 
 Die verifizierte persistente QEMU-Root kann modernen VirtIO-PCI-Block-Storage oder den in M57 abgeschlossenen begrenzten synchronen AHCI-/SATA-Pfad verwenden. Der AHCI-Pfad führt echte Reads, Writes und erforderliche Cache-Flushes über die generische Block-Device-API aus; NVMe ist nicht implementiert.
 
+Das M59-Physical-Smoke-Image umgeht diese beschreibbaren Root-Pfade absichtlich und meldet interne Storage-Writes als deaktiviert.
+
 ## Aktuelle Grenzen
 
 | Bereich | Aktueller Stand |
 | --- | --- |
 | Primär verifizierte Plattform | QEMU x86_64 |
-| Physische Hardware | Readiness Candidate; noch nicht physisch verifiziert |
+| Physische Hardware | M59 Repository-/QEMU-Smoke-Readiness bewiesen; physische Cthulhu-Validierung wartet auf den Benutzer-Hardwaretest |
 | Verwalteter RAM | begrenzte 32-GiB-PMM-Kapazität; reale 32-GiB-QEMU-Maps und Frames >= 4 GiB sind verifiziert |
 | Grafik | Firmware-/Limine-Framebuffer + Software-Compositor; keine native AMD/NVIDIA/Intel-GPU-Beschleunigung |
-| Desktop-Input | nativer i8042-/PS/2-Pfad |
-| USB | xHCI-Geräte adressiert/konfiguriert; echter HID-Interrupt-IN-Report-Transport + begrenzte Decodierung bewiesen; Inputqueue-Integration noch offen |
+| Desktop-Input | xHCI-USB-HID-Pfad und Legacy-i8042-/PS/2-Pfad sind jeweils in ihren begrenzten QEMU-Acceptances bewiesen |
+| USB | xHCI HID bis zur kanonischen Inputqueue und i8042-freier Desktop bewiesen; USB-Mass-Storage-Blocktransport noch nicht implementiert |
 | Persistente Root | VirtIO- oder AHCI-/SATA-Block + BoringFS |
 | AHCI / NVMe | begrenztes synchrones AHCI Read/Write/Flush; NVMe nicht implementiert |
 | Networking | nicht implementiert |
 | Audio | nicht implementiert |
 | SMP-Runtime | nicht implementiert; Runtime bleibt bewusst begrenzt |
 | POSIX-Kompatibilität | weder Ziel noch aktueller Vertrag |
-| Installer / polierter Live-USB | nicht implementiert |
+| Installer / polierter Live-USB | nicht implementiert; M59 veröffentlicht nur einen begrenzten Smoke-Test-Image-Kandidaten |
 
 Diese Grenzen sind Absicht. BoringOS versucht, nicht unterstützte Hardware und unvollständige Subsysteme ehrlich zu melden, statt aus bloßer Erkennung bereits Support abzuleiten.
 
@@ -198,7 +206,7 @@ Die permanente CI hält frühere Milestone-Beweise am Leben, während neue Fähi
 
 Das Projekt entwickelt sich in kleinen semantischen Milestones. Ein Milestone gilt nicht allein deshalb als fertig, weil der Code baut: fokussierte Acceptance, geerbte Regressionen, Semantic Freeze, runtime-neutraler Versions-Closeout, Exact-Head-CI, guarded Squash Merge und die Verifikation des neuen `main` gehören zur Entwicklungsdisziplin.
 
-Zum Zeitpunkt dieser README-Aktualisierung ist **M58 abgeschlossen** und der aktive Entwicklungsbanner lautet **BoringKernel 0.0.59-dev**. M59 ist nicht Teil dieses Closeouts; der exakte nächste Milestone wird erst durch die Roadmap festgelegt und hier nicht begonnen.
+Zum Zeitpunkt dieser README-Aktualisierung ist **M59 Repository-/QEMU-Readiness abgeschlossen** und der aktive Entwicklungsbanner lautet **BoringKernel 0.0.60-dev**. Die physische Cthulhu-Validierung bleibt ausdrücklich ausstehend. M60-Implementierung ist nicht Teil dieses Closeouts.
 
 Für den exakten aktuellen Milestone-Stand gilt [`docs/roadmap.md`](docs/roadmap.md), nicht eine geplante Funktion aus dieser README.
 

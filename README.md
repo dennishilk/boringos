@@ -14,14 +14,14 @@ It is **not a Linux distribution**, **not BSD**, and **not based on another oper
 The current main line is:
 
 ```text
-BoringKernel 0.0.59-dev
+BoringKernel 0.0.60-dev
 ```
 
-Development is complete through **Milestone 58**.
+Development is complete through **Milestone 59**.
 
-BoringOS is no longer just an early boot kernel: under QEMU it now boots into a real native Ring-3 desktop session with its own display service, tiling window manager, graphical terminal, shell, editor, file manager, persistent BoringFS storage, hardware inventory, and a growing BoringOS-owned xHCI/USB stack.
+BoringOS is no longer just an early boot-kernel: under QEMU it boots into a real native Ring-3 desktop session with its own display service, tiling window manager, graphical terminal, shell, editor, file manager, persistent BoringFS storage, hardware inventory, and a growing BoringOS-owned xHCI/USB stack.
 
-It is still an experimental research/learning OS. QEMU is the primary verified platform. Physical-PC boot readiness is being developed deliberately and is **not yet a physical-hardware success claim**.
+It is still an experimental research/learning OS. QEMU remains the primary verified platform. M59 proves a bounded repository/QEMU physical-smoke candidate and UEFI USB image, but **physical Cthulhu validation is still pending the user's hardware test**.
 
 The detailed source of truth is [`docs/roadmap.md`](docs/roadmap.md).
 
@@ -69,7 +69,9 @@ Implemented and verified foundations include:
 - native C **BoringWM** with bounded tiling, focus, reordering and lifecycle handling
 - native graphical **BoringTerminal**, **BoringEdit**, **BoringFiles**, `/bin/boringfetch` and `/bin/cat`
 - real CPUID, PCI and SMBIOS platform inventory exposed honestly through `boringfetch`
-- bounded xHCI controller ownership, USB device addressing, descriptor discovery, `SET_CONFIGURATION`, HID Interrupt-IN endpoint setup, real Interrupt-IN transfer events and bounded HID report decoding through Milestone 52
+- bounded xHCI controller ownership, USB device addressing, descriptor discovery, `SET_CONFIGURATION`, HID Interrupt-IN endpoint setup, real Interrupt-IN transfer events, canonical input-queue integration and a complete i8042-free graphical-desktop proof through Milestone 54
+- bounded 32-GiB PMM capacity with real QEMU memory above 4 GiB
+- an M59 read-only physical-smoke boot path and exact UEFI USB image candidate with internal-storage writes disabled
 
 ## Native desktop
 
@@ -106,13 +108,13 @@ INFO    → bounded versioned userspace snapshot
 
 Milestone 58 removes the old ~4-GiB PMM development ceiling for the bounded reference target. The existing PMM now has capacity for **8,388,608 4-KiB frames = 32 GiB**, and real QEMU `-m 32G` acceptance proves usable memory above 4 GiB plus a managed physical frame at `0x0000000100000000`. Maps beyond the configured 32-GiB PMM capacity remain explicitly bounded/capped rather than implying arbitrary-scale memory support.
 
-The first physical-PC target remains a bounded UEFI bring-up: Limine → BoringKernel → firmware framebuffer → hardware inventory → native desktop. Internal disks must not be treated as writable until an explicitly supported storage path exists.
+Milestone 59 adds the bounded physical-smoke candidate: the exact image has been booted under OVMF as read-only xHCI USB mass storage while the guest exercises PMM/VMM/heap, framebuffer, hardware inventory and USB HID input without entering the normal block-root path. Internal-storage writes are explicitly disabled. This is repository/QEMU readiness evidence only; the physical Cthulhu test remains pending.
 
 ## xHCI / USB status
 
 The modern USB path is now substantially beyond mere PCI detection.
 
-Milestones 48–52 currently provide:
+Milestones 48–54 currently provide:
 
 ```text
 xHCI PCI discovery / BAR + MMIO validation
@@ -140,11 +142,15 @@ Configure Endpoint
 PMM-owned report DMA + Normal TRBs
         ↓
 real Transfer Events + bounded HID report decoding
+        ↓
+canonical BoringOS input queue
+        ↓
+complete i8042-free graphical desktop acceptance
 ```
 
-The current boundary is deliberate: **M52 receives and decodes real USB keyboard and QEMU absolute-tablet reports only after genuine xHCI Transfer Events, but it does not yet publish those decoded reports into the normal BoringOS input queue.** The existing graphical desktop therefore still relies on the proven legacy i8042/PS/2 input path for normal interaction.
+M59 reuses that existing path for a storage-write-disabled physical-smoke candidate; it does not add a USB mass-storage driver. USB keyboard/tablet behavior remains proven in QEMU, including the i8042-free graphical desktop.
 
-There is still no USB hub support or USB mass-storage driver.
+There is still no USB hub support or BoringOS USB mass-storage block driver. That transport begins in M60 rather than being smuggled into M59.
 
 ## Storage and filesystems
 
@@ -152,23 +158,25 @@ BoringOS has its own small filesystem format, **BoringFS**. The repository conta
 
 The verified persistent QEMU root can use modern VirtIO PCI block storage or the bounded synchronous AHCI/SATA path completed in M57. The AHCI path performs real reads, writes and required cache flushes through the generic block-device API; NVMe is not implemented.
 
+The M59 physical-smoke image deliberately bypasses those writable root paths and reports internal-storage writes disabled.
+
 ## Current boundaries
 
 | Area | Current state |
 | --- | --- |
 | Primary verified platform | QEMU x86_64 |
-| Physical hardware | readiness candidate only; not physically verified |
+| Physical hardware | M59 repository/QEMU smoke readiness proven; physical Cthulhu validation pending user hardware test |
 | Managed RAM | bounded 32-GiB PMM capacity; real 32-GiB QEMU maps and frames >= 4 GiB are verified |
 | Graphics | firmware/Limine framebuffer + software compositor; no native AMD/NVIDIA/Intel GPU acceleration |
-| Desktop input | native i8042/PS/2 path |
-| USB | xHCI devices addressed/configured; real HID Interrupt-IN report transport + bounded decode proven; input-queue integration still pending |
+| Desktop input | xHCI USB HID path and legacy i8042/PS/2 path are both proven in their bounded QEMU acceptances |
+| USB | xHCI HID through canonical input and i8042-free desktop proven; USB mass-storage block transport not yet implemented |
 | Persistent root | VirtIO or AHCI/SATA block + BoringFS |
 | AHCI / NVMe | bounded synchronous AHCI read/write/flush; NVMe not implemented |
 | Networking | not implemented |
 | Audio | not implemented |
 | SMP runtime | not implemented; current runtime remains deliberately bounded |
 | POSIX compatibility | not a goal or current contract |
-| Installer / polished live USB | not implemented |
+| Installer / polished live USB | not implemented; M59 publishes only a bounded smoke-test image candidate |
 
 These limits are intentional. BoringOS tries to report unsupported hardware and incomplete subsystems honestly rather than turning detection into a support claim.
 
@@ -198,7 +206,7 @@ The permanent CI suite keeps earlier milestone proofs alive while new capabiliti
 
 The project advances in small semantic milestones. A milestone is not considered complete merely because code builds: focused acceptance, inherited regressions, a Semantic Freeze, runtime-neutral version closeout, exact-head CI, guarded squash merge and merged-main verification are part of the development discipline.
 
-At this README revision, **M58 is complete** and the active development banner is **BoringKernel 0.0.59-dev**. M59 is not part of this closeout; the exact next milestone remains defined by the roadmap rather than being started here.
+At this README revision, **M59 repository/QEMU readiness is complete** and the active development banner is **BoringKernel 0.0.60-dev**. Physical Cthulhu validation remains explicitly pending. M60 implementation is not part of this closeout.
 
 See [`docs/roadmap.md`](docs/roadmap.md) for the exact current milestone state rather than relying on planned features in this README.
 
