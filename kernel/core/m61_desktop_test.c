@@ -1,3 +1,5 @@
+#include <boring/xhci_mixed.h>
+
 #define virtio_blk_init m61_usb_root_init
 #define virtio_blk_device m61_usb_root_device
 #define block_device_find m61_block_device_find
@@ -15,6 +17,9 @@
 #include <boring/block_slice.h>
 #include <boring/m61_usb_layout.h>
 #include <boring/usb_mass_storage.h>
+
+const struct block_device *block_device_find(const char *name);
+void m37_desktop_test_finish_from_pid1(void) __attribute__((noreturn));
 
 static struct block_device_slice m61_root_slice;
 static bool m61_root_ready;
@@ -119,17 +124,27 @@ enum vfs_result m61_boringfs_create_root(
 
 void m37_desktop_test_finish_from_pid1(void) {
     const struct usb_mass_storage_stats *stats = usb_mass_storage_get_stats();
+    struct boring_input_stats input_stats;
 
     if (!m61_root_ready || (stats == NULL) || !stats->registered ||
+        (stats->bot_commands == 0U) || (stats->bulk_in_transfers == 0U) ||
+        (stats->bulk_out_transfers == 0U) || (stats->read_commands == 0U) ||
         (stats->write_commands == 0U) || (stats->flush_commands == 0U) ||
-        (stats->flush_commands != stats->write_commands)) {
-        fail("M61 usb0 WRITE(10)/SYNCHRONIZE CACHE(10) accounting");
+        (stats->flush_commands != stats->write_commands) ||
+        !boring_input_get_stats(&input_stats) ||
+        (input_stats.dropped_events != 0ULL)) {
+        fail("M61 usb0 transport/flush/HID accounting");
     }
-    serial_write_string("m61-root: USB WRITE(10)/SYNCHRONIZE CACHE(10)=");
+    serial_write_string("m61-root: BOT/read/write/flush=");
+    serial_write_u64((uint64_t)stats->bot_commands);
+    serial_write_string("/");
+    serial_write_u64((uint64_t)stats->read_commands);
+    serial_write_string("/");
     serial_write_u64((uint64_t)stats->write_commands);
     serial_write_string("/");
     serial_write_u64((uint64_t)stats->flush_commands);
     serial_write_string("\n");
+    serial_write_string("m61-root: canonical HID dropped=0\n");
     serial_write_string("M61 USB root persistence flush complete.\n");
     m61_base_finish_from_pid1();
 }
