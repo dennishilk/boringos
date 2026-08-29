@@ -15,18 +15,20 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Install focused QEMU dependencies
         run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 xorriso ovmf
       - name: q35 physical-smoke equivalent at normal RAM and 32 GiB
         run: sh tests/m59-physical-smoke-qemu.sh
       - name: Package the exact focused build as a bounded raw USB image
-        run: sh tests/m59-build-usb-image.sh
+        run: env -u GITHUB_SHA sh tests/m59-build-usb-image.sh
       - name: OVMF boot the exact image as read-only xHCI USB storage
         run: python3 tests/m59-usb-image-ovmf.py
       - name: Publish M59 physical-test candidate
         uses: actions/upload-artifact@v4
         with:
-          name: m59-cthulhu-physical-smoke-${{ github.sha }}
+          name: m59-cthulhu-physical-smoke-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             build/boringos-m59-cthulhu-smoke.img
             build/m59-usb-image.txt
