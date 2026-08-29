@@ -2,144 +2,183 @@
 
 [English](README.md)
 
-BoringOS ist ein experimentelles, unabhängiges Desktop-Betriebssystemprojekt.
+BoringOS ist ein experimentelles **unabhängiges Desktop-Betriebssystem** für x86_64, das von Grund auf um den eigenen Kernel **BoringKernel** gebaut wird.
 
-Es ist **keine Linux-Distribution**, **keine BSD-Distribution** und **basiert weder auf Redox noch auf dem Kernel eines anderen Betriebssystems**. BoringOS entwickelt seinen eigenen Kernel, **BoringKernel**, sowie später einen nativen BoringOS-Userspace und Desktop-Stack.
+Es ist **keine Linux-Distribution**, **kein BSD** und **basiert nicht auf dem Kernel eines anderen Betriebssystems**. Von BoringOS entwickelte Systemkomponenten werden hauptsächlich in **C** geschrieben; kleine isolierte x86_64-Assembly-Anteile gibt es nur dort, wo die Architektur sie wirklich verlangt.
 
 > boring is not a bug.  
 > it's the entire operating system now.
 
-## Status
+## Aktueller Stand
 
-**Extrem früher Bootstrap-Kernel.**
-
-BoringKernel bootet unter **QEMU x86_64**. Limine bleibt der externe Bootloader. BoringKernel besitzt aktuell COM1-Seriellenausgabe, Speicher- und Adressraumverwaltung, Exceptions und PIT/PIC-Interrupts, Kernel-Scheduling, echten CPL3-ELF-Userspace, eine geprüfte native Syscall-Grenze, VFS/RAMFS, schreibbares VirtIO-gestütztes BoringFS, PID 1 `boring-init`, eine interaktive native `boring-shell`, VFS-gestützte statische ELF-Programme, eine prozesslokale native 16-Slot-Descriptor-/stdio-Schicht für die eigenständigen `/bin/boringfetch` und `/bin/cat` im persistenten BoringFS, eine optionale validierte native Framebuffer-Grafikgrundlage mit einem einmalig vom Kernel gerenderten grafischen Boot-Dashboard sowie eine begrenzte native i8042-/PS/2-Tastatur-und-Maus-Input-Grundlage mit exklusiven blockierenden Ring-3-Event-Syscalls und dem eigenständigen `/bin/input-test`, die dynamische anonyme Ring-3-Speicherverwaltung aus M32, einen minimalen Userspace-Heap und generische kernel-eigene Shared-Byte-Buffer mit prozesslokalen Capability-Handles und `/bin/memory-test`, die begrenzte native M33-Service-Registry und blockierendes verbindungsorientiertes IPC mit transaktionalen M32-Shared-Buffer-Capability-Grants und `/bin/ipc-test` sowie den nativen M34-Ring-3-Dienst `/bin/boring-display` mit zwei getrennten Shared-Buffer-Testclients, deterministischer Software-Komposition und einem durch den echten M31-Inputpfad gesteuerten Cursor.
-
-M35 ergänzt den nativen Ring3-BoringWM mit begrenztem Tiling, Fokus und Lifecycle-Policy. M36 ergänzt das native grafische `/bin/boring-terminal`, generationssichere PTY-Descriptor-Paare und Scheduler-gestütztes `SPAWN` mit explizitem stdio. Echtes Super+Return startet unabhängige grafische Shells; zwei Terminals beweisen Fokus-/Input-Isolation, grafisches `boringfetch`, kontrolliertes Schließen per Super+Q sowie Cleanup nach unerwartetem Terminal- oder Shell-Tod.
-
-Die aktuelle serielle Ausgabe beginnt mit:
+Der aktuelle Main-Stand ist:
 
 ```text
-BoringOS booting...
 BoringKernel 0.0.52-dev
-Arch: x86_64
-Hello from BoringKernel.
 ```
 
-Der ursprüngliche VMM übernimmt für PID 0 weiterhin die aktive, von Limine erzeugte vierstufige x86_64-Root. BoringKernel 0.0.9-dev führte PMM-gestützte Prozess-Roots mit leerer privater Lower Half und gemeinsam genutzten Higher-Half-Kernel-Mappings ein. BoringKernel 0.0.10-dev ergänzte den ersten echten Ring-3-Übergang, 0.0.11-dev die native x86_64-Syscall-Grenze. Spätere Milestones erweiterten genau dieses geprüfte Fundament um native ELF-Programme, Dateisysteme, Storage, Systemidentität, den M27-Shell-Lebenszyklus, M28-VFS-Programme und die native M29-Descriptor-/stdio-Schicht, die M30-Framebuffer-Grundlage, die native M31-PS/2-Input-Grundlage, die M32-Userspace-Memory-/Shared-Buffer-Grundlage, die native M33-IPC-/Service-/Capability-Grant-Grundlage und die native M34-Display-Service-/Compositor-Grundlage; den exakten aktuellen Stand dokumentiert [`docs/roadmap.md`](docs/roadmap.md).
+Die Entwicklung ist bis einschließlich **Milestone 51** abgeschlossen.
 
-Die aktuelle Aufteilung ist bewusst einfach:
+BoringOS ist längst nicht mehr nur ein früher Boot-Kernel: Unter QEMU bootet inzwischen eine echte native Ring-3-Desktop-Session mit eigenem Display-Service, Tiling-Window-Manager, grafischem Terminal, Shell, Editor, Dateimanager, persistentem BoringFS, Hardware-Inventar und einem wachsenden BoringOS-eigenen xHCI-/USB-Stack.
+
+Es bleibt ein experimentelles Forschungs-/Lernbetriebssystem. QEMU ist weiterhin die primär verifizierte Plattform. Die Unterstützung echter PCs wird bewusst schrittweise aufgebaut und ist **noch keine Behauptung, dass BoringOS bereits auf physischer Hardware erfolgreich läuft**.
+
+Die detaillierte Quelle der Wahrheit ist [`docs/roadmap.md`](docs/roadmap.md).
+
+## Was heute wirklich läuft
 
 ```text
-PML4-Slots   0-255   prozessprivate Lower Half
-PML4-Slots 256-511   gemeinsam genutzte Kernel-Higher-Half
+QEMU x86_64 / UEFI- oder BIOS-Pfad
+        ↓
+      Limine
+        ↓
+   BoringKernel
+        ↓
+PMM / VMM / Heap / IDT / Scheduler
+        ↓
+Prozesse + unabhängige Adressräume
+        ↓
+Ring 3 + natives SYSCALL/SYSRETQ-ABI
+        ↓
+VFS + RAMFS + VirtIO Block + BoringFS
+        ↓
+     boring-init
+        ↓
+  boring-display
+        ↓
+     BoringWM
+        ↓
+┌──────────────┬──────────────┬──────────────┐
+│BoringTerminal│ BoringEdit   │ BoringFiles  │
+│ boring-shell │              │              │
+│ boringfetch  │              │              │
+└──────────────┴──────────────┴──────────────┘
 ```
 
-Die gemeinsam genutzte Higher Half erhält die benötigten Mappings für Kernel-Image, HHDM, Heap, Task-Stacks, PMM/VMM-Metadaten, IDT, IRQ-/Exception-Code, Scheduler-State und weiterhin benötigte Bootstrap-Strukturen. Gemeinsam genutzte Page Tables gelten niemals als prozesseigene Frames und werden bei der Prozesszerstörung nicht freigegeben. Die Ring-3- und Syscall-Acceptance-Tests prüfen, dass die kopierten Shared-Root-Einträge weiterhin exakt der Bootstrap-Root entsprechen, und laufen jeden gemeinsamen Übersetzungspfad ab, dessen obere Ebenen user-enabled bleiben; kein vorhandenes Higher-Half-Leaf darf mit `U/S=1` auf jeder Paging-Ebene aus CPL3 erreichbar sein.
+Zu den implementierten und verifizierten Grundlagen gehören:
 
-## Tasks und Prozesse
+- begrenzte physische und virtuelle Speicherverwaltung sowie ein Kernel-Heap
+- x86_64-Exceptions, Legacy-PIC/PIT-Interrupts, kooperatives und timergetriebenes präemptives Scheduling
+- Prozessidentität, unabhängige Page-Table-Roots, CR3-Wechsel, CPL3 und TSS/RSP0-Übergänge
+- natives x86_64-`SYSCALL` / `SYSRETQ`
+- validiertes statisches ELF64-Userspace-Loading und eine BoringOS-eigene freestanding C-Runtime
+- VFS, veränderbares RAMFS, schreibbares persistentes BoringFS, generisches Block-I/O und moderner VirtIO-Block-Storage
+- PID 1 `boring-init`, native `boring-shell`, Prozess-Lifecycle, PTYs, File Descriptors/stdio und Scheduler-eigenes `SPAWN`
+- anonymer Ring-3-Speicher, kleiner Userspace-Heap, Shared Buffer, native Service Registry und IPC
+- Framebuffer-Ownership/Presentation, natives `boring-display`, Software-Komposition und Cursor
+- nativer C-**BoringWM** mit begrenztem Tiling, Fokus, Reorder und Lifecycle-Behandlung
+- natives grafisches **BoringTerminal**, **BoringEdit**, **BoringFiles**, `/bin/boringfetch` und `/bin/cat`
+- echtes CPUID-, PCI- und SMBIOS-Plattforminventar, das `boringfetch` ohne erfundene Hardwarewerte anzeigt
+- begrenztes xHCI-Controller-Ownership, USB-Geräteadressierung, Descriptor Discovery, `SET_CONFIGURATION` und HID-Interrupt-IN-Endpoint-Setup bis Milestone 51
 
-Ein **Task** ist eine Ausführungs-/Scheduling-Einheit. Ein **Prozess** ist Identität plus Adressraumbesitz. Beide Konzepte bleiben bewusst getrennt.
+## Nativer Desktop
 
-Der Bootstrap-/Kernelprozess ist PID 0. Der normale Userspace-Boot erzeugt PID 1 `boring-init`, der synchron eine `boring-shell` als Kind mit eigener PMM-gestützter Root startet. M27 stellt echte RUNNING/WAITING/ZOMBIE-Snapshots und den engen Exit/Wait/Reap/Respawn-Lebenszyklus bereit; Prozess-Slots werden erst nach Reap wiederverwendet, PID-Werte bleiben monoton.
+Der grafische Desktop gehört vollständig BoringOS. Er verwendet weder X11 noch Wayland.
 
-Jeder normale Kernel-Task erhält weiterhin einen unabhängigen **16-KiB-Stack aus dem Kernel-Heap**. Kooperatives Umschalten behält den kleinen SysV-AMD64-Call-Boundary-Kontext. Timerpräemption verwendet weiterhin den separaten vollständigen **192-Byte**-Interrupt-Frame zum Fortsetzen beliebiger Integer-Ausführungszustände.
-
-Ein Task referenziert seinen besitzenden Prozess. Wählt der Scheduler einen Task eines anderen Prozesses, aktiviert er dessen Prozess-Root mit einem echten CR3-Load, bevor der ausgewählte Interrupt-Frame an Assembly zurückgegeben wird. Der PIC-EOI wird weiterhin gesendet, bevor Assembly den aktuellen IRQ-Stack verlässt.
-
-## Nachweis unabhängiger Adressräume
-
-Die zentrale Prozess-Isolationsadresse lautet:
+Aktuelle Tastenkürzel sind unter anderem:
 
 ```text
-0x0000004000000000
+Super+Return   BoringTerminal öffnen
+Super+E        BoringEdit öffnen
+Super+F        BoringFiles öffnen
+Super+J/L      Fokus wechseln
+Super+Q        fokussierten verwalteten Client schließen
 ```
 
-Der QEMU-Acceptance-Test erzeugt zwei Prozessadressräume und mappt dieselbe VA auf unterschiedliche Physical Frames:
+`BoringTerminal` startet eine separat geplante `boring-shell` über ein echtes PTY. Mehrere grafische Terminals besitzen eigene Prozesse, Adressräume und getrennten Input-Fokus. Im Terminal laufen echte eigenständige BoringFS-Programme wie `boringfetch` und `cat`.
+
+`BoringEdit` ist ein begrenzter nativer Texteditor mit echtem Laden/Speichern über BoringFS. `BoringFiles` ist ein nativer Dateimanager auf Basis echter VFS-Verzeichniseinträge und kann Dateien in BoringEdit öffnen.
+
+Auch der Desktop-Startpfad ist echt: PID 1 startet Display-Server und BoringWM aus BoringFS und überwacht die begrenzte Desktop-Session, statt für jede Komponente zusätzliche Boot-Module zu benötigen.
+
+## Hardware-Inventar und Richtung echter PC
+
+BoringOS liest reale Gast-Hardwaredaten, anstatt erfundene Rechnernamen in die Oberfläche einzubauen. Aktuelle Collector liefern:
 
 ```text
-PID 1: TEST_VA -> Frame A
-PID 2: TEST_VA -> Frame B
-Frame A != Frame B
+CPUID   → Vendor, Brand, Family/Model/Stepping und begrenzte Feature-Daten
+PCI     → echtes BDF-/Vendor-/Device-/Class-Inventar
+SMBIOS  → Firmware-, System-, Board- und Speicheridentität
+INFO    → begrenzter versionierter Userspace-Snapshot
 ```
 
-Anschließend aktiviert er die echten Roots und dereferenziert `TEST_VA` durch die CPU:
+`boringfetch` verwendet diese Kernel-eigenen Werte. Unter QEMU zeigt es deshalb die emulierte QEMU-Hardware; auf echter Hardware soll es später die tatsächliche Maschine beschreiben.
+
+Milestone 47 hat eine ehrliche Real-Hardware-Readiness-Grenze geschaffen. Gültige Memory Maps, die größer als die feste PMM-Kapazität sind, brechen den Boot nicht mehr ab. Der aktuelle PMM verwaltet aber weiterhin höchstens **1.048.576 4-KiB-Frames = 4 GiB**. Darüber hinaus vorhandener nutzbarer RAM wird als gecappt gemeldet und vorerst nicht verwaltet.
+
+Das erste physische PC-Ziel bleibt ein begrenzter UEFI-Bring-up: Limine → BoringKernel → Firmware-Framebuffer → Hardware-Inventar → nativer Desktop. Interne Datenträger sollen nicht als beschreibbar behandelt werden, solange dafür kein ausdrücklich unterstützter Storage-Pfad existiert.
+
+## xHCI-/USB-Stand
+
+Der moderne USB-Pfad ist inzwischen deutlich weiter als reine PCI-Erkennung.
+
+Milestones 48–51 liefern aktuell:
 
 ```text
-PID 1 schreibt 0xAAAAAAAAAAAAAAAA
-PID 2 schreibt 0xBBBBBBBBBBBBBBBB
-PID 1 liest weiterhin 0xAAAAAAAAAAAAAAAA
-PID 2 liest weiterhin 0xBBBBBBBBBBBBBBBB
+xHCI PCI Discovery / BAR- + MMIO-Validierung
+        ↓
+Legacy-Ownership-Handoff / Halt / Reset / Start
+        ↓
+DCBAA + Command Ring + Event Ring + ERST
+        ↓
+echter Root-Port-Connect-State
+        ↓
+Enable Slot + Address Device
+        ↓
+EP0-Transfer-Ring pro Gerät
+        ↓
+echtes GET_DESCRIPTOR Control-IN
+        ↓
+Device- + Configuration-Descriptor-Validierung
+        ↓
+SET_CONFIGURATION
+        ↓
+aus Deskriptoren abgeleitete HID-Interrupt-IN-Endpoint-Contexts
+        ↓
+Configure Endpoint
 ```
 
-Die Isolation wird nicht über HHDM-Physical-Aliase vorgetäuscht.
+Die aktuelle Grenze ist bewusst eng: **M51 konfiguriert die echten HID-Interrupt-IN-Endpoints, sendet aber noch keine wiederkehrenden HID-Report-Transfers und speist USB-Tastatur-/Maus-Reports noch nicht in die normale BoringOS-Inputqueue ein.** Der normale grafische Desktop verwendet deshalb weiterhin den bereits bewiesenen Legacy-i8042-/PS/2-Inputpfad.
 
-Der stärkere Acceptance-Test bindet jeweils einen CPU-bound präemptiven Task an einen Prozess. Keiner der beiden Tasks ruft `task_yield()` auf. Echte PIT-IRQ0-Auslieferung wechselt sowohl Task als auch CR3, während jeder Task wiederholt dieselbe virtuelle Adresse liest und ausschließlich sein eigenes Muster sehen darf.
+USB-Hubs und USB-Massenspeicher werden noch nicht unterstützt.
 
-Ein verifizierter sauberer QEMU-Quelllauf meldete:
+## Storage und Dateisysteme
 
-```text
-Process A root:           0x0000000000078000
-Process B root:           0x0000000000079000
-Process A physical frame: 0x000000000007A000
-Process B physical frame: 0x000000000007B000
-Address-space switches:   18
-Preemptive CR3 switches:   7
-Process A slices:           3
-Process B slices:           3
-```
+BoringOS besitzt mit **BoringFS** ein eigenes kleines Dateisystemformat. Das Repository enthält Codec/Validator, deterministischen Formatter, `boringfsck`, Kernel-Mount-Support und synchrones schreibbares Verhalten.
 
-Nach dem Test stellt BoringKernel PID 0 samt Bootstrap-CR3 wieder her, gibt beide Task-Stacks frei, entfernt die privaten Test-Mappings, gibt ausschließlich prozesseigene Page-Table-Frames und beide Datenframes frei und prüft PMM-/Heap-/VMM-Bookkeeping.
+Die verifizierte persistente QEMU-Root verwendet derzeit modernen VirtIO-PCI-Block-Storage. AHCI und NVMe sind noch nicht implementiert; ein Controller im PCI-Inventar zu sehen bedeutet ausdrücklich nicht, dass bereits ein Storage-Treiber dafür vorhanden ist.
 
-Siehe [`docs/processes.md`](docs/processes.md) für das exakte Modell und die Besitzregeln.
+## Aktuelle Grenzen
 
-## Aktuelle Grenze des Ausführungsmodells
+| Bereich | Aktueller Stand |
+| --- | --- |
+| Primär verifizierte Plattform | QEMU x86_64 |
+| Physische Hardware | Readiness Candidate; noch nicht physisch verifiziert |
+| Verwalteter RAM | aktuell auf 4 GiB begrenzt; größere gültige Maps werden akzeptiert |
+| Grafik | Firmware-/Limine-Framebuffer + Software-Compositor; keine native AMD/NVIDIA/Intel-GPU-Beschleunigung |
+| Desktop-Input | nativer i8042-/PS/2-Pfad |
+| USB | xHCI-Geräte adressiert, Deskriptoren gelesen, HID-Endpoints konfiguriert; Report-Transport/Input-Integration noch offen |
+| Persistente Root | VirtIO Block + BoringFS |
+| AHCI / NVMe | nicht implementiert |
+| Networking | nicht implementiert |
+| Audio | nicht implementiert |
+| SMP-Runtime | nicht implementiert; Runtime bleibt bewusst begrenzt |
+| POSIX-Kompatibilität | weder Ziel noch aktueller Vertrag |
+| Installer / polierter Live-USB | nicht implementiert |
 
-BoringKernel besitzt einen bewusst eng begrenzten, aber echten nativen Ring-3-Userspace; er ist keine allgemeine POSIX-Umgebung.
+Diese Grenzen sind Absicht. BoringOS versucht, nicht unterstützte Hardware und unvollständige Subsysteme ehrlich zu melden, statt aus bloßer Erkennung bereits Support abzuleiten.
 
-Der Kernel lädt eine eigene GDT mit Kernel-Code/Data-Deskriptoren, DPL3-User-Data/Code-Deskriptoren und genau einem verfügbaren 64-Bit-TSS. Die aktuellen Selektoren sind:
+## Syscall-ABI
 
-```text
-0x08  kernel code
-0x10  kernel data
-0x1B  user data, RPL3
-0x23  user code, RPL3
-0x28  TSS
-```
+BoringOS verwendet aktuell ein eigenes provisorisches x86_64-Syscall-ABI. Aus der ursprünglichen `GETPID`-/Debug-Grenze sind begrenzte Console-, Filesystem-, Prozess-, Descriptor-, Input-, Memory-, Shared-Buffer-, IPC-, Framebuffer-, Event-, PTY- und Process-Spawn-Operationen entstanden.
 
-Der TSS besitzt einen dedizierten 16-KiB-RSP0-Stack. Der Ring-3-Test mappt genau eine feste User-Code-Seite bei `0x0000000040000000` als present + user + read-only/executable und genau eine feste User-Stack-Seite bei `0x0000000040010000` als present + user + writable. User-Zugriff wird auf jeder nötigen Ebene PML4/PDPT/PD/PT propagiert, ohne irgendein effektives gemeinsam genutztes Higher-Half-Kernel-Mapping aus CPL3 erreichbar zu machen.
-
-Die CPU wechselt über einen echten `iretq`-Frame nach CPL3 mit CS `0x23`, SS `0x1B` und User-RSP `0x0000000040011000`. Die ursprüngliche Ring-3-Acceptance führt das privilegierte `cli` aus und beweist, dass der resultierende echte **#GP / Vector 13** über den separaten TSS-RSP0-Exception-Pfad zurück nach CPL0 gelangt.
-
-Die Syscall-Grenze führt echtes x86_64-`SYSCALL` aus. BoringKernel aktiviert `IA32_EFER.SCE`, programmiert und liest `IA32_STAR`, `IA32_LSTAR` und `IA32_FMASK` zurück, sichert den noch user-kontrollierten RSP vor jeder normalen Stacknutzung und wechselt sofort auf einen dedizierten supervisor-only **16-KiB-Syscall-Kernelstack**. Das provisorische ABI verwendet `RAX` für die Syscall-Nummer, `RDI/RSI/RDX/R10/R8/R9` für Argumente und `RAX` für das Ergebnis; `RCX/R11` sind architektonische Clobbers. Die aktuelle begrenzte Oberfläche reicht mit den Nummern 0–17 von `GETPID` bis `WAITPID` und umfasst Console, Launch, VFS, Systeminformationen, CWD und Prozess-Snapshots.
-
-`DEBUG_WRITE` reicht niemals einen rohen Userspace-Pointer an die Serial-Schicht weiter. Der `copy_from_user`-Pfad validiert den vollständigen Lower-Half-Bereich, läuft die aktuellen Prozess-Page-Tables mit effektiven Present- und U/S-Prüfungen ab, löst Physical Memory über den vertrauenswürdigen HHDM-Alias auf und kopiert zuerst in einen kernel-eigenen Buffer. `SYSRETQ` wird nur ausgeführt, nachdem gespeicherter User-RIP/RSP, aktiver Prozess/Adressraum, erwartete Selektoren und sanitizte Return-RFLAGS geprüft wurden. Der Test führt sieben echte Syscall-Dispatches aus, beweist mehrere `SYSRETQ`-Rückkehrpfade nach CPL3 und führt danach `cli` aus; dieser letzte echte #GP verwendet weiterhin TSS.RSP0 und nicht den Syscall-Stack.
-
-Das Syscall-ABI ist **provisorisch** und kein stabiler öffentlicher Userspace-Vertrag. Es gibt weiterhin **kein libc, keinen FD-/TTY-Layer, kein allgemeines `fork` oder VFS-gestütztes `exec`, keine Signale, kein Authentifizierungs- oder Berechtigungsmodell, kein nebenläufiges Child-Scheduling, kein Networking, keine grafische Umgebung, keinen nativen Input-Stack, kein SMP, kein PCID, kein Copy-on-Write, kein Demand Paging, keinen Swap und keinen FPU/SIMD-Kontextwechsel**.
-
-Siehe [`docs/syscalls.md`](docs/syscalls.md) für die exakt implementierte Syscall-Grenze und ihre aktuellen Begrenzungen.
-
-Für den aktuellen Bootstrap-Nachweis bleibt QEMU:
-
-```text
--M q35 -cpu qemu64,apic=off -m 128M
-```
-
-Das ist temporäre Bootstrap-Infrastruktur und keine Behauptung über physische Hardware-Kompatibilität.
-
-## Technische Richtung
-
-Von BoringOS entwickelte Systemkomponenten werden hauptsächlich in **C** geschrieben. Minimale architekturspezifische Assembly-Anteile sind dort erlaubt, wo sie technisch unvermeidbar sind; sie müssen klein, isoliert und dokumentiert bleiben.
-
-> BoringOS ist ein unabhängiges Betriebssystem, dessen eigene Systemkomponenten hauptsächlich in C geschrieben werden.
-
-Die erste Referenzplattform ist **x86_64 unter QEMU**. Breite Unterstützung physischer PC-Hardware ist bewusst kein frühes Ziel.
+Das aktuelle ABI belegt die Syscall-Nummern **0–43**. Es ist bewusst **kein stabiles POSIX-ABI**. Den exakten Vertrag dokumentieren [`docs/syscalls.md`](docs/syscalls.md) und [`docs/roadmap.md`](docs/roadmap.md).
 
 ## Bauen und testen
 
-Der aktuelle Build verwendet GCC/binutils als freestanding x86_64-Toolchain und lädt eine fest gepinnte Limine-Version. Generierte Dateien bleiben unter `build/`.
+Der Build verwendet GCC/binutils als freestanding x86_64-Toolchain und eine fest gepinnte Limine-Version. Generierte Dateien bleiben unter `build/`.
 
-Benötigte Host-Werkzeuge sind unter anderem GNU Make, GCC/binutils, `curl`, `xorriso` und QEMU.
+Typische Host-Abhängigkeiten sind GNU Make, GCC/binutils, `curl`, `xorriso` und QEMU.
 
 ```sh
 make
@@ -147,45 +186,30 @@ make run
 make test
 ```
 
-Die vollständige Acceptance-Suite führt echte QEMU-Boots für den normalen Kernel sowie absichtliche echte Divide-Error-, Page-Fault-, den vorhandenen dedizierten Ring-3- und den dedizierten Syscall-Modus aus. Sie erhält alle bisherigen PMM-, VMM-, Heap-, IRQ-, Cooperative-Task-, Timer-Preemption-, Prozess-/Adressraum- und CR3-Wechsel-Prüfungen. Der Ring-3-Modus beweist separat GDT/TSS-Zustand, User-Page-Permissions, effektiv supervisor-only Shared Higher Half, echten `iretq`-Eintritt nach CPL3, echten durch `cli` erzeugten #GP, Erhalt der Hardware-User-RSP/SS-Werte und den TSS-RSP0-Kernelstack-Wechsel. Der Syscall-Modus beweist MSR-Konfiguration, Nutzung des vertrauenswürdigen Syscall-Stacks, GETPID, begrenztes sicheres User-Copy für DEBUG_WRITE, negative Pointer-/Range-/Fehlerfälle, mehrere echte `SYSCALL`/`SYSRETQ`-Roundtrips, Erhalt von User-RSP und Callee-Saved-Registern sowie abschließend CPL3-`cli` -> #GP über TSS.RSP0.
+`make run` ist der historische/headless Bootstrap-Pfad und nicht die beste Demonstration des vollständigen grafischen Desktops. Die grafischen Milestones verwenden eigene QEMU-Acceptance-/Bundle-Pfade; siehe [`docs/RUNNING-M36.md`](docs/RUNNING-M36.md) sowie die aktuellen Milestone-Einträge in [`docs/roadmap.md`](docs/roadmap.md).
 
-Ein erfolgreicher normaler Lauf endet mit:
+Die permanente CI hält frühere Milestone-Beweise am Leben, während neue Fähigkeiten hinzukommen. Dazu gehören Host-/Modelltests, Sanitizer wo sinnvoll, echte QEMU-Hardwarepfade, Prozess-/Ressourcen-Cleanup sowie exakte Framebuffer-Evidence für grafische Milestones.
 
-```text
-BoringKernel process/address-space test passed.
-BoringKernel QEMU boot verification passed.
-```
+## Roadmap
 
-Ein erfolgreicher Ring-3-Lauf endet mit:
+Das Projekt entwickelt sich in kleinen semantischen Milestones. Ein Milestone gilt nicht allein deshalb als fertig, weil der Code baut: fokussierte Acceptance, geerbte Regressionen, Semantic Freeze, runtime-neutraler Versions-Closeout, Exact-Head-CI, guarded Squash Merge und die Verifikation des neuen `main` gehören zur Entwicklungsdisziplin.
 
-```text
-BoringKernel Ring 3 test passed.
-BoringKernel Ring 3 verification passed.
-```
+Zum Zeitpunkt dieser README-Aktualisierung ist **M51 abgeschlossen**. Der nächste moderne Input-Schritt ist **M52: echter xHCI-HID-Interrupt-IN-Report-Transport**. Danach sollen USB-HID-Reports in die normale Inputqueue gelangen, ein i8042-unabhängiger Desktop bewiesen werden und anschließend ein bewusst sicherer physischer PC-/Live-Boot-Pfad folgen.
 
-Ein erfolgreicher Syscall-Lauf endet mit:
+Für den exakten aktuellen Milestone-Stand gilt [`docs/roadmap.md`](docs/roadmap.md), nicht eine geplante Funktion aus dieser README.
 
-```text
-BoringKernel syscall boundary test passed.
-BoringKernel syscall verification passed.
-```
+## BoringWM
 
-Siehe [`docs/architecture.md`](docs/architecture.md), [`docs/interrupts.md`](docs/interrupts.md), [`docs/tasks.md`](docs/tasks.md), [`docs/processes.md`](docs/processes.md), [`docs/syscalls.md`](docs/syscalls.md), [`docs/boot.md`](docs/boot.md), [`docs/roadmap.md`](docs/roadmap.md) und [`docs/boringfs.md`](docs/boringfs.md).
+BoringOS enthält eine eigene native C-Implementierung von BoringWM für den BoringOS-Display-/IPC-Stack.
 
-## Natives grafisches Terminal (M36)
-
-M36 implementiert ein natives C-Ring3-Terminal oberhalb des eingefrorenen M35-Display-/WM-Stacks. Ein echter Super+Return-Pfad lädt `/bin/boring-terminal` aus dem vermessenen BoringFS, verbindet es über begrenzte PTY-Deskriptoren mit einer separat geschedulten `boring-shell` und rendert den echten Prompt sowie die Ausgabe von `/bin/boringfetch`. Zwei aktive Terminals beweisen Fokus- und Input-Isolation; Super+Q, Terminal-Tod und Shell-Tod beweisen deterministisches Peer-Cleanup, ohne den überlebenden Client zu stören. Alle M0–M35-Gates bleiben permanent.
-
-Siehe [M36-Paket- und Acceptance-Anleitung](docs/RUNNING-M36.md), den [generischen Startup-Stack-Nachweis](docs/process-startup-stack.md) und den [Semantic-Freeze-Datensatz](docs/roadmap.md). Die M37-Desktop-Startintegration wurde nicht begonnen.
-
-Das bestehende Repository [dennishilk/boringwm](https://github.com/dennishilk/boringwm) bleibt ein separates Rust/X11-Projekt und eine externe Verhaltensreferenz. Es ist weder Code-Abhängigkeit noch Submodul von BoringOS.
+Das separate Repository [`dennishilk/boringwm`](https://github.com/dennishilk/boringwm) bleibt das ursprüngliche Rust-/X11-Projekt und eine Verhaltensreferenz. Es ist **keine** BoringOS-Abhängigkeit und kein Submodule.
 
 ## Prinzipien
 
-BoringOS soll kleine Module, explizite Schnittstellen, vorhersehbares Verhalten, lesbaren C-Code, test- und auditierbare Komponenten, strikte Diagnostik, minimale Abhängigkeiten, dokumentierte Architekturentscheidungen und ehrliche Aussagen über den tatsächlichen Funktionsumfang bevorzugen.
+BoringOS bevorzugt kleine Module, explizite Schnittstellen, vorhersehbares Verhalten, lesbares C, begrenzte Datenstrukturen, testbare/auditierbare Komponenten, strikte Diagnostik, minimale Abhängigkeiten und präzise Aussagen darüber, was funktioniert und was nicht.
 
-Das Projekt soll für einen einzelnen entschlossenen Entwickler verständlich bleiben.
+Das Projekt soll für einen entschlossenen einzelnen Entwickler verständlich bleiben.
 
 ## Lizenz
 
-BoringOS steht unter der [MIT-Lizenz](LICENSE).
+BoringOS steht unter der [MIT License](LICENSE).
