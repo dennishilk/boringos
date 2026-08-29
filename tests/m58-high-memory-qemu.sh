@@ -15,7 +15,7 @@ truncate -s 32G "$RAM_FILE"
 trap 'rm -f "$RAM_FILE"' EXIT INT TERM
 timeout 50s "$QEMU_BIN" \
     -M q35,memory-backend=m58ram -m 32G \
-    -object memory-backend-file,id=m58ram,size=32G,mem-path="$RAM_FILE",share=off,prealloc=off \
+    -object memory-backend-file,id=m58ram,size=32G,mem-path="$RAM_FILE",share=on,prealloc=off \
     -cdrom build/boringos.iso -boot d \
     -display none -serial "file:$LOG" -monitor none \
     -no-reboot -no-shutdown || true
