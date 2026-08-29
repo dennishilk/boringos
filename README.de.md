@@ -17,7 +17,7 @@ Der aktuelle Main-Stand ist:
 BoringKernel 0.0.53-dev
 ```
 
-Die Entwicklung ist bis einschließlich **Milestone 51** abgeschlossen.
+Die Entwicklung ist bis einschließlich **Milestone 52** abgeschlossen.
 
 BoringOS ist längst nicht mehr nur ein früher Boot-Kernel: Unter QEMU bootet inzwischen eine echte native Ring-3-Desktop-Session mit eigenem Display-Service, Tiling-Window-Manager, grafischem Terminal, Shell, Editor, Dateimanager, persistentem BoringFS, Hardware-Inventar und einem wachsenden BoringOS-eigenen xHCI-/USB-Stack.
 
@@ -69,7 +69,7 @@ Zu den implementierten und verifizierten Grundlagen gehören:
 - nativer C-**BoringWM** mit begrenztem Tiling, Fokus, Reorder und Lifecycle-Behandlung
 - natives grafisches **BoringTerminal**, **BoringEdit**, **BoringFiles**, `/bin/boringfetch` und `/bin/cat`
 - echtes CPUID-, PCI- und SMBIOS-Plattforminventar, das `boringfetch` ohne erfundene Hardwarewerte anzeigt
-- begrenztes xHCI-Controller-Ownership, USB-Geräteadressierung, Descriptor Discovery, `SET_CONFIGURATION` und HID-Interrupt-IN-Endpoint-Setup bis Milestone 51
+- begrenztes xHCI-Controller-Ownership, USB-Geräteadressierung, Descriptor Discovery, `SET_CONFIGURATION`, HID-Interrupt-IN-Endpoint-Setup, echte Interrupt-IN-Transfer-Events und begrenzte HID-Report-Decodierung bis Milestone 52
 
 ## Nativer Desktop
 
@@ -112,7 +112,7 @@ Das erste physische PC-Ziel bleibt ein begrenzter UEFI-Bring-up: Limine → Bori
 
 Der moderne USB-Pfad ist inzwischen deutlich weiter als reine PCI-Erkennung.
 
-Milestones 48–51 liefern aktuell:
+Milestones 48–52 liefern aktuell:
 
 ```text
 xHCI PCI Discovery / BAR- + MMIO-Validierung
@@ -136,9 +136,13 @@ SET_CONFIGURATION
 aus Deskriptoren abgeleitete HID-Interrupt-IN-Endpoint-Contexts
         ↓
 Configure Endpoint
+        ↓
+PMM-eigene Report-DMA-Puffer + Normal TRBs
+        ↓
+echte Transfer Events + begrenzte HID-Report-Decodierung
 ```
 
-Die aktuelle Grenze ist bewusst eng: **M51 konfiguriert die echten HID-Interrupt-IN-Endpoints, sendet aber noch keine wiederkehrenden HID-Report-Transfers und speist USB-Tastatur-/Maus-Reports noch nicht in die normale BoringOS-Inputqueue ein.** Der normale grafische Desktop verwendet deshalb weiterhin den bereits bewiesenen Legacy-i8042-/PS/2-Inputpfad.
+Die aktuelle Grenze ist bewusst eng: **M52 empfängt und decodiert echte USB-Tastatur- und QEMU-Absolute-Tablet-Reports erst nach echten xHCI Transfer Events, speist diese decodierten Reports aber noch nicht in die normale BoringOS-Inputqueue ein.** Der normale grafische Desktop verwendet deshalb weiterhin den bereits bewiesenen Legacy-i8042-/PS/2-Inputpfad.
 
 USB-Hubs und USB-Massenspeicher werden noch nicht unterstützt.
 
@@ -157,7 +161,7 @@ Die verifizierte persistente QEMU-Root verwendet derzeit modernen VirtIO-PCI-Blo
 | Verwalteter RAM | aktuell auf 4 GiB begrenzt; größere gültige Maps werden akzeptiert |
 | Grafik | Firmware-/Limine-Framebuffer + Software-Compositor; keine native AMD/NVIDIA/Intel-GPU-Beschleunigung |
 | Desktop-Input | nativer i8042-/PS/2-Pfad |
-| USB | xHCI-Geräte adressiert, Deskriptoren gelesen, HID-Endpoints konfiguriert; Report-Transport/Input-Integration noch offen |
+| USB | xHCI-Geräte adressiert/konfiguriert; echter HID-Interrupt-IN-Report-Transport + begrenzte Decodierung bewiesen; Inputqueue-Integration noch offen |
 | Persistente Root | VirtIO Block + BoringFS |
 | AHCI / NVMe | nicht implementiert |
 | Networking | nicht implementiert |
@@ -194,7 +198,7 @@ Die permanente CI hält frühere Milestone-Beweise am Leben, während neue Fähi
 
 Das Projekt entwickelt sich in kleinen semantischen Milestones. Ein Milestone gilt nicht allein deshalb als fertig, weil der Code baut: fokussierte Acceptance, geerbte Regressionen, Semantic Freeze, runtime-neutraler Versions-Closeout, Exact-Head-CI, guarded Squash Merge und die Verifikation des neuen `main` gehören zur Entwicklungsdisziplin.
 
-Zum Zeitpunkt dieser README-Aktualisierung ist **M51 abgeschlossen**. Der nächste moderne Input-Schritt ist **M52: echter xHCI-HID-Interrupt-IN-Report-Transport**. Danach sollen USB-HID-Reports in die normale Inputqueue gelangen, ein i8042-unabhängiger Desktop bewiesen werden und anschließend ein bewusst sicherer physischer PC-/Live-Boot-Pfad folgen.
+Zum Zeitpunkt dieser README-Aktualisierung ist **M52 abgeschlossen**. Der nächste moderne Input-Schritt ist **M53: USB-HID-Integration in die bestehende BoringOS-Inputqueue**. Ein späterer Milestone kann anschließend den vollständigen grafischen Desktop ohne i8042/PS/2 beweisen, bevor der bewusst sichere physische PC-/Live-Boot-Pfad weitergeht.
 
 Für den exakten aktuellen Milestone-Stand gilt [`docs/roadmap.md`](docs/roadmap.md), nicht eine geplante Funktion aus dieser README.
 

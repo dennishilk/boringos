@@ -107,10 +107,11 @@ M52 does not add:
 
 The next milestone may integrate these already decoded real USB reports with the existing source-independent BoringOS input queue. That work is outside the M52 Semantic Freeze.
 
-
 ## Semantic Freeze and closeout
 
 Runtime implementation freeze: `bc00930901c218cb6409a686a19a898d20233ebb`, tree `d25179a63df620741606ecfb24381813921db12c`. All 17 PR workflows on that exact runtime head were terminal SUCCESS. After the freeze, only M52 documentation and the established active-version witnesses may change.
+
+Runtime-neutral closeout commit: `7e8baf74132be24ca7f55c69a383d225c50e1ead`, tree `aa968b812b01fc99682a78e57936d4506100ccf2`. That commit changes only active version witnesses plus M52 closeout documentation and removes the transient closeout helper; M52 runtime semantics remain frozen.
 
 Active version after runtime-neutral closeout: **BoringKernel 0.0.53-dev**.
 No M53 implementation is included.
