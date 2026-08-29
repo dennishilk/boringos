@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.53-dev
+BoringKernel 0.0.54-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1577,3 +1577,13 @@ Semantic Freeze: `bc00930901c218cb6409a686a19a898d20233ebb`, tree `d25179a63df62
 
 Active version after runtime-neutral closeout: **BoringKernel 0.0.53-dev**. No M53 implementation is included.
 See [m52-xhci-hid-reports.md](m52-xhci-hid-reports.md).
+
+
+## Milestone 53: USB HID integration with the existing input queue — COMPLETE, Semantic Frozen
+
+M53 connects the real xHCI HID Interrupt-IN completion and bounded decoder path proven by M52 to the existing source-independent BoringOS input producers, canonical kernel input queue and existing INPUT_READ/event semantics. It does not create a parallel input stack. Keyboard key/modifier transitions, pointer movement and pointer-button transitions enter through the same queue contract already used by the established input subsystem.
+
+Semantic Freeze: `8063bea362f5191a23f3a6f6465d7ec55ad3e084`, tree `50031e31bd200e93fb36b75e3abe50fdf36b6ff0`. Focused real-QEMU acceptance run `33234820597` used `q35,i8042=off` with `qemu-xhci`, `usb-kbd` and `usb-tablet`; it proved 10 real USB Transfer completions, 10 decoded HID reports and exactly seven canonical input events with zero drops and final modifiers clear. The required ordering was Left Super down, A down, tablet movement 2345 x 3456, left button down, A up, left button up, Left Super up. Neutral HID reports may increase transport-completion count within the bounded acceptance, but do not relax the exact queue-event sequence or final state. All 18 PR workflows on the frozen runtime head were terminal SUCCESS before closeout, including full Boot #601.
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.54-dev**. No M54 implementation is included. The full i8042/PS2-free graphical desktop proof remains outside M53.
+See [m53-usb-hid-input-queue.md](m53-usb-hid-input-queue.md).
