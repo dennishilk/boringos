@@ -1595,7 +1595,7 @@ M54 runs the complete native Ring-3 graphical desktop on the existing xHCI keybo
 
 Semantic Freeze: `e57882401bd134a8a6ca55ac89377dbfb436dcf1`, tree `f562456d1f311e437b275476c517ff312ba6cc8e`. Focused real-QEMU acceptance run `33245535358` used `q35,i8042=off`, `qemu-xhci`, `usb-kbd` and `usb-tablet`; it proved real movement, left-button down/up, USB-keyboard `Super+Return`, terminal/PTY/shell startup, boringfetch, two-terminal focus/input, screenshots at the real USB cursor position, orderly close and complete desktop-resource drain. All 19 PR workflows on the frozen runtime head were terminal SUCCESS before closeout, including complete boot run `33245535328`.
 
-Active version after runtime-neutral closeout: **BoringKernel 0.0.56-dev**. No M55 implementation is included.
+Active version after runtime-neutral closeout: **BoringKernel 0.0.55-dev**. No M55 implementation is included.
 See [m54-usb-only-desktop.md](m54-usb-only-desktop.md).
 
 
