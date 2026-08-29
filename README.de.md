@@ -14,10 +14,10 @@ Es ist **keine Linux-Distribution**, **kein BSD** und **basiert nicht auf dem Ke
 Der aktuelle Main-Stand ist:
 
 ```text
-BoringKernel 0.0.58-dev
+BoringKernel 0.0.59-dev
 ```
 
-Die Entwicklung ist bis einschließlich **Milestone 57** abgeschlossen.
+Die Entwicklung ist bis einschließlich **Milestone 58** abgeschlossen.
 
 BoringOS ist längst nicht mehr nur ein früher Boot-Kernel: Unter QEMU bootet inzwischen eine echte native Ring-3-Desktop-Session mit eigenem Display-Service, Tiling-Window-Manager, grafischem Terminal, Shell, Editor, Dateimanager, persistentem BoringFS, Hardware-Inventar und einem wachsenden BoringOS-eigenen xHCI-/USB-Stack.
 
@@ -104,7 +104,7 @@ INFO    → begrenzter versionierter Userspace-Snapshot
 
 `boringfetch` verwendet diese Kernel-eigenen Werte. Unter QEMU zeigt es deshalb die emulierte QEMU-Hardware; auf echter Hardware soll es später die tatsächliche Maschine beschreiben.
 
-Milestone 47 hat eine ehrliche Real-Hardware-Readiness-Grenze geschaffen. Gültige Memory Maps, die größer als die feste PMM-Kapazität sind, brechen den Boot nicht mehr ab. Der aktuelle PMM verwaltet aber weiterhin höchstens **1.048.576 4-KiB-Frames = 4 GiB**. Darüber hinaus vorhandener nutzbarer RAM wird als gecappt gemeldet und vorerst nicht verwaltet.
+Milestone 58 entfernt die alte ~4-GiB-Entwicklungsgrenze des PMM für das begrenzte Referenzziel. Der bestehende PMM besitzt jetzt Kapazität für **8.388.608 4-KiB-Frames = 32 GiB**, und eine reale QEMU-`-m 32G`-Acceptance beweist nutzbaren Speicher oberhalb 4 GiB sowie einen verwalteten physischen Frame bei `0x0000000100000000`. Maps jenseits der konfigurierten 32-GiB-PMM-Kapazität bleiben bewusst begrenzt/gecappt; daraus wird kein beliebig skalierender Memory-Support abgeleitet.
 
 Das erste physische PC-Ziel bleibt ein begrenzter UEFI-Bring-up: Limine → BoringKernel → Firmware-Framebuffer → Hardware-Inventar → nativer Desktop. Interne Datenträger sollen nicht als beschreibbar behandelt werden, solange dafür kein ausdrücklich unterstützter Storage-Pfad existiert.
 
@@ -158,7 +158,7 @@ Die verifizierte persistente QEMU-Root kann modernen VirtIO-PCI-Block-Storage od
 | --- | --- |
 | Primär verifizierte Plattform | QEMU x86_64 |
 | Physische Hardware | Readiness Candidate; noch nicht physisch verifiziert |
-| Verwalteter RAM | aktuell auf 4 GiB begrenzt; größere gültige Maps werden akzeptiert |
+| Verwalteter RAM | begrenzte 32-GiB-PMM-Kapazität; reale 32-GiB-QEMU-Maps und Frames >= 4 GiB sind verifiziert |
 | Grafik | Firmware-/Limine-Framebuffer + Software-Compositor; keine native AMD/NVIDIA/Intel-GPU-Beschleunigung |
 | Desktop-Input | nativer i8042-/PS/2-Pfad |
 | USB | xHCI-Geräte adressiert/konfiguriert; echter HID-Interrupt-IN-Report-Transport + begrenzte Decodierung bewiesen; Inputqueue-Integration noch offen |
@@ -198,7 +198,7 @@ Die permanente CI hält frühere Milestone-Beweise am Leben, während neue Fähi
 
 Das Projekt entwickelt sich in kleinen semantischen Milestones. Ein Milestone gilt nicht allein deshalb als fertig, weil der Code baut: fokussierte Acceptance, geerbte Regressionen, Semantic Freeze, runtime-neutraler Versions-Closeout, Exact-Head-CI, guarded Squash Merge und die Verifikation des neuen `main` gehören zur Entwicklungsdisziplin.
 
-Zum Zeitpunkt dieser README-Aktualisierung ist **M52 abgeschlossen**. Der nächste moderne Input-Schritt ist **M53: USB-HID-Integration in die bestehende BoringOS-Inputqueue**. Ein späterer Milestone kann anschließend den vollständigen grafischen Desktop ohne i8042/PS/2 beweisen, bevor der bewusst sichere physische PC-/Live-Boot-Pfad weitergeht.
+Zum Zeitpunkt dieser README-Aktualisierung ist **M58 abgeschlossen** und der aktive Entwicklungsbanner lautet **BoringKernel 0.0.59-dev**. M59 ist nicht Teil dieses Closeouts; der exakte nächste Milestone wird erst durch die Roadmap festgelegt und hier nicht begonnen.
 
 Für den exakten aktuellen Milestone-Stand gilt [`docs/roadmap.md`](docs/roadmap.md), nicht eine geplante Funktion aus dieser README.
 

@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.58-dev
+BoringKernel 0.0.59-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1643,3 +1643,55 @@ SUCCESS on the frozen runtime head, including complete boot run `33252218082`
 Active version after runtime-neutral closeout: **BoringKernel 0.0.58-dev**. No
 M58 implementation is included.
 See [m57-ahci-persistent-root.md](m57-ahci-persistent-root.md).
+
+
+
+## Milestone 58: bounded high-memory PMM / >4 GiB physical memory — COMPLETE, Semantic Frozen
+
+M58 extends the existing bounded 4-KiB PMM without replacing its architecture.
+The static capacity is now 8,388,608 frames (32 GiB) with a derived 1-MiB bitmap,
+64-bit frame/address/accounting state, checked region arithmetic and explicit
+bitmap/index bounds. A small `pmm_alloc_frame_in_range()` constraint provides the
+minimum-address high-frame proof and the low-address DMA guard needed by existing
+device paths; the ordinary allocator remains the same deterministic bounded PMM.
+
+The VMM/HHDM path already handled physical addresses above 4 GiB with checked
+64-bit page-table and HHDM arithmetic, so M58 requires no VMM runtime change.
+AHCI preserves its existing `CAP.S64A` behavior: 64-bit-capable controllers may
+use the full PMM range, while non-S64A DMA allocations are constrained below
+4 GiB. The existing xHCI path is conservatively constrained below 4 GiB rather
+than assuming an unproven 64-bit DMA capability. No DMA subsystem rewrite was
+introduced.
+
+Host PMM acceptance covers exactly below/at/above 4 GiB, the 32-GiB boundary,
+the last valid bitmap frame, one-past rejection, region accumulation, malformed
+and overflowing ranges, cap behavior beyond the configured maximum, constrained
+allocation, invalid/unaligned/unusable free and double-free rejection under the
+existing sanitizer architecture.
+
+Real QEMU acceptance run `33258288429` booted q35 with `-m 32G` using a shared
+sparse file-backed main-RAM backend solely to fit the GitHub hosted runner. The
+guest still receives a real 32-GiB physical memory map. Exact runtime evidence:
+
+```text
+M58 PMM usable bytes: 34354872320
+M58 PMM usable frames: 8387420
+M58 high frame: 0x0000000100000000
+M58 high frame >= 4GiB: PASS
+M58 high frame write/read: PASS
+M58 neighboring frame isolation: PASS
+M58 high frame free: PASS
+M58 accounting: PASS
+M58 cleanup: PASS
+M58 HIGH MEMORY TEST PASSED
+```
+
+Semantic Freeze: `f6c6feff137f4ab36c41d26a5f14f7d6391dee19`, tree
+`70937b4b5b43c0e87ee016175302dbba03f62955`. All 23 exact feature-head workflow
+runs were terminal SUCCESS before closeout, including M54 USB-only graphical
+desktop, M57 writable AHCI persistent root, M58 focused acceptance and complete
+Boot #668 / `33258288413`.
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.59-dev**. No
+M59 implementation is included.
+See [m58-high-memory-pmm.md](m58-high-memory-pmm.md).
