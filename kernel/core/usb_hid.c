@@ -3,6 +3,8 @@
 
 #if !__STDC_HOSTED__
 #include <boring/cpu.h>
+#include <boring/event_syscall.h>
+#include <boring/input.h>
 #include <boring/pmm.h>
 #include <boring/vmm.h>
 #endif
@@ -334,8 +336,125 @@ static bool m52_submit_endpoint(volatile uint8_t *mmio,
     return true;
 }
 
+static uint32_t m53_usage_keycode(uint8_t usage) {
+    if ((usage >= 0x04U) && (usage <= 0x1dU)) {
+        return (uint32_t)BORING_KEY_A + (uint32_t)(usage - 0x04U);
+    }
+    switch (usage) {
+        case 0x1eU: return BORING_KEY_1;
+        case 0x1fU: return BORING_KEY_2;
+        case 0x20U: return BORING_KEY_3;
+        case 0x21U: return BORING_KEY_4;
+        case 0x22U: return BORING_KEY_5;
+        case 0x23U: return BORING_KEY_6;
+        case 0x24U: return BORING_KEY_7;
+        case 0x25U: return BORING_KEY_8;
+        case 0x26U: return BORING_KEY_9;
+        case 0x27U: return BORING_KEY_0;
+        case 0x28U: return BORING_KEY_ENTER;
+        case 0x29U: return BORING_KEY_ESCAPE;
+        case 0x2aU: return BORING_KEY_BACKSPACE;
+        case 0x2bU: return BORING_KEY_TAB;
+        case 0x2cU: return BORING_KEY_SPACE;
+        case 0x2dU: return BORING_KEY_MINUS;
+        case 0x2eU: return BORING_KEY_EQUAL;
+        case 0x2fU: return BORING_KEY_LEFT_BRACKET;
+        case 0x30U: return BORING_KEY_RIGHT_BRACKET;
+        case 0x31U: return BORING_KEY_BACKSLASH;
+        case 0x33U: return BORING_KEY_SEMICOLON;
+        case 0x34U: return BORING_KEY_APOSTROPHE;
+        case 0x35U: return BORING_KEY_GRAVE;
+        case 0x36U: return BORING_KEY_COMMA;
+        case 0x37U: return BORING_KEY_DOT;
+        case 0x38U: return BORING_KEY_SLASH;
+        case 0x3aU: return BORING_KEY_F1;
+        case 0x3bU: return BORING_KEY_F2;
+        case 0x3cU: return BORING_KEY_F3;
+        case 0x3dU: return BORING_KEY_F4;
+        case 0x3eU: return BORING_KEY_F5;
+        case 0x3fU: return BORING_KEY_F6;
+        case 0x40U: return BORING_KEY_F7;
+        case 0x41U: return BORING_KEY_F8;
+        case 0x42U: return BORING_KEY_F9;
+        case 0x43U: return BORING_KEY_F10;
+        case 0x44U: return BORING_KEY_F11;
+        case 0x45U: return BORING_KEY_F12;
+        case 0x49U: return BORING_KEY_INSERT;
+        case 0x4aU: return BORING_KEY_HOME;
+        case 0x4bU: return BORING_KEY_PAGE_UP;
+        case 0x4cU: return BORING_KEY_DELETE;
+        case 0x4dU: return BORING_KEY_END;
+        case 0x4eU: return BORING_KEY_PAGE_DOWN;
+        case 0x4fU: return BORING_KEY_RIGHT;
+        case 0x50U: return BORING_KEY_LEFT;
+        case 0x51U: return BORING_KEY_DOWN;
+        case 0x52U: return BORING_KEY_UP;
+        default: return BORING_KEY_NONE;
+    }
+}
+
+static uint32_t m53_modifier_keycode(uint8_t bit) {
+    switch (bit) {
+        case 0U: return BORING_KEY_LEFT_CTRL;
+        case 1U: return BORING_KEY_LEFT_SHIFT;
+        case 2U: return BORING_KEY_LEFT_ALT;
+        case 3U: return BORING_KEY_LEFT_SUPER;
+        case 4U: return BORING_KEY_RIGHT_CTRL;
+        case 5U: return BORING_KEY_RIGHT_SHIFT;
+        case 6U: return BORING_KEY_RIGHT_ALT;
+        case 7U: return BORING_KEY_RIGHT_SUPER;
+        default: return BORING_KEY_NONE;
+    }
+}
+
+static void m53_publish_key(uint32_t code, bool down) {
+    if ((code != (uint32_t)BORING_KEY_NONE) &&
+        boring_input_submit_key(code, down)) {
+        boring_event_input_irq();
+    }
+}
+
+static void m53_publish_modifier_changes(uint8_t before, uint8_t after,
+                                         bool down) {
+    uint8_t bit;
+    for (bit = 0U; bit < 8U; ++bit) {
+        const uint8_t mask = (uint8_t)(1U << bit);
+        const bool was_down = (before & mask) != 0U;
+        const bool is_down = (after & mask) != 0U;
+        if ((down && !was_down && is_down) ||
+            (!down && was_down && !is_down)) {
+            m53_publish_key(m53_modifier_keycode(bit), down);
+        }
+    }
+}
+
+static void m53_publish_pointer_buttons(uint8_t before, uint8_t after) {
+    static const uint8_t bits[3] = { 0x01U, 0x02U, 0x04U };
+    static const uint32_t buttons[3] = {
+        BORING_MOUSE_BUTTON_LEFT,
+        BORING_MOUSE_BUTTON_RIGHT,
+        BORING_MOUSE_BUTTON_MIDDLE
+    };
+    size_t index;
+    for (index = 0U; index < 3U; ++index) {
+        if (((before ^ after) & bits[index]) != 0U &&
+            boring_input_submit_mouse_button(
+                buttons[index], (after & bits[index]) != 0U)) {
+            boring_event_input_irq();
+        }
+    }
+}
+
+static void m53_publish_pointer_move(int32_t dx, int32_t dy) {
+    if (((dx != 0) || (dy != 0)) &&
+        boring_input_submit_mouse_move(dx, dy)) {
+        boring_event_input_irq();
+    }
+}
+
 static bool m52_decode_report(struct xhci_addressed_device *device,
-                              uint8_t endpoint_index, const uint8_t *report,
+                              uint8_t endpoint_index,
+                              const uint8_t *report,
                               uint16_t length) {
     struct xhci_hid_endpoint_runtime *runtime =
         &device->hid_runtime[endpoint_index];
@@ -343,6 +462,7 @@ static bool m52_decode_report(struct xhci_addressed_device *device,
         &device->hid_configuration.endpoints[endpoint_index];
     if (descriptor->protocol == 1U) {
         struct usb_hid_key_transition transitions[USB_HID_BOOT_KEYS * 2U];
+        const uint8_t previous_modifiers = runtime->keyboard_state.modifiers;
         size_t count = 0U;
         uint8_t modifiers = 0U;
         size_t index;
@@ -352,7 +472,6 @@ static bool m52_decode_report(struct xhci_addressed_device *device,
                                      &modifiers)) {
             return false;
         }
-        (void)modifiers;
         for (index = 0U; index < count; ++index) {
             runtime->last_key_usage = transitions[index].usage;
             runtime->last_key_down = transitions[index].down;
@@ -364,8 +483,23 @@ static bool m52_decode_report(struct xhci_addressed_device *device,
                 ++runtime->key_releases;
             }
         }
+        for (index = 0U; index < count; ++index) {
+            if (!transitions[index].down) {
+                m53_publish_key(m53_usage_keycode(transitions[index].usage),
+                                false);
+            }
+        }
+        m53_publish_modifier_changes(previous_modifiers, modifiers, false);
+        m53_publish_modifier_changes(previous_modifiers, modifiers, true);
+        for (index = 0U; index < count; ++index) {
+            if (transitions[index].down) {
+                m53_publish_key(m53_usage_keycode(transitions[index].usage),
+                                true);
+            }
+        }
     } else if (descriptor->protocol == 2U) {
         struct usb_hid_mouse_report decoded;
+        const uint8_t previous_buttons = runtime->last_pointer_buttons;
         if (!usb_hid_mouse_decode(report, (size_t)length, &decoded) ||
             (runtime->pointer_reports == UINT32_MAX)) {
             return false;
@@ -375,8 +509,14 @@ static bool m52_decode_report(struct xhci_addressed_device *device,
         runtime->last_pointer_buttons = decoded.buttons;
         runtime->pointer_valid = true;
         ++runtime->pointer_reports;
+        m53_publish_pointer_move((int32_t)decoded.dx, (int32_t)decoded.dy);
+        m53_publish_pointer_buttons(previous_buttons, decoded.buttons);
     } else if (descriptor->protocol == 0U) {
         struct usb_hid_absolute_tablet_report decoded;
+        const bool previous_valid = runtime->pointer_valid;
+        const uint16_t previous_x = runtime->last_pointer_x;
+        const uint16_t previous_y = runtime->last_pointer_y;
+        const uint8_t previous_buttons = runtime->last_pointer_buttons;
         if (!usb_hid_absolute_tablet_decode(report, (size_t)length, &decoded) ||
             (runtime->pointer_reports == UINT32_MAX)) {
             return false;
@@ -386,6 +526,11 @@ static bool m52_decode_report(struct xhci_addressed_device *device,
         runtime->last_pointer_buttons = decoded.buttons;
         runtime->pointer_valid = true;
         ++runtime->pointer_reports;
+        if (previous_valid) {
+            m53_publish_pointer_move((int32_t)decoded.x - (int32_t)previous_x,
+                                     (int32_t)decoded.y - (int32_t)previous_y);
+        }
+        m53_publish_pointer_buttons(previous_buttons, decoded.buttons);
     } else {
         return false;
     }

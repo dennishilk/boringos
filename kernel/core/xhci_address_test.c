@@ -2,13 +2,175 @@
 #include <stdint.h>
 
 #include <boring/cpu.h>
+#include <boring/input.h>
 #include <boring/serial.h>
 #include <boring/xhci.h>
 #include <boring/xhci_address_test.h>
 
 #define M49_EXPECTED_ATTACHED_DEVICES 2U
 
-#ifdef BORING_M52_HID_ACCEPTANCE
+#ifdef BORING_M53_INPUT_ACCEPTANCE
+
+#define M53_INPUT_OWNER_PID 53ULL
+#define M53_EXPECTED_COMPLETIONS 8U
+#define M53_EXPECTED_EVENTS 7U
+
+static void fail(const char *reason) __attribute__((noreturn));
+static void fail(const char *reason) {
+    serial_write_string("M53 USB input queue FAILED: ");
+    serial_write_string(reason);
+    serial_write_string("\n");
+    x86_64_halt_forever();
+}
+
+static bool m53_event_matches(const struct boring_input_event *event,
+                              uint32_t type, uint32_t code,
+                              int32_t value1, int32_t value2,
+                              uint32_t modifiers) {
+    return (event != NULL) && (event->type == type) &&
+           (event->code == code) && (event->value1 == value1) &&
+           (event->value2 == value2) &&
+           (event->modifiers == modifiers) && (event->flags == 0U);
+}
+
+static void m53_print_i32(int32_t value) {
+    const int64_t wide = (int64_t)value;
+    if (wide < 0) {
+        serial_write_string("-");
+        serial_write_u64((uint64_t)(-wide));
+    } else {
+        serial_write_u64((uint64_t)wide);
+    }
+}
+
+static void m53_print_event(size_t index,
+                            const struct boring_input_event *event) {
+    serial_write_string("M53 queue event ");
+    serial_write_u64((uint64_t)index);
+    serial_write_string(" type=");
+    serial_write_u64((uint64_t)event->type);
+    serial_write_string(" code=");
+    serial_write_u64((uint64_t)event->code);
+    serial_write_string(" value1=");
+    m53_print_i32(event->value1);
+    serial_write_string(" value2=");
+    m53_print_i32(event->value2);
+    serial_write_string(" modifiers=");
+    serial_write_u64((uint64_t)event->modifiers);
+    serial_write_string("\n");
+}
+
+void xhci_address_test_run(void) {
+    struct xhci_state state;
+    struct boring_input_stats input_stats;
+    struct boring_input_event events[BORING_INPUT_READ_MAX];
+    size_t event_count = 0U;
+    uint32_t completed = 0U;
+    uint32_t decoded = 0U;
+    uint8_t device_index;
+    size_t index;
+
+    if (!boring_input_init() ||
+        (boring_input_claim(M53_INPUT_OWNER_PID) != BORING_INPUT_RESULT_OK)) {
+        fail("canonical input ownership");
+    }
+    if (!xhci_init(&state)) { fail("controller initialization"); }
+    if (!xhci_address_connected(&state)) { fail("M49 addressing"); }
+    if ((state.addressed_count != M49_EXPECTED_ATTACHED_DEVICES) ||
+        state.addressing_truncated) {
+        fail("M49 addressed prerequisite");
+    }
+    if (!xhci_discover_descriptors(&state)) { fail("M50 descriptors"); }
+    if (!xhci_configure_hid_devices(&state)) { fail("M51 configuration"); }
+
+    serial_write_string("M53 USB input queue ready; inject real USB input now.\n");
+    if (!xhci_poll_hid_reports(&state, M53_EXPECTED_COMPLETIONS)) {
+        fail("real Interrupt-IN transfer completion");
+    }
+
+    for (device_index = 0U; device_index < state.addressed_count;
+         ++device_index) {
+        const struct xhci_addressed_device *device =
+            &state.addressed[device_index];
+        uint8_t endpoint_index;
+        for (endpoint_index = 0U;
+             endpoint_index < device->hid_configuration.endpoint_count;
+             ++endpoint_index) {
+            const struct xhci_hid_endpoint_runtime *runtime =
+                &device->hid_runtime[endpoint_index];
+            if ((UINT32_MAX - completed < runtime->completed_transfers) ||
+                (UINT32_MAX - decoded < runtime->decoded_reports)) {
+                fail("transport counter overflow");
+            }
+            completed += runtime->completed_transfers;
+            decoded += runtime->decoded_reports;
+        }
+    }
+    if ((completed != M53_EXPECTED_COMPLETIONS) ||
+        (decoded != M53_EXPECTED_COMPLETIONS)) {
+        fail("real M52 transport accounting");
+    }
+    if (!boring_input_get_stats(&input_stats) || !input_stats.initialized ||
+        !input_stats.owned ||
+        (input_stats.owner_pid != M53_INPUT_OWNER_PID) ||
+        (input_stats.dropped_events != 0ULL) ||
+        (input_stats.queued_events != M53_EXPECTED_EVENTS) ||
+        (input_stats.modifiers != 0U)) {
+        fail("canonical queue state");
+    }
+    if (boring_input_read(M53_INPUT_OWNER_PID, events,
+                          BORING_INPUT_READ_MAX, &event_count) !=
+            BORING_INPUT_RESULT_OK ||
+        (event_count != M53_EXPECTED_EVENTS)) {
+        fail("canonical queue read");
+    }
+
+    if (!m53_event_matches(&events[0], BORING_INPUT_EVENT_KEY,
+                           BORING_KEY_LEFT_SUPER, BORING_KEY_DOWN_VALUE,
+                           0, BORING_MOD_SUPER) ||
+        !m53_event_matches(&events[1], BORING_INPUT_EVENT_KEY,
+                           BORING_KEY_A, BORING_KEY_DOWN_VALUE,
+                           0, BORING_MOD_SUPER) ||
+        !m53_event_matches(&events[2], BORING_INPUT_EVENT_MOUSE_MOVE,
+                           0U, 2345, 3456, BORING_MOD_SUPER) ||
+        !m53_event_matches(&events[3], BORING_INPUT_EVENT_MOUSE_BUTTON,
+                           BORING_MOUSE_BUTTON_LEFT, 1, 0,
+                           BORING_MOD_SUPER) ||
+        !m53_event_matches(&events[4], BORING_INPUT_EVENT_KEY,
+                           BORING_KEY_A, BORING_KEY_UP_VALUE,
+                           0, BORING_MOD_SUPER) ||
+        !m53_event_matches(&events[5], BORING_INPUT_EVENT_MOUSE_BUTTON,
+                           BORING_MOUSE_BUTTON_LEFT, 0, 0,
+                           BORING_MOD_SUPER) ||
+        !m53_event_matches(&events[6], BORING_INPUT_EVENT_KEY,
+                           BORING_KEY_LEFT_SUPER, BORING_KEY_UP_VALUE,
+                           0, 0U)) {
+        fail("canonical event ordering");
+    }
+    if (!boring_input_get_stats(&input_stats) ||
+        (input_stats.queued_events != 0U) ||
+        (input_stats.modifiers != 0U)) {
+        fail("queue drain state");
+    }
+
+    serial_write_string("M53 real USB Transfer completions: ");
+    serial_write_u64((uint64_t)completed);
+    serial_write_string("\nM53 decoded HID reports: ");
+    serial_write_u64((uint64_t)decoded);
+    serial_write_string("\nM53 canonical input events: ");
+    serial_write_u64((uint64_t)event_count);
+    serial_write_string("\n");
+    for (index = 0U; index < event_count; ++index) {
+        m53_print_event(index, &events[index]);
+    }
+    if (boring_input_release(M53_INPUT_OWNER_PID) != BORING_INPUT_RESULT_OK) {
+        fail("canonical input release");
+    }
+    serial_write_string("M53 real USB input queue QEMU passed.\n");
+    x86_64_halt_forever();
+}
+
+#elif defined(BORING_M52_HID_ACCEPTANCE)
 
 static void fail(const char *reason) __attribute__((noreturn));
 static void fail(const char *reason) {
