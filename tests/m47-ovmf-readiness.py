@@ -111,13 +111,14 @@ def source_audit():
     lowered = makefile.lower()
     assert "kernel/drivers/xhci" not in lowered
     assert "kernel/drivers/nvme" not in lowered
-    assert "kernel/drivers/ahci" not in lowered
+    assert "kernel/core/ahci_block.c" in lowered
+    assert "kernel/drivers/ahci_block.c" in lowered
     return {
         "acpi_rsdp_request": False,
         "pci_config": "segment 0 CF8/CFC, first 256 bytes",
         "interrupts": "8259 PIC + PIT channel 0",
         "input_driver": "i8042 PS/2 only",
-        "storage_driver": "modern VirtIO block only",
+        "storage_driver": "VirtIO block + bounded read-only AHCI SATA",
     }
 
 
@@ -189,7 +190,7 @@ def run():
         "scenarios": [high_meta, legacy_meta, xhci_meta, ahci_meta],
         "managed_memory_cap_bytes": 4 * 1024 * 1024 * 1024,
         "first_interactive_blocker": "xHCI/USB HID input is not implemented",
-        "independent_storage_blocker": "AHCI/NVMe root storage is not implemented",
+        "independent_storage_blocker": "writable AHCI/NVMe root storage is not implemented",
         "m48_selection": "smallest correct xHCI/USB HID foundation",
     }
     (OUT / "readiness-evidence.json").write_text(

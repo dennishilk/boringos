@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.56-dev
+BoringKernel 0.0.57-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1607,3 +1607,13 @@ Semantic Freeze: `9769aaa2acb44163749fc90ffb905038f891a427`, tree `c7d42d3e294ad
 
 Active version after runtime-neutral closeout: **BoringKernel 0.0.56-dev**. No M56 implementation is included.
 See [m55-ahci-sata-foundation.md](m55-ahci-sata-foundation.md).
+
+
+## Milestone 56: synchronous read-only AHCI SATA block path — COMPLETE, Semantic Frozen
+
+M56 extends the bounded M55 controller foundation with one synchronous read-only SATA request at a time. PMM-owned command-list, received-FIS, command-table and 4-KiB bounce storage feed a single bounded PRDT entry; IDENTIFY-derived capacity, logical-sector size and LBA capability select READ DMA EXT or the bounded LBA28 fallback. The discovered disk is registered as read-only `sata0` through the existing M21 generic block-device API.
+
+Semantic Freeze: `8625ea926e378c666001cb882e8171fa1401b589`, tree `b71bedec6041fb5ce5d38b22e97a87fa99a54478`. Focused real-QEMU acceptance run `33249981735` on q35 completed IDENTIFY on port 0 and dynamically reported 16,384 logical blocks, 512-byte sectors, LBA48 and an eight-block/4-KiB maximum transfer. It proved correct first, middle, last and four-sector reads, out-of-range and PRDT-bound rejection, read-only write rejection, four real read completions and an unchanged RAW-image SHA-256 of `36e22f4b9332c930dc02e238719525dabb0f8bead4392d3aa68f03615077b581`. Host fixtures and ASAN/UBSAN passed. All 21 PR workflows on the frozen runtime head were terminal SUCCESS, including complete boot run `33249981866` (#642).
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.57-dev**. No M57 implementation is included.
+See [m56-ahci-readonly-block.md](m56-ahci-readonly-block.md).
