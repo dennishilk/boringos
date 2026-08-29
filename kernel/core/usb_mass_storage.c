@@ -143,7 +143,6 @@ static bool bulk_packet_size(uint8_t speed, uint16_t raw, uint16_t *packet) {
     } else if (speed == 3U) {
         if (value > 512U) { return false; }
     } else {
-        /* Low-speed has no bulk endpoints; SuperSpeed companions are M60 non-goals. */
         return false;
     }
     *packet = value;
@@ -265,7 +264,7 @@ static void mmio_write32(volatile uint8_t *base, uint32_t offset,
 
 static void mmio_write64(volatile uint8_t *base, uint32_t offset,
                          uint64_t value) {
-    mmio_write32(base, offset, (uint32_t)value;
+    mmio_write32(base, offset, (uint32_t)value);
     mmio_write32(base, offset + 4U, (uint32_t)(value >> 32U));
 }
 
