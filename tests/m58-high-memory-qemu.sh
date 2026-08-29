@@ -35,4 +35,5 @@ do
 done
 
 awk '/M58 PMM usable bytes:/ { if (($5 + 0) <= 4294967296) exit 1; found=1 } END { if (!found) exit 1 }' "$LOG"
+grep -F 'M58 ' "$LOG"
 echo 'm58-high-memory-qemu: PASS'
