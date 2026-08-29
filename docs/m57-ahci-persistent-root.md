@@ -30,3 +30,24 @@ accounting; the final whole-image hash must remain identical.
 ## Strict non-goals
 
 M57 does not add MBR/GPT, partitions, NCQ, hotplug, port multipliers, ATAPI, RAID, asynchronous or interrupt-driven AHCI redesign, NVMe, networking, audio, SMP, physical-hardware success claims or M58 work.
+
+## Semantic Freeze and closeout
+
+The M57 runtime is frozen at commit
+`11f1810027e83c1268c4c01d51d13954f639ffba`, tree
+`17ccb8e2c7da2e2c81d265d80b07ab001599c436`.
+
+Focused workflow run `33252218157` passed the strict host fixtures and
+ASAN/UBSAN, real q35 WRITE DMA and FLUSH CACHE completion, immediate readback,
+neighbor-sector validation, a no-write persistence reboot, and the complete
+two-boot USB-only desktop mutation scenario. The deterministic focused raw
+image changed from SHA-256
+`36e22f4b9332c930dc02e238719525dabb0f8bead4392d3aa68f03615077b581` to
+`9e37362fabb28663bbb76110976cdc8fcd04dbb993bb6d77412ec1264516768c` and was
+unchanged by the focused persistence reboot. The desktop image passed host
+`boringfsck`, exact `/persist` byte validation and second-boot terminal-pixel
+validation before its identical post-proof write. All 22 workflows passed on
+the frozen head, including full boot run `33252218082` (#652).
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.58-dev**. No
+M58 implementation is included.

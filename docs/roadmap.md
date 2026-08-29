@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.57-dev
+BoringKernel 0.0.58-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1617,3 +1617,29 @@ Semantic Freeze: `8625ea926e378c666001cb882e8171fa1401b589`, tree `b71bedec6041f
 
 Active version after runtime-neutral closeout: **BoringKernel 0.0.57-dev**. No M57 implementation is included.
 See [m56-ahci-readonly-block.md](m56-ahci-readonly-block.md).
+
+
+## Milestone 57: writable AHCI and persistent BoringFS root — COMPLETE, Semantic Frozen
+
+M57 extends the M56 backend with bounded WRITE DMA/WRITE DMA EXT and the
+capability-correct ATA cache-flush command. The writable `sata0` device remains
+behind the existing M21 generic block-device API and supplies the existing
+BoringFS/VFS root; no parallel storage or filesystem stack was added.
+
+Semantic Freeze: `11f1810027e83c1268c4c01d51d13954f639ffba`, tree
+`17ccb8e2c7da2e2c81d265d80b07ab001599c436`. Focused real-q35 acceptance run
+`33252218157` proved write bounds, WRITE DMA completion, required FLUSH CACHE,
+immediate readback, unchanged neighboring sectors and reboot persistence. Its
+deterministic raw-disk SHA-256 changed from
+`36e22f4b9332c930dc02e238719525dabb0f8bead4392d3aa68f03615077b581` to
+`9e37362fabb28663bbb76110976cdc8fcd04dbb993bb6d77412ec1264516768c`.
+The same gate also booted the USB-only graphical desktop twice from a separate
+AHCI BoringFS root, wrote `/persist` through the existing shell/VFS path,
+validated `survived\n` with `boringfsck`, rendered the persisted bytes after
+reboot, and completed normal resource drain. All 22 PR workflows were terminal
+SUCCESS on the frozen runtime head, including complete boot run `33252218082`
+(#652).
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.58-dev**. No
+M58 implementation is included.
+See [m57-ahci-persistent-root.md](m57-ahci-persistent-root.md).

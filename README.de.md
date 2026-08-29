@@ -14,10 +14,10 @@ Es ist **keine Linux-Distribution**, **kein BSD** und **basiert nicht auf dem Ke
 Der aktuelle Main-Stand ist:
 
 ```text
-BoringKernel 0.0.57-dev
+BoringKernel 0.0.58-dev
 ```
 
-Die Entwicklung ist bis einschließlich **Milestone 56** abgeschlossen.
+Die Entwicklung ist bis einschließlich **Milestone 57** abgeschlossen.
 
 BoringOS ist längst nicht mehr nur ein früher Boot-Kernel: Unter QEMU bootet inzwischen eine echte native Ring-3-Desktop-Session mit eigenem Display-Service, Tiling-Window-Manager, grafischem Terminal, Shell, Editor, Dateimanager, persistentem BoringFS, Hardware-Inventar und einem wachsenden BoringOS-eigenen xHCI-/USB-Stack.
 
@@ -40,7 +40,7 @@ Prozesse + unabhängige Adressräume
         ↓
 Ring 3 + natives SYSCALL/SYSRETQ-ABI
         ↓
-VFS + RAMFS + VirtIO Block + BoringFS
+VFS + RAMFS + VirtIO-/AHCI-Block + BoringFS
         ↓
      boring-init
         ↓
@@ -150,7 +150,7 @@ USB-Hubs und USB-Massenspeicher werden noch nicht unterstützt.
 
 BoringOS besitzt mit **BoringFS** ein eigenes kleines Dateisystemformat. Das Repository enthält Codec/Validator, deterministischen Formatter, `boringfsck`, Kernel-Mount-Support und synchrones schreibbares Verhalten.
 
-Die verifizierte persistente QEMU-Root verwendet derzeit modernen VirtIO-PCI-Block-Storage. AHCI und NVMe sind noch nicht implementiert; ein Controller im PCI-Inventar zu sehen bedeutet ausdrücklich nicht, dass bereits ein Storage-Treiber dafür vorhanden ist.
+Die verifizierte persistente QEMU-Root kann modernen VirtIO-PCI-Block-Storage oder den in M57 abgeschlossenen begrenzten synchronen AHCI-/SATA-Pfad verwenden. Der AHCI-Pfad führt echte Reads, Writes und erforderliche Cache-Flushes über die generische Block-Device-API aus; NVMe ist nicht implementiert.
 
 ## Aktuelle Grenzen
 
@@ -162,8 +162,8 @@ Die verifizierte persistente QEMU-Root verwendet derzeit modernen VirtIO-PCI-Blo
 | Grafik | Firmware-/Limine-Framebuffer + Software-Compositor; keine native AMD/NVIDIA/Intel-GPU-Beschleunigung |
 | Desktop-Input | nativer i8042-/PS/2-Pfad |
 | USB | xHCI-Geräte adressiert/konfiguriert; echter HID-Interrupt-IN-Report-Transport + begrenzte Decodierung bewiesen; Inputqueue-Integration noch offen |
-| Persistente Root | VirtIO Block + BoringFS |
-| AHCI / NVMe | nicht implementiert |
+| Persistente Root | VirtIO- oder AHCI-/SATA-Block + BoringFS |
+| AHCI / NVMe | begrenztes synchrones AHCI Read/Write/Flush; NVMe nicht implementiert |
 | Networking | nicht implementiert |
 | Audio | nicht implementiert |
 | SMP-Runtime | nicht implementiert; Runtime bleibt bewusst begrenzt |
