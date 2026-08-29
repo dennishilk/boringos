@@ -1,0 +1,34 @@
+name: M60 USB mass storage
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  usb-mass-storage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install focused QEMU dependencies
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 xorriso
+      - name: Existing xHCI model regression
+        run: make xhci-host-test
+      - name: Mixed-class HID descriptor regression
+        run: |
+          cc -Ikernel/include -std=c11 -fno-builtin -fno-tree-loop-distribute-patterns \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            tests/xhci-mixed-host-test.c kernel/core/xhci.c \
+            kernel/core/xhci_mixed.c kernel/core/usb_hid.c \
+            -o build/xhci-mixed-host-test
+          build/xhci-mixed-host-test
+      - name: Real q35 xHCI BOT SCSI usb0 persistence
+        run: sh ./tests/m60-usb-mass-storage-qemu.sh
+      - name: Preserve M52 HID transport regression
+        run: sh ./tests/m52-xhci-hid-qemu.sh

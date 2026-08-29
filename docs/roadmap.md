@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.60-dev
+BoringKernel 0.0.61-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1738,3 +1738,18 @@ success claim.
 Active version after runtime-neutral closeout: **BoringKernel 0.0.60-dev**. No
 M60 implementation is included.
 See [m59-cthulhu-physical-smoke.md](m59-cthulhu-physical-smoke.md).
+
+
+## Milestone 60: bounded xHCI USB Mass Storage BOT/SCSI block path — COMPLETE, Semantic Frozen
+
+M60 adds exactly one bounded directly attached, one-LUN USB Mass Storage device to the existing BoringOS xHCI stack without replacing the M48–M54 HID path. A validated descriptor-derived class/subclass/protocol `08/06/50` interface supplies descriptor-derived Bulk OUT and Bulk IN endpoints, and the xHCI path issues bounded Bulk transfer TRBs for Storage traffic. The driver uses USB Mass Storage Bulk-Only Transport with exact CBW/CSW validation and the bounded SCSI command set required for discovery and block I/O: INQUIRY, TEST UNIT READY with REQUEST SENSE fallback where needed, READ CAPACITY(10), READ(10), WRITE(10) and SYNCHRONIZE CACHE(10). The device is registered through the existing M21 block-device API as `usb0`; filesystem mounting and root-from-USB are not part of M60 and M61 has not begun.
+
+Real q35 acceptance uses one xHCI controller with `i8042=off`, `usb-kbd`, `usb-tablet` and High-Speed `usb-storage`. The reference device reports descriptor-derived Bulk OUT `0x02` / 512 bytes, Bulk IN `0x81` / 512 bytes and 8,192 logical 512-byte blocks (4,194,304 bytes). The gate performs a real WRITE(10) to LBA 8, SYNCHRONIZE CACHE(10), READ(10) verification and host-side raw-image proof that exactly LBA 8 changed while the preceding sector, following sector and every byte outside LBA 8 remained unchanged. Invalid CSW signature/tag/residue/status and out-of-range block requests are rejected.
+
+Mixed-class coexistence keeps valid non-HID devices outside HID configuration/service while retaining strict failure for malformed relevant HID descriptors. The final regression repair restores the M59-known-good ongoing HID service contract in which the published `xhci_get_state()` is the runtime source of truth and caller state is only an output snapshot; Storage consumes that same published xHCI state so command/transfer-event accounting remains shared. This fixes the M54/M57 `submitted/outstanding=0/0` regression without changing AHCI, BOT or SCSI semantics. Post-storage acceptance injects real USB input and proves exactly seven canonical M53 events in the existing order with `dropped=0` and final modifiers clear.
+
+Semantic Freeze: `fbf613bce8a145efc881c3a5eb03bac2f75a188a`, tree `4d0c27df30588c2673a33ca8e992ff1d2d6d7b57`. Focused exact-head SUCCESS: M54 run `33267398507`; M57 run `33267398538`; M60 run `33267398470`; M52 run `33267398618`; M53 run `33267398528`. After those focused gates were green, all 25 permanent workflows were explicitly re-run on the same unchanged feature head and completed SUCCESS. Full Boot run `33267398651` was SUCCESS, including fresh complete 131-step `boot-qemu` job `99140847294` SUCCESS.
+
+M59 physical Cthulhu validation remains **PENDING USER HARDWARE TEST**; M60 does not convert QEMU evidence into a physical-hardware success claim.
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.61-dev**. No M61 implementation is included. USB hubs, SuperSpeed endpoint-companion/burst semantics, BOT reset/stall recovery, filesystem mounting and root-from-USB remain explicit non-goals for M60.

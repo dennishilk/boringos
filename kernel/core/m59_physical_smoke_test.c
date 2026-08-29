@@ -92,7 +92,7 @@ static void m59_render_summary(const struct pmm_stats *pmm,
                                               "BoringOS Physical Smoke",
                                               title, 2U);
     y += 34ULL;
-    m59_fb_line(surface, y, "Kernel", "BoringKernel 0.0.60-dev", label, good);
+    m59_fb_line(surface, y, "Kernel", "BoringKernel 0.0.61-dev", label, good);
     y += 14ULL;
     m59_fb_line(surface, y, "Arch", "x86_64", label, good);
     y += 14ULL;
@@ -259,7 +259,7 @@ void m59_physical_smoke_test_run(void) {
     uint32_t poll;
 
     serial_write_string("\n=== BoringOS Physical Smoke ===\n");
-    m59_serial_key_value("Kernel: ", "BoringKernel 0.0.60-dev");
+    m59_serial_key_value("Kernel: ", "BoringKernel 0.0.61-dev");
     m59_serial_key_value("Arch: ", "x86_64");
     if (pmm_ready) {
         m59_serial_u64("Memory usable bytes: ", pmm.usable_bytes);

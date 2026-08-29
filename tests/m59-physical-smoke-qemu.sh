@@ -52,7 +52,7 @@ wait_and_inject() {
 check_common() {
     log=$1
     for marker in \
-        'BoringKernel 0.0.60-dev' \
+        'BoringKernel 0.0.61-dev' \
         'Arch: x86_64' \
         'PCI enumeration: COMPLETE' \
         'Framebuffer: READY' \
