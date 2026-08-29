@@ -5,27 +5,18 @@ import sys
 import time
 
 
-def recv_message(sock):
-    data = b""
-    while b"\r\n" not in data:
-        chunk = sock.recv(4096)
-        if not chunk:
-            raise RuntimeError("QMP socket closed")
-        data += chunk
-    line, _, rest = data.partition(b"\r\n")
-    # QMP replies for this tiny helper are small. If an asynchronous event was
-    # coalesced in the same recv, subsequent command handling simply reads the
-    # next reply from the socket.
-    if rest:
-        # The commands below do not depend on asynchronous event contents.
-        pass
+def recv_message(stream):
+    line = stream.readline()
+    if not line:
+        raise RuntimeError("QMP socket closed")
     return json.loads(line.decode("utf-8"))
 
 
-def send_command(sock, payload):
-    sock.sendall((json.dumps(payload, separators=(",", ":")) + "\r\n").encode("utf-8"))
+def send_command(stream, payload):
+    stream.write((json.dumps(payload, separators=(",", ":")) + "\r\n").encode("utf-8"))
+    stream.flush()
     while True:
-        reply = recv_message(sock)
+        reply = recv_message(stream)
         if "return" in reply:
             return
         if "error" in reply:
@@ -79,15 +70,16 @@ def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: m52-qmp-input.py <qmp-socket>")
     with connect(sys.argv[1]) as sock:
-        greeting = recv_message(sock)
+        stream = sock.makefile("rwb", buffering=0)
+        greeting = recv_message(stream)
         if "QMP" not in greeting:
             raise RuntimeError("missing QMP greeting")
-        send_command(sock, {"execute": "qmp_capabilities"})
-        send_command(sock, key_event(True))
+        send_command(stream, {"execute": "qmp_capabilities"})
+        send_command(stream, key_event(True))
         time.sleep(0.12)
-        send_command(sock, tablet_event())
+        send_command(stream, tablet_event())
         time.sleep(0.12)
-        send_command(sock, key_event(False))
+        send_command(stream, key_event(False))
     print("m52-qmp-input: PASS")
 
 
