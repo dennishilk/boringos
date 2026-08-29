@@ -19,7 +19,6 @@
 #define XHCI_EVENT_RESIDUAL_MASK 0x00ffffffU
 #define XHCI_TRB_CYCLE (1U << 0)
 #define XHCI_TRB_ISP (1U << 2)
-#define XHCI_TRB_CHAIN (1U << 4)
 #define XHCI_TRB_IOC (1U << 5)
 #define XHCI_TRB_IDT (1U << 6)
 #define XHCI_TRB_DIRECTION_IN (1U << 16)
@@ -249,12 +248,12 @@ bool xhci_build_get_descriptor_control_td(struct xhci_control_td *td,
     built.setup.status = 8U;
     built.setup.control =
         ((uint32_t)XHCI_TRB_TYPE_SETUP_STAGE << XHCI_TRB_TYPE_SHIFT) |
-        XHCI_TRB_IDT | XHCI_TRB_CHAIN | XHCI_SETUP_TRT_IN_DATA | cycle;
+        XHCI_TRB_IDT | XHCI_SETUP_TRT_IN_DATA | cycle;
     built.data.parameter = buffer_physical;
     built.data.status = (uint32_t)length;
     built.data.control =
         ((uint32_t)XHCI_TRB_TYPE_DATA_STAGE << XHCI_TRB_TYPE_SHIFT) |
-        XHCI_TRB_DIRECTION_IN | XHCI_TRB_ISP | XHCI_TRB_CHAIN | cycle;
+        XHCI_TRB_DIRECTION_IN | XHCI_TRB_ISP | cycle;
     built.status.parameter = 0ULL;
     built.status.status = 0U;
     built.status.control =
