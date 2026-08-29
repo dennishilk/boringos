@@ -7,7 +7,6 @@
 
 #include <boring/ahci.h>
 #include <boring/block_device.h>
-#include <boring/io.h>
 
 #define AHCI_BLOCK_DMA_BYTES 4096U
 #define AHCI_BLOCK_IDENTIFY_BYTES 512U

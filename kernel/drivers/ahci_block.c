@@ -4,6 +4,7 @@
 
 #include <boring/ahci_block.h>
 #include <boring/cpu.h>
+#include <boring/io.h>
 #include <boring/pci.h>
 #include <boring/pmm.h>
 #include <boring/vmm.h>

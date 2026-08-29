@@ -330,9 +330,11 @@ KERNEL_C_SOURCES := \
 	kernel/core/vfs.c \
 	kernel/core/ramfs.c \
 	kernel/core/block_device.c \
+	kernel/core/ahci_block.c \
 	kernel/fs/boringfs_vfs.c \
 	libs/boringfs/codec.c \
 	libs/boringfs/validate.c \
+	kernel/drivers/ahci_block.c \
 	kernel/drivers/virtio_blk.c \
 	kernel/core/task.c \
 	kernel/core/preemption_test.c \

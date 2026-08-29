@@ -4,7 +4,7 @@ set -eu
 QEMU_BIN=${QEMU:-qemu-system-x86_64}
 LOG=build/m56-ahci-readonly-serial.log
 DISK=build/m56-ahci-readonly.raw
-HARNESS='kernel/core/ahci.c kernel/arch/x86_64/ahci_hw.c kernel/core/ahci_block.c kernel/drivers/ahci_block.c kernel/core/ahci_block_test.c kernel/core/ahci_block_test_adapter.c'
+HARNESS='kernel/core/ahci.c kernel/arch/x86_64/ahci_hw.c kernel/core/ahci_block_test.c kernel/core/ahci_block_test_adapter.c'
 
 make TEST_MODE=runtime TEST_HARNESS_C="$HARNESS" all
 mkdir -p build
