@@ -207,6 +207,7 @@ def run_session(name, expect_existing):
 
     def type_text(value):
         codes = {" ": "spc", "-": "minus", ".": "dot", "/": "slash"}
+        service_marker = "m54-desktop: real xHCI HID completion serviced"
         for char in value:
             frame = frames()[-1]
             terminal_pid = next(tile["pid"] for tile in frame["tiles"]
@@ -216,8 +217,9 @@ def run_session(name, expect_existing):
             code = codes.get(char, char)
             qmp("input-send-event", {"events": [QMP["key_event"](code, True)]})
             witness(marker, before + 1)
+            before_release = text().count(service_marker)
             qmp("input-send-event", {"events": [QMP["key_event"](code, False)]})
-            time.sleep(0.025)
+            witness(service_marker, before_release + 1)
 
     def command_line(value):
         type_text(value)
