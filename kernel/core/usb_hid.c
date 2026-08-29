@@ -1,4 +1,24 @@
 #include <boring/usb_hid.h>
+#include <boring/xhci.h>
+
+#if !__STDC_HOSTED__
+#include <boring/cpu.h>
+#include <boring/pmm.h>
+#include <boring/vmm.h>
+#endif
+
+#define M52_TRB_TYPE_SHIFT 10U
+#define M52_TRB_TYPE_MASK 0x3fU
+#define M52_TRB_TYPE_LINK 6U
+#define M52_TRB_CYCLE (1U << 0)
+#define M52_TRB_TOGGLE_CYCLE (1U << 1)
+#define M52_TRB_ISP (1U << 2)
+#define M52_TRB_IOC (1U << 5)
+#define M52_EVENT_ENDPOINT_SHIFT 16U
+#define M52_EVENT_ENDPOINT_MASK 0x1fU
+#define M52_EVENT_SLOT_SHIFT 24U
+#define M52_EVENT_COMPLETION_SHIFT 24U
+#define M52_EVENT_RESIDUAL_MASK 0x00ffffffU
 
 static bool usage_present(const uint8_t keys[USB_HID_BOOT_KEYS], uint8_t usage) {
     size_t index;
@@ -94,3 +114,454 @@ bool usb_hid_absolute_tablet_decode(
     decoded->wheel = (int8_t)report[5];
     return true;
 }
+
+static bool interrupt_pointer_owned(uint64_t pointer, uint64_t ring_physical) {
+    const uint64_t end = ring_physical +
+        ((uint64_t)XHCI_INTERRUPT_RING_USABLE * XHCI_TRB_SIZE);
+    return ((pointer & 0x0fULL) == 0ULL) && (pointer >= ring_physical) &&
+           (pointer < end);
+}
+
+bool xhci_build_interrupt_in_trb(
+    struct xhci_trb *trb, uint64_t ring_physical,
+    uint16_t producer_index, bool producer_cycle,
+    uint64_t buffer_physical, uint16_t length,
+    uint64_t *trb_physical, uint16_t *next_producer_index,
+    bool *next_producer_cycle) {
+    struct xhci_trb built = {0};
+    uint16_t next_index;
+    bool next_cycle;
+    if ((trb == NULL) || (trb_physical == NULL) ||
+        (next_producer_index == NULL) || (next_producer_cycle == NULL) ||
+        (ring_physical == 0ULL) || ((ring_physical & 0x3fULL) != 0ULL) ||
+        (producer_index >= XHCI_INTERRUPT_RING_USABLE) ||
+        (buffer_physical == 0ULL) || ((buffer_physical & 0xfffULL) != 0ULL) ||
+        (length == 0U) || (length > XHCI_HID_REPORT_BUFFER_BYTES)) {
+        return false;
+    }
+    built.parameter = buffer_physical;
+    built.status = (uint32_t)length;
+    built.control = ((uint32_t)XHCI_TRB_TYPE_NORMAL << M52_TRB_TYPE_SHIFT) |
+                    M52_TRB_ISP | M52_TRB_IOC |
+                    (producer_cycle ? M52_TRB_CYCLE : 0U);
+    *trb_physical = ring_physical +
+        ((uint64_t)producer_index * XHCI_TRB_SIZE);
+    if (producer_index == XHCI_INTERRUPT_RING_USABLE - 1U) {
+        next_index = 0U;
+        next_cycle = !producer_cycle;
+    } else {
+        next_index = (uint16_t)(producer_index + 1U);
+        next_cycle = producer_cycle;
+    }
+    *trb = built;
+    *next_producer_index = next_index;
+    *next_producer_cycle = next_cycle;
+    return true;
+}
+
+bool xhci_validate_interrupt_transfer_event(
+    const struct xhci_trb *event, uint64_t ring_physical,
+    uint8_t expected_slot_id, uint8_t expected_endpoint_id,
+    uint64_t expected_trb_physical, uint16_t requested_length,
+    uint16_t *actual_length, bool *short_packet) {
+    uint8_t type;
+    uint8_t endpoint;
+    uint8_t slot;
+    uint8_t completion;
+    uint32_t residual;
+    if ((event == NULL) || (actual_length == NULL) || (short_packet == NULL) ||
+        (ring_physical == 0ULL) || ((ring_physical & 0x3fULL) != 0ULL) ||
+        (expected_slot_id == 0U) || (expected_endpoint_id <= 1U) ||
+        (expected_endpoint_id > 31U) || (requested_length == 0U) ||
+        (requested_length > XHCI_HID_REPORT_BUFFER_BYTES) ||
+        !interrupt_pointer_owned(expected_trb_physical, ring_physical)) {
+        return false;
+    }
+    type = (uint8_t)((event->control >> M52_TRB_TYPE_SHIFT) & M52_TRB_TYPE_MASK);
+    endpoint = (uint8_t)((event->control >> M52_EVENT_ENDPOINT_SHIFT) &
+                         M52_EVENT_ENDPOINT_MASK);
+    slot = (uint8_t)(event->control >> M52_EVENT_SLOT_SHIFT);
+    completion = (uint8_t)(event->status >> M52_EVENT_COMPLETION_SHIFT);
+    residual = event->status & M52_EVENT_RESIDUAL_MASK;
+    if ((type != XHCI_TRB_TYPE_TRANSFER_EVENT) ||
+        (endpoint != expected_endpoint_id) || (slot != expected_slot_id) ||
+        (event->parameter != expected_trb_physical) ||
+        !interrupt_pointer_owned(event->parameter, ring_physical) ||
+        (residual > requested_length)) {
+        return false;
+    }
+    if ((completion == XHCI_COMPLETION_SUCCESS) && (residual == 0U)) {
+        *actual_length = requested_length;
+        *short_packet = false;
+        return true;
+    }
+    if (completion == XHCI_COMPLETION_SHORT_PACKET) {
+        *actual_length = (uint16_t)((uint32_t)requested_length - residual);
+        *short_packet = true;
+        return true;
+    }
+    return false;
+}
+
+#if !__STDC_HOSTED__
+
+#define M52_MMIO_WINDOW_SIZE XHCI_MMIO_WINDOW_SIZE
+#define M52_RUNTIME_INTERRUPTER0 0x20U
+#define M52_EVENT_WAIT_LIMIT 30000000U
+#define M52_TRB_TYPE_PORT_STATUS_EVENT 34U
+
+static void m52_zero_page(void *page) {
+    uint8_t *bytes = (uint8_t *)page;
+    size_t index;
+    for (index = 0U; index < PMM_PAGE_SIZE; ++index) { bytes[index] = 0U; }
+}
+
+static void m52_barrier(void) {
+    __asm__ volatile ("mfence" ::: "memory");
+}
+
+static uint32_t m52_mmio_read32(const volatile uint8_t *base, uint32_t offset) {
+    return *(const volatile uint32_t *)(const volatile void *)(base + offset);
+}
+
+static void m52_mmio_write32(volatile uint8_t *base, uint32_t offset,
+                             uint32_t value) {
+    *(volatile uint32_t *)(volatile void *)(base + offset) = value;
+}
+
+static void m52_mmio_write64(volatile uint8_t *base, uint32_t offset,
+                             uint64_t value) {
+    m52_mmio_write32(base, offset, (uint32_t)value);
+    m52_mmio_write32(base, offset + 4U, (uint32_t)(value >> 32U));
+}
+
+static uint64_t m52_consumed_events(const struct xhci_state *state) {
+    uint64_t total;
+    uint8_t device_index;
+    total = (uint64_t)state->command_completions +
+            (uint64_t)state->port_events_consumed;
+    for (device_index = 0U; device_index < state->addressed_count;
+         ++device_index) {
+        total += (uint64_t)state->addressed[device_index].transfer_events;
+    }
+    return total;
+}
+
+static bool m52_allocate_report_buffer(struct xhci_hid_endpoint_runtime *runtime) {
+    void *virtual_address = NULL;
+    if (runtime->report_buffer_physical != 0ULL) { return true; }
+    if (!pmm_alloc_frame(&runtime->report_buffer_physical) ||
+        !vmm_pmm_frame_to_hhdm(runtime->report_buffer_physical,
+                               &virtual_address)) {
+        if (runtime->report_buffer_physical != 0ULL) {
+            (void)pmm_free_frame(runtime->report_buffer_physical);
+            runtime->report_buffer_physical = 0ULL;
+        }
+        return false;
+    }
+    m52_zero_page(virtual_address);
+    runtime->producer_index = 0U;
+    runtime->producer_cycle = true;
+    return true;
+}
+
+static bool m52_submit_endpoint(volatile uint8_t *mmio,
+                                struct xhci_addressed_device *device,
+                                uint8_t endpoint_index) {
+    struct xhci_hid_endpoint_runtime *runtime;
+    const struct xhci_hid_endpoint_descriptor *descriptor;
+    void *ring_virtual = NULL;
+    void *buffer_virtual = NULL;
+    volatile struct xhci_trb *ring;
+    struct xhci_trb trb;
+    uint64_t trb_physical;
+    uint16_t next_index;
+    bool next_cycle;
+    uint32_t doorbell;
+    if ((mmio == NULL) || (device == NULL) ||
+        (endpoint_index >= device->hid_configuration.endpoint_count) ||
+        (endpoint_index >= XHCI_MAX_HID_ENDPOINTS)) {
+        return false;
+    }
+    runtime = &device->hid_runtime[endpoint_index];
+    descriptor = &device->hid_configuration.endpoints[endpoint_index];
+    if (!device->device_configured || !device->hid_endpoint_ready ||
+        runtime->transfer_outstanding || (descriptor->endpoint_id <= 1U) ||
+        (descriptor->max_packet == 0U) ||
+        (descriptor->max_packet > XHCI_HID_REPORT_BUFFER_BYTES) ||
+        (device->hid_ring_physical[endpoint_index] == 0ULL) ||
+        !m52_allocate_report_buffer(runtime) ||
+        !vmm_pmm_frame_to_hhdm(device->hid_ring_physical[endpoint_index],
+                               &ring_virtual) ||
+        !vmm_pmm_frame_to_hhdm(runtime->report_buffer_physical,
+                               &buffer_virtual) ||
+        !xhci_build_interrupt_in_trb(
+            &trb, device->hid_ring_physical[endpoint_index],
+            runtime->producer_index, runtime->producer_cycle,
+            runtime->report_buffer_physical, descriptor->max_packet,
+            &trb_physical, &next_index, &next_cycle)) {
+        return false;
+    }
+    m52_zero_page(buffer_virtual);
+    ring = (volatile struct xhci_trb *)ring_virtual;
+    ring[runtime->producer_index] = trb;
+    if (runtime->producer_index == XHCI_INTERRUPT_RING_USABLE - 1U) {
+        ring[XHCI_INTERRUPT_RING_USABLE].parameter =
+            device->hid_ring_physical[endpoint_index];
+        ring[XHCI_INTERRUPT_RING_USABLE].status = 0U;
+        ring[XHCI_INTERRUPT_RING_USABLE].control =
+            ((uint32_t)M52_TRB_TYPE_LINK << M52_TRB_TYPE_SHIFT) |
+            M52_TRB_TOGGLE_CYCLE |
+            (runtime->producer_cycle ? M52_TRB_CYCLE : 0U);
+    }
+    if (runtime->submitted_transfers == UINT32_MAX) { return false; }
+    runtime->expected_trb_physical = trb_physical;
+    runtime->producer_index = next_index;
+    runtime->producer_cycle = next_cycle;
+    runtime->transfer_outstanding = true;
+    ++runtime->submitted_transfers;
+    m52_barrier();
+    doorbell = (uint32_t)device->slot_id * 4U;
+    if ((device->slot_id == 0U) ||
+        (doorbell > M52_MMIO_WINDOW_SIZE - 4U) ||
+        (device->hid_configuration.endpoints[endpoint_index].endpoint_id > 31U)) {
+        runtime->transfer_outstanding = false;
+        return false;
+    }
+    doorbell += ((struct xhci_state *)(uintptr_t)xhci_get_state())
+                    ->capabilities.doorbell_offset;
+    if (doorbell > M52_MMIO_WINDOW_SIZE - 4U) {
+        runtime->transfer_outstanding = false;
+        return false;
+    }
+    m52_mmio_write32(mmio, doorbell, (uint32_t)descriptor->endpoint_id);
+    return true;
+}
+
+static bool m52_decode_report(struct xhci_addressed_device *device,
+                              uint8_t endpoint_index, const uint8_t *report,
+                              uint16_t length) {
+    struct xhci_hid_endpoint_runtime *runtime =
+        &device->hid_runtime[endpoint_index];
+    const struct xhci_hid_endpoint_descriptor *descriptor =
+        &device->hid_configuration.endpoints[endpoint_index];
+    if (descriptor->protocol == 1U) {
+        struct usb_hid_key_transition transitions[USB_HID_BOOT_KEYS * 2U];
+        size_t count = 0U;
+        uint8_t modifiers = 0U;
+        size_t index;
+        if (!usb_hid_keyboard_decode(&runtime->keyboard_state, report,
+                                     (size_t)length, transitions,
+                                     USB_HID_BOOT_KEYS * 2U, &count,
+                                     &modifiers)) {
+            return false;
+        }
+        (void)modifiers;
+        for (index = 0U; index < count; ++index) {
+            runtime->last_key_usage = transitions[index].usage;
+            runtime->last_key_down = transitions[index].down;
+            if (transitions[index].down) {
+                if (runtime->key_presses == UINT32_MAX) { return false; }
+                ++runtime->key_presses;
+            } else {
+                if (runtime->key_releases == UINT32_MAX) { return false; }
+                ++runtime->key_releases;
+            }
+        }
+    } else if (descriptor->protocol == 2U) {
+        struct usb_hid_mouse_report decoded;
+        if (!usb_hid_mouse_decode(report, (size_t)length, &decoded) ||
+            (runtime->pointer_reports == UINT32_MAX)) {
+            return false;
+        }
+        runtime->last_pointer_x = (uint16_t)decoded.dx;
+        runtime->last_pointer_y = (uint16_t)decoded.dy;
+        runtime->last_pointer_buttons = decoded.buttons;
+        runtime->pointer_valid = true;
+        ++runtime->pointer_reports;
+    } else if (descriptor->protocol == 0U) {
+        struct usb_hid_absolute_tablet_report decoded;
+        if (!usb_hid_absolute_tablet_decode(report, (size_t)length, &decoded) ||
+            (runtime->pointer_reports == UINT32_MAX)) {
+            return false;
+        }
+        runtime->last_pointer_x = decoded.x;
+        runtime->last_pointer_y = decoded.y;
+        runtime->last_pointer_buttons = decoded.buttons;
+        runtime->pointer_valid = true;
+        ++runtime->pointer_reports;
+    } else {
+        return false;
+    }
+    if (runtime->decoded_reports == UINT32_MAX) { return false; }
+    ++runtime->decoded_reports;
+    return true;
+}
+
+static bool m52_complete_event(struct xhci_state *active,
+                               const struct xhci_trb *event,
+                               uint32_t *completed) {
+    uint8_t device_index;
+    for (device_index = 0U; device_index < active->addressed_count;
+         ++device_index) {
+        struct xhci_addressed_device *device = &active->addressed[device_index];
+        uint8_t endpoint_index;
+        for (endpoint_index = 0U;
+             endpoint_index < device->hid_configuration.endpoint_count;
+             ++endpoint_index) {
+            struct xhci_hid_endpoint_runtime *runtime =
+                &device->hid_runtime[endpoint_index];
+            const struct xhci_hid_endpoint_descriptor *descriptor =
+                &device->hid_configuration.endpoints[endpoint_index];
+            uint16_t actual = 0U;
+            bool short_packet = false;
+            void *buffer_virtual = NULL;
+            if (!runtime->transfer_outstanding) { continue; }
+            if (!xhci_validate_interrupt_transfer_event(
+                    event, device->hid_ring_physical[endpoint_index],
+                    device->slot_id, descriptor->endpoint_id,
+                    runtime->expected_trb_physical, descriptor->max_packet,
+                    &actual, &short_packet)) {
+                continue;
+            }
+            if ((actual == 0U) ||
+                !vmm_pmm_frame_to_hhdm(runtime->report_buffer_physical,
+                                       &buffer_virtual) ||
+                (runtime->completed_transfers == UINT32_MAX) ||
+                (UINT32_MAX - runtime->report_bytes < actual) ||
+                (device->transfer_events == UINT32_MAX)) {
+                return false;
+            }
+            m52_barrier();
+            runtime->transfer_outstanding = false;
+            runtime->expected_trb_physical = 0ULL;
+            runtime->last_report_length = actual;
+            ++runtime->completed_transfers;
+            runtime->report_bytes += actual;
+            if (short_packet) {
+                if (runtime->short_packets == UINT32_MAX) { return false; }
+                ++runtime->short_packets;
+            }
+            ++device->transfer_events;
+            if (!m52_decode_report(device, endpoint_index,
+                                   (const uint8_t *)buffer_virtual, actual)) {
+                return false;
+            }
+            if (*completed == UINT32_MAX) { return false; }
+            ++*completed;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool xhci_poll_hid_reports(struct xhci_state *state, uint32_t completion_goal) {
+    const struct xhci_state *published;
+    struct xhci_state *active;
+    volatile void *mapping = NULL;
+    volatile uint8_t *mmio;
+    void *event_virtual = NULL;
+    volatile struct xhci_trb *event_ring;
+    uint64_t consumed;
+    uint16_t event_index;
+    bool event_cycle;
+    uint32_t completed = 0U;
+    uint32_t attempt;
+    uint8_t device_index;
+    bool success = false;
+    if ((state == NULL) || (completion_goal == 0U)) { return false; }
+    published = xhci_get_state();
+    if ((published == NULL) || !published->controller_running ||
+        (published->addressed_count == 0U) ||
+        !vmm_map_mmio_region(published->mmio_physical,
+                             M52_MMIO_WINDOW_SIZE, &mapping) ||
+        !vmm_pmm_frame_to_hhdm(published->event_ring_physical,
+                               &event_virtual)) {
+        if (mapping != NULL) {
+            (void)vmm_unmap_mmio_region(mapping, M52_MMIO_WINDOW_SIZE);
+        }
+        return false;
+    }
+    active = (struct xhci_state *)(uintptr_t)published;
+    mmio = (volatile uint8_t *)mapping;
+    event_ring = (volatile struct xhci_trb *)event_virtual;
+    for (device_index = 0U; device_index < active->addressed_count;
+         ++device_index) {
+        struct xhci_addressed_device *device = &active->addressed[device_index];
+        uint8_t endpoint_index;
+        if (!device->device_configured || !device->hid_endpoint_ready) {
+            goto out;
+        }
+        for (endpoint_index = 0U;
+             endpoint_index < device->hid_configuration.endpoint_count;
+             ++endpoint_index) {
+            if (!device->hid_runtime[endpoint_index].transfer_outstanding &&
+                !m52_submit_endpoint(mmio, device, endpoint_index)) {
+                goto out;
+            }
+        }
+    }
+    consumed = m52_consumed_events(active);
+    event_index = (uint16_t)(consumed % XHCI_EVENT_RING_TRBS);
+    event_cycle = (((consumed / XHCI_EVENT_RING_TRBS) & 1ULL) == 0ULL);
+    for (attempt = 0U;
+         (attempt < M52_EVENT_WAIT_LIMIT) && (completed < completion_goal);
+         ++attempt) {
+        struct xhci_trb event;
+        uint32_t control = event_ring[event_index].control;
+        uint8_t type;
+        const uint32_t interrupter = active->capabilities.runtime_offset +
+                                     M52_RUNTIME_INTERRUPTER0;
+        if (((control & M52_TRB_CYCLE) != 0U) != event_cycle) {
+            x86_64_pause();
+            continue;
+        }
+        event.parameter = event_ring[event_index].parameter;
+        event.status = event_ring[event_index].status;
+        event.control = control;
+        ++event_index;
+        if (event_index == XHCI_EVENT_RING_TRBS) {
+            event_index = 0U;
+            event_cycle = !event_cycle;
+        }
+        m52_barrier();
+        if (interrupter > M52_MMIO_WINDOW_SIZE - 0x20U) { goto out; }
+        m52_mmio_write64(mmio, interrupter + 0x18U,
+            (active->event_ring_physical +
+             ((uint64_t)event_index * XHCI_TRB_SIZE)) | (1ULL << 3U));
+        type = (uint8_t)((event.control >> M52_TRB_TYPE_SHIFT) &
+                         M52_TRB_TYPE_MASK);
+        if (type == M52_TRB_TYPE_PORT_STATUS_EVENT) {
+            goto out;
+        }
+        if ((type != XHCI_TRB_TYPE_TRANSFER_EVENT) ||
+            !m52_complete_event(active, &event, &completed)) {
+            goto out;
+        }
+        if (completed < completion_goal) {
+            for (device_index = 0U; device_index < active->addressed_count;
+                 ++device_index) {
+                struct xhci_addressed_device *device =
+                    &active->addressed[device_index];
+                uint8_t endpoint_index;
+                for (endpoint_index = 0U;
+                     endpoint_index < device->hid_configuration.endpoint_count;
+                     ++endpoint_index) {
+                    if (!device->hid_runtime[endpoint_index].transfer_outstanding &&
+                        !m52_submit_endpoint(mmio, device, endpoint_index)) {
+                        goto out;
+                    }
+                }
+            }
+        }
+    }
+    success = completed >= completion_goal;
+out:
+    *state = *active;
+    if (mapping != NULL) {
+        (void)vmm_unmap_mmio_region(mapping, M52_MMIO_WINDOW_SIZE);
+    }
+    return success;
+}
+
+#endif
