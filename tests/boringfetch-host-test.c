@@ -29,7 +29,7 @@ static void prepare_base(void) {
     (void)strcpy(mock_info.username, "boring");
     (void)strcpy(mock_info.os_name, "BoringOS");
     (void)strcpy(mock_info.kernel_name, "BoringKernel");
-    (void)strcpy(mock_info.kernel_version, "0.0.55-dev");
+    (void)strcpy(mock_info.kernel_version, "0.0.56-dev");
     (void)strcpy(mock_info.arch, "x86_64");
     (void)strcpy(mock_info.root_fs, "BoringFS");
     (void)strcpy(mock_info.root_device, "virtio-blk");

@@ -14,10 +14,10 @@ It is **not a Linux distribution**, **not BSD**, and **not based on another oper
 The current main line is:
 
 ```text
-BoringKernel 0.0.55-dev
+BoringKernel 0.0.56-dev
 ```
 
-Development is complete through **Milestone 54**.
+Development is complete through **Milestone 55**.
 
 BoringOS is no longer just an early boot kernel: under QEMU it now boots into a real native Ring-3 desktop session with its own display service, tiling window manager, graphical terminal, shell, editor, file manager, persistent BoringFS storage, hardware inventory, and a growing BoringOS-owned xHCI/USB stack.
 

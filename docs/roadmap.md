@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.55-dev
+BoringKernel 0.0.56-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1597,3 +1597,13 @@ Semantic Freeze: `e57882401bd134a8a6ca55ac89377dbfb436dcf1`, tree `f562456d1f311
 
 Active version after runtime-neutral closeout: **BoringKernel 0.0.55-dev**. No M55 implementation is included.
 See [m54-usb-only-desktop.md](m54-usb-only-desktop.md).
+
+
+## Milestone 55: bounded AHCI / SATA controller foundation — COMPLETE, Semantic Frozen
+
+M55 adds the bounded hardware-controller foundation for one segment-zero PCI SATA AHCI controller beneath the existing M21 generic block-device architecture. It reuses M44 PCI inventory and the existing cache-disabled MMIO mapper, performs timeout-bounded ownership/controller handling, and inspects only CAP.NP/PI/BoringOS-bounded ports. It does not implement sector I/O.
+
+Semantic Freeze: `9769aaa2acb44163749fc90ffb905038f891a427`, tree `c7d42d3e294ad577f33b7e3f79af4a4da361f587`. Focused real-QEMU acceptance run `33247857135` on q35 discovered AHCI BDF `00:1f.2`, real ABAR `0xFEBD5000`, CAP `0xC0141F05`, VS `0x00010000`, PI `0x0000003F`, and a present ATA SATA device on dynamically inspected port 0 from PxSSTS/PxSIG. All 20 PR workflows on the frozen runtime head were terminal SUCCESS, including complete boot run `33247857153`.
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.56-dev**. No M56 implementation is included.
+See [m55-ahci-sata-foundation.md](m55-ahci-sata-foundation.md).
