@@ -145,13 +145,13 @@ def run():
             "boring-framebuffer: detected",
             "pci-inventory: stored=",
             "smbios: bounded platform identity complete",
-            "Memory map capped: yes", "PMM: online",
+            "Memory map capped: no", "PMM: online",
             "Controller: 8259 PIC", "Timer source: PIT IRQ0"):
         if witness not in high:
             raise RuntimeError(f"high-memory OVMF witness missing: {witness}")
     usable = re.search(r"^Usable memory: (\d+) bytes$", high, re.MULTILINE)
-    if usable is None or int(usable.group(1)) != 4 * 1024 * 1024 * 1024:
-        raise RuntimeError("PMM did not report its exact safe 4 GiB cap")
+    if usable is None or int(usable.group(1)) <= 4 * 1024 * 1024 * 1024:
+        raise RuntimeError("PMM did not manage usable memory above 4 GiB")
 
     with (OUT / "desktop-build.log").open("w") as log:
         subprocess.run(["sh", "tests/m40-build.sh"], cwd=ROOT, stdout=log,
@@ -188,7 +188,7 @@ def run():
         "firmware": "OVMF/UEFI QEMU only",
         "source_audit": source_audit(),
         "scenarios": [high_meta, legacy_meta, xhci_meta, ahci_meta],
-        "managed_memory_cap_bytes": 4 * 1024 * 1024 * 1024,
+        "managed_memory_cap_bytes": 32 * 1024 * 1024 * 1024,
         "first_interactive_blocker": "xHCI/USB HID input is not implemented",
         "independent_storage_blocker": "writable AHCI/NVMe root storage is not implemented",
         "m48_selection": "smallest correct xHCI/USB HID foundation",

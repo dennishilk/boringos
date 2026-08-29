@@ -10,6 +10,7 @@
 #include <boring/vmm.h>
 
 #define AHCI_CAP_S64A (1U << 31)
+#define AHCI_DMA_32BIT_LIMIT 0x100000000ULL
 #define AHCI_PORT_BASE 0x100U
 #define AHCI_PORT_STRIDE 0x80U
 #define AHCI_PXCLB 0x00U
@@ -182,11 +183,13 @@ static void free_dma_frames(void) {
 }
 
 static bool allocate_dma_frames(uint32_t cap) {
+    const uint64_t dma_limit = ((cap & AHCI_CAP_S64A) != 0U) ?
+        UINT64_MAX : AHCI_DMA_32BIT_LIMIT;
     size_t index;
     for (index = 0U; index < (size_t)AHCI_DMA_FRAME_COUNT; ++index) {
         uint64_t physical = 0ULL;
         void *virtual_address = NULL;
-        if (!pmm_alloc_frame(&physical) ||
+        if (!pmm_alloc_frame_in_range(0ULL, dma_limit, &physical) ||
             !vmm_pmm_frame_to_hhdm(physical, &virtual_address) ||
             !dma_address_supported(cap, physical) ||
             ((physical & (PMM_PAGE_SIZE - 1ULL)) != 0ULL)) {

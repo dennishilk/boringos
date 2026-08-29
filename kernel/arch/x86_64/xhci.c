@@ -35,6 +35,7 @@
 #define XHCI_TRB_TYPE_MASK 0x3fU
 #define XHCI_COMMAND_SLOT_SHIFT 24U
 #define XHCI_EVENT_WAIT_LIMIT 10000000U
+#define XHCI_DMA_32BIT_LIMIT 0x100000000ULL
 #define XHCI_PORTSC_CCS (1U << 0)
 #define XHCI_PORTSC_PED (1U << 1)
 #define XHCI_PORTSC_PR (1U << 4)
@@ -181,7 +182,7 @@ static bool wait_mask(volatile uint8_t *base, uint32_t offset,
 static bool frame_alloc_zero(uint64_t *physical, void **virtual_address) {
     size_t index;
     uint8_t *bytes;
-    if (!pmm_alloc_frame(physical)) {
+    if (!pmm_alloc_frame_in_range(0ULL, XHCI_DMA_32BIT_LIMIT, physical)) {
         return false;
     }
     if (!vmm_pmm_frame_to_hhdm(*physical, virtual_address)) {

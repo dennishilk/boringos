@@ -5,9 +5,15 @@
 
 #define PMM_MAX_MEMORY_MAP_ENTRIES 256ULL
 #define PMM_MAX_REGIONS 64ULL
-#define PMM_MAX_FRAMES 1048576ULL
-#define PMM_BITMAP_WORDS 16384ULL
+#define PMM_MAX_FRAMES 8388608ULL
 #define PMM_BITS_PER_WORD 64ULL
+#define PMM_BITMAP_WORDS \
+    ((PMM_MAX_FRAMES + PMM_BITS_PER_WORD - 1ULL) / PMM_BITS_PER_WORD)
+
+_Static_assert(PMM_MAX_FRAMES <= (UINT64_MAX / PMM_PAGE_SIZE),
+               "PMM frame capacity must fit byte accounting");
+_Static_assert((PMM_BITMAP_WORDS * PMM_BITS_PER_WORD) >= PMM_MAX_FRAMES,
+               "PMM bitmap must cover configured frame capacity");
 
 struct pmm_region {
     uint64_t base;
@@ -81,28 +87,74 @@ static uint64_t pmm_align_down(uint64_t value) {
     return value & ~(PMM_PAGE_SIZE - 1ULL);
 }
 
-static bool pmm_bit_is_set(uint64_t frame_index) {
-    const uint64_t word_index = frame_index / PMM_BITS_PER_WORD;
-    const uint64_t bit_index = frame_index % PMM_BITS_PER_WORD;
-    const uint64_t mask = 1ULL << (unsigned int)bit_index;
+static bool pmm_bitmap_index_valid(uint64_t frame_index) {
+    return (frame_index < pmm_total_frames) &&
+           (frame_index < PMM_MAX_FRAMES) &&
+           ((frame_index / PMM_BITS_PER_WORD) < PMM_BITMAP_WORDS);
+}
 
+static bool pmm_bit_is_set(uint64_t frame_index) {
+    uint64_t word_index;
+    uint64_t bit_index;
+    uint64_t mask;
+
+    if (!pmm_bitmap_index_valid(frame_index)) {
+        return false;
+    }
+
+    word_index = frame_index / PMM_BITS_PER_WORD;
+    bit_index = frame_index % PMM_BITS_PER_WORD;
+    mask = 1ULL << (unsigned int)bit_index;
     return (pmm_bitmap[word_index] & mask) != 0ULL;
 }
 
-static void pmm_set_bit(uint64_t frame_index) {
-    const uint64_t word_index = frame_index / PMM_BITS_PER_WORD;
-    const uint64_t bit_index = frame_index % PMM_BITS_PER_WORD;
-    const uint64_t mask = 1ULL << (unsigned int)bit_index;
+static bool pmm_set_bit(uint64_t frame_index) {
+    uint64_t word_index;
+    uint64_t bit_index;
+    uint64_t mask;
 
+    if (!pmm_bitmap_index_valid(frame_index)) {
+        return false;
+    }
+
+    word_index = frame_index / PMM_BITS_PER_WORD;
+    bit_index = frame_index % PMM_BITS_PER_WORD;
+    mask = 1ULL << (unsigned int)bit_index;
     pmm_bitmap[word_index] |= mask;
+    return true;
 }
 
-static void pmm_clear_bit(uint64_t frame_index) {
-    const uint64_t word_index = frame_index / PMM_BITS_PER_WORD;
-    const uint64_t bit_index = frame_index % PMM_BITS_PER_WORD;
-    const uint64_t mask = 1ULL << (unsigned int)bit_index;
+static bool pmm_clear_bit(uint64_t frame_index) {
+    uint64_t word_index;
+    uint64_t bit_index;
+    uint64_t mask;
 
+    if (!pmm_bitmap_index_valid(frame_index)) {
+        return false;
+    }
+
+    word_index = frame_index / PMM_BITS_PER_WORD;
+    bit_index = frame_index % PMM_BITS_PER_WORD;
+    mask = 1ULL << (unsigned int)bit_index;
     pmm_bitmap[word_index] &= ~mask;
+    return true;
+}
+
+static bool pmm_region_end(const struct pmm_region *region, uint64_t *end) {
+    uint64_t region_bytes;
+
+    if ((region == NULL) || (end == NULL) ||
+        (region->frame_count > (UINT64_MAX / PMM_PAGE_SIZE))) {
+        return false;
+    }
+
+    region_bytes = region->frame_count * PMM_PAGE_SIZE;
+    if (region->base > (UINT64_MAX - region_bytes)) {
+        return false;
+    }
+
+    *end = region->base + region_bytes;
+    return true;
 }
 
 static bool pmm_find_frame(uint64_t physical_address, uint64_t *frame_index) {
@@ -114,16 +166,27 @@ static bool pmm_find_frame(uint64_t physical_address, uint64_t *frame_index) {
 
     for (region_index = 0ULL; region_index < pmm_region_count; ++region_index) {
         const struct pmm_region *region = &pmm_regions[region_index];
-        const uint64_t region_bytes = region->frame_count * PMM_PAGE_SIZE;
-        const uint64_t region_end = region->base + region_bytes;
+        uint64_t region_end;
+
+        if (!pmm_region_end(region, &region_end)) {
+            return false;
+        }
 
         if ((physical_address >= region->base) &&
             (physical_address < region_end)) {
             const uint64_t offset = physical_address - region->base;
             const uint64_t local_frame = offset / PMM_PAGE_SIZE;
+            uint64_t candidate;
 
+            if (region->bitmap_base > (UINT64_MAX - local_frame)) {
+                return false;
+            }
+            candidate = region->bitmap_base + local_frame;
+            if (!pmm_bitmap_index_valid(candidate)) {
+                return false;
+            }
             if (frame_index != NULL) {
-                *frame_index = region->bitmap_base + local_frame;
+                *frame_index = candidate;
             }
             return true;
         }
@@ -200,6 +263,10 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
         if (frame_count == 0ULL) {
             continue;
         }
+        if (pmm_total_frames > PMM_MAX_FRAMES) {
+            pmm_reset_state();
+            return false;
+        }
         remaining_frames = PMM_MAX_FRAMES - pmm_total_frames;
         if ((remaining_frames == 0ULL) ||
             (pmm_region_count >= PMM_MAX_REGIONS)) {
@@ -209,6 +276,11 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
         if (frame_count > remaining_frames) {
             frame_count = remaining_frames;
             pmm_memory_map_capped = true;
+        }
+        if ((pmm_total_frames > (UINT64_MAX - frame_count)) ||
+            ((pmm_total_frames + frame_count) > PMM_MAX_FRAMES)) {
+            pmm_reset_state();
+            return false;
         }
 
         pmm_regions[pmm_region_count].base = aligned_base;
@@ -228,27 +300,56 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
     return true;
 }
 
-bool pmm_alloc_frame(uint64_t *physical_address) {
+bool pmm_alloc_frame_in_range(uint64_t minimum_physical_address,
+                              uint64_t maximum_physical_address_exclusive,
+                              uint64_t *physical_address) {
+    uint64_t aligned_minimum;
     uint64_t region_index;
 
     if ((!pmm_initialized) || (physical_address == NULL) ||
-        (pmm_free_frames == 0ULL)) {
+        (pmm_free_frames == 0ULL) ||
+        (minimum_physical_address >= maximum_physical_address_exclusive) ||
+        !pmm_align_up(minimum_physical_address, &aligned_minimum) ||
+        (aligned_minimum >= maximum_physical_address_exclusive)) {
         return false;
     }
 
     for (region_index = 0ULL; region_index < pmm_region_count; ++region_index) {
-        uint64_t local_frame;
         const struct pmm_region *region = &pmm_regions[region_index];
+        uint64_t region_end;
+        uint64_t search_base;
+        uint64_t local_frame;
 
-        for (local_frame = 0ULL; local_frame < region->frame_count;
-             ++local_frame) {
+        if (!pmm_region_end(region, &region_end)) {
+            return false;
+        }
+        search_base = region->base;
+        if (search_base < aligned_minimum) {
+            search_base = aligned_minimum;
+        }
+        if ((search_base >= region_end) ||
+            (search_base >= maximum_physical_address_exclusive)) {
+            continue;
+        }
+
+        local_frame = (search_base - region->base) / PMM_PAGE_SIZE;
+        for (; local_frame < region->frame_count; ++local_frame) {
             const uint64_t frame_index = region->bitmap_base + local_frame;
+            const uint64_t frame_address =
+                region->base + (local_frame * PMM_PAGE_SIZE);
 
+            if (frame_address >= maximum_physical_address_exclusive) {
+                break;
+            }
+            if (!pmm_bitmap_index_valid(frame_index)) {
+                return false;
+            }
             if (!pmm_bit_is_set(frame_index)) {
-                pmm_set_bit(frame_index);
+                if (!pmm_set_bit(frame_index)) {
+                    return false;
+                }
                 --pmm_free_frames;
-                *physical_address =
-                    region->base + (local_frame * PMM_PAGE_SIZE);
+                *physical_address = frame_address;
                 return true;
             }
         }
@@ -257,16 +358,19 @@ bool pmm_alloc_frame(uint64_t *physical_address) {
     return false;
 }
 
+bool pmm_alloc_frame(uint64_t *physical_address) {
+    return pmm_alloc_frame_in_range(0ULL, UINT64_MAX, physical_address);
+}
+
 bool pmm_free_frame(uint64_t physical_address) {
     uint64_t frame_index;
 
     if ((!pmm_initialized) ||
         !pmm_find_frame(physical_address, &frame_index) ||
-        !pmm_bit_is_set(frame_index)) {
+        !pmm_bit_is_set(frame_index) || !pmm_clear_bit(frame_index)) {
         return false;
     }
 
-    pmm_clear_bit(frame_index);
     ++pmm_free_frames;
     return true;
 }
@@ -280,7 +384,8 @@ bool pmm_frame_is_usable(uint64_t physical_address) {
 }
 
 bool pmm_get_stats(struct pmm_stats *stats) {
-    if ((!pmm_initialized) || (stats == NULL)) {
+    if ((!pmm_initialized) || (stats == NULL) ||
+        (pmm_total_frames > (UINT64_MAX / PMM_PAGE_SIZE))) {
         return false;
     }
 
