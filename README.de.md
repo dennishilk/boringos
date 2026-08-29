@@ -14,7 +14,7 @@ Es ist **keine Linux-Distribution**, **kein BSD** und **basiert nicht auf dem Ke
 Der aktuelle Main-Stand ist:
 
 ```text
-BoringKernel 0.0.52-dev
+BoringKernel 0.0.53-dev
 ```
 
 Die Entwicklung ist bis einschließlich **Milestone 51** abgeschlossen.

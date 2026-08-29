@@ -14,7 +14,7 @@ It is **not a Linux distribution**, **not BSD**, and **not based on another oper
 The current main line is:
 
 ```text
-BoringKernel 0.0.52-dev
+BoringKernel 0.0.53-dev
 ```
 
 Development is complete through **Milestone 51**.
