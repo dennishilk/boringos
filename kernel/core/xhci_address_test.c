@@ -110,14 +110,29 @@ void xhci_address_test_run(void) {
         (decoded != M53_EXPECTED_COMPLETIONS)) {
         fail("real M52 transport accounting");
     }
-    if (!boring_input_get_stats(&input_stats) || !input_stats.initialized ||
-        !input_stats.owned ||
-        (input_stats.owner_pid != M53_INPUT_OWNER_PID) ||
-        (input_stats.dropped_events != 0ULL) ||
-        (input_stats.queued_events != M53_EXPECTED_EVENTS) ||
-        (input_stats.modifiers != 0U)) {
-        fail("canonical queue state");
-    }
+    if (!boring_input_get_stats(&input_stats)) {
+    fail("canonical queue stats");
+}
+serial_write_string("M53 queue precheck queued=");
+serial_write_u64((uint64_t)input_stats.queued_events);
+serial_write_string(" dropped=");
+serial_write_u64(input_stats.dropped_events);
+serial_write_string(" modifiers=");
+serial_write_u64((uint64_t)input_stats.modifiers);
+serial_write_string(" owner=");
+serial_write_u64(input_stats.owner_pid);
+serial_write_string(" owned=");
+serial_write_u64(input_stats.owned ? 1ULL : 0ULL);
+serial_write_string(" initialized=");
+serial_write_u64(input_stats.initialized ? 1ULL : 0ULL);
+serial_write_string("\n");
+if (!input_stats.initialized || !input_stats.owned ||
+    (input_stats.owner_pid != M53_INPUT_OWNER_PID) ||
+    (input_stats.dropped_events != 0ULL) ||
+    (input_stats.queued_events != M53_EXPECTED_EVENTS) ||
+    (input_stats.modifiers != 0U)) {
+    fail("canonical queue state");
+}
     if (boring_input_read(M53_INPUT_OWNER_PID, events,
                           BORING_INPUT_READ_MAX, &event_count) !=
             BORING_INPUT_RESULT_OK ||
