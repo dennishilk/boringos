@@ -56,7 +56,7 @@ done
 [ "$attempt" -lt 400 ] || fail 'M52 real report acceptance timed out'
 
 for marker in \
-    'BoringKernel 0.0.60-dev' \
+    'BoringKernel 0.0.61-dev' \
     'M52 USB HID transfers ready; inject real USB input now.' \
     'M52 xHCI HID interrupt-IN QEMU passed.'
 do

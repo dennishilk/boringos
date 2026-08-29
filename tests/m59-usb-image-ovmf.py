@@ -75,7 +75,7 @@ def run():
                     vm.wait()
 
     for marker in (
-        "Kernel: BoringKernel 0.0.60-dev",
+        "Kernel: BoringKernel 0.0.61-dev",
         "Arch: x86_64",
         "PCI enumeration: COMPLETE",
         "Framebuffer: READY",
