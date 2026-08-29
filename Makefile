@@ -84,6 +84,7 @@ RUNTIME_HEAP_HOST_TEST := $(BUILD_DIR)/runtime-heap-host-test
 IPC_HOST_TEST := $(BUILD_DIR)/ipc-host-test
 DISPLAY_HOST_TEST := $(BUILD_DIR)/display-host-test
 PMM_READINESS_HOST_TEST := $(BUILD_DIR)/pmm-readiness-host-test
+XHCI_HOST_TEST := $(BUILD_DIR)/xhci-host-test
 MKBORINGFS_VERIFY := $(BUILD_DIR)/mkboringfs-test/mkboringfs-verify
 BORINGFS_HEADER := libs/boringfs/include/boring/boringfs.h
 BORINGFS_CODEC := libs/boringfs/codec.c
@@ -217,6 +218,9 @@ BOOT_USER_NAME := boring-display.elf
 BOOT_EXTRA_USER_ELF := $(WM_ELF)
 BOOT_EXTRA_USER_NAME := boringwm.elf
 BOOT_LIMINE_CONF := limine-m36-desktop.conf
+else ifeq ($(TEST_MODE),m48-xhci)
+TEST_MODE_VALUE := 5
+TEST_HARNESS_C := kernel/core/xhci_test.c kernel/core/xhci_test_adapter.c
 else ifeq ($(TEST_MODE),m34-display)
 # Reuse the established special-test entry seam (value 5); the adapter below
 # routes it to the dedicated three-process display_test_run() harness.
@@ -245,7 +249,7 @@ BOOT_EXTRA3_USER_ELF := $(USER_BUILD_DIR)/wm-client-b.elf
 BOOT_EXTRA4_USER_ELF := $(USER_BUILD_DIR)/wm-client-c.elf
 BOOT_LIMINE_CONF := limine-wm.conf
 else
-$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, block, virtio-block, boringfs-ro, boringfs-rw, persistent-root, m33-ipc, or m34-display, m35-wm, m35-wm-death, m36-spawn, or m36-desktop)
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, block, virtio-block, boringfs-ro, boringfs-rw, persistent-root, m33-ipc, m34-display, m35-wm, m35-wm-death, m36-spawn, m36-desktop, or m48-xhci)
 endif
 
 LIMINE_VERSION := 12.5.2
@@ -297,6 +301,8 @@ KERNEL_C_SOURCES := \
 	kernel/core/smbios_limine.c \
 	kernel/core/pci_inventory.c \
 	kernel/core/pci_inventory_x86.c \
+	kernel/core/xhci.c \
+	kernel/core/usb_hid.c \
 	kernel/core/cpu_inventory.c \
 	kernel/core/cpu_inventory_x86.c \
 	kernel/core/entry.c \
@@ -339,6 +345,7 @@ KERNEL_C_SOURCES := \
 	kernel/arch/x86_64/vmm.c \
 	kernel/arch/x86_64/mmio.c \
 	kernel/arch/x86_64/pci.c \
+	kernel/arch/x86_64/xhci.c \
 	kernel/arch/x86_64/address_space.c \
 	kernel/arch/x86_64/ring3_memory.c \
 	kernel/arch/x86_64/descriptor.c \
@@ -460,6 +467,10 @@ display-host-test: $(DISPLAY_HOST_TEST)
 .PHONY: pmm-readiness-host-test
 pmm-readiness-host-test: $(PMM_READINESS_HOST_TEST)
 	$(PMM_READINESS_HOST_TEST)
+
+.PHONY: xhci-host-test
+xhci-host-test: $(XHCI_HOST_TEST)
+	$(XHCI_HOST_TEST)
 
 boringfs-host-test:
 	sh ./tests/boringfs-host-test.sh
@@ -1072,6 +1083,13 @@ pci-inventory-host-test: $(BUILD_DIR)/pci-inventory-host-test
 $(BUILD_DIR)/pci-inventory-host-test: tests/pci-inventory-host-test.c kernel/core/pci_inventory.c kernel/include/boring/pci_inventory.h kernel/include/boring/pci.h
 	@mkdir -p $(dir $@)
 	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) tests/pci-inventory-host-test.c kernel/core/pci_inventory.c -o $@
+
+$(XHCI_HOST_TEST): tests/xhci-host-test.c kernel/core/xhci.c \
+		kernel/core/usb_hid.c kernel/include/boring/xhci.h \
+		kernel/include/boring/usb_hid.h kernel/include/boring/pci.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) tests/xhci-host-test.c \
+		kernel/core/xhci.c kernel/core/usb_hid.c -o $@
 
 .PHONY: smbios-host-test
 smbios-host-test: $(BUILD_DIR)/smbios-host-test
