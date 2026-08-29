@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.48-dev
+BoringKernel 0.0.49-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1474,3 +1474,37 @@ Exact-head closeout CI and guarded merge remain required.
 Active version after runtime-neutral closeout: **BoringKernel 0.0.48-dev**.
 M48 must wait for closeout CI, guarded squash and main-push SUCCESS.
 See [m47-real-hardware-readiness.md](m47-real-hardware-readiness.md).
+
+
+## Milestone 48: bounded xHCI / USB-HID foundation — COMPLETE, Semantic Frozen
+
+The first modern interactive blocker selected by M47 now has a BoringOS-owned
+foundation. One real segment-zero PCI class `0C:03:30` controller is bound
+through bounded BAR0/MMIO validation, legacy ownership handoff, halt/reset and
+PMM-owned DCBAA, command-ring, event-ring and ERST setup. The controller starts
+with bounded slots/ports and reports real connect-state bits. Scratchpad-
+requiring controllers are rejected rather than partially programmed.
+
+A separate bounded USB-HID boot-protocol decoder handles exact keyboard and
+mouse reports while rejecting rollover/error usages, duplicates, malformed
+lengths and output overflow. It does not yet address USB devices, configure HID
+interrupt endpoints, consume transfer events or feed the input queue; the
+i8042-free desktop and physical hardware therefore remain unclaimed.
+
+## Semantic Freeze
+
+Implementation: `34432fad832fd72199a860f4246eb6071567abd6`.
+Tree: `2d7793950614eaff234b794962bfc47d9f44b389`.
+Exact-head SUCCESS: M48 #1 / 33222336846; M47 #4 / 33222336810;
+M46 #8 / 33222336738; M45 #12 / 33222336757;
+M44 #17 / 33222336768; M43 #21 / 33222336801;
+M42 #25 / 33222336739; M41 #29 / 33222336746;
+M40 #32 / 33222336753; M39 #35 / 33222336736;
+M38 #46 / 33222336883; M37 #79 / 33222336761;
+complete Boot #545 / 33222336779.
+This separate closeout changes only documentation and active version witnesses.
+Exact-head closeout CI and guarded merge remain required.
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.49-dev**.
+No M49 work is included.
+See [m48-xhci-usb-hid-foundation.md](m48-xhci-usb-hid-foundation.md).

@@ -1,6 +1,7 @@
 # M48 — xHCI / USB-HID foundation
 
-Status: implementation candidate on BoringKernel 0.0.48-dev.
+Status: implementation COMPLETE and Semantic Frozen; runtime-neutral closeout
+to BoringKernel 0.0.49-dev.
 
 ## Proven boundary
 
@@ -49,3 +50,18 @@ decoded reports to the BoringOS input queue. Therefore the desktop is not yet
 claimed operable with i8042 disabled, and there is no physical-hardware claim.
 
 AHCI/NVMe persistent-root support remains the independent M47 storage blocker.
+
+## Semantic Freeze
+
+Implementation: `34432fad832fd72199a860f4246eb6071567abd6`.
+Tree: `2d7793950614eaff234b794962bfc47d9f44b389`.
+Exact-head SUCCESS: M48 #1 / 33222336846; M47 #4 / 33222336810;
+M46 #8 / 33222336738; M45 #12 / 33222336757;
+M44 #17 / 33222336768; M43 #21 / 33222336801;
+M42 #25 / 33222336739; M41 #29 / 33222336746;
+M40 #32 / 33222336753; M39 #35 / 33222336736;
+M38 #46 / 33222336883; M37 #79 / 33222336761;
+complete Boot #545 / 33222336779.
+
+The closeout changes only this documentation, the roadmap and active version
+witnesses. Active version after closeout: **BoringKernel 0.0.49-dev**.
