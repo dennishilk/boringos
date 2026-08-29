@@ -194,6 +194,8 @@ def run_session(name, root_image, expect_existing):
         witness("m54-desktop: q35 i8042-free xHCI USB keyboard/tablet path online")
         witness("boring-spawn: VFS executable source /bin/boring-display")
         witness("boring-spawn: VFS executable source /bin/boringwm")
+        witness("display: M35 service and M31 input ready")
+        witness("wm: boring.wm Ring3 policy ready; no pixel mappings")
         usb_inject([usb_abs("x", 10000), usb_abs("y", 20000)])
         usb_inject([usb_abs("x", 12345), usb_abs("y", 23456)])
         usb_inject([usb_button("left", True)])
