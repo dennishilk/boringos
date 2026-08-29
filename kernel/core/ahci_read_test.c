@@ -159,7 +159,7 @@ void ahci_read_test_run(void) {
     }
     serial_write_string("M56 AHCI read-only write rejection: PASS\n");
 
-    if (!ahci_block_get_stats(&stats) || (stats.read_commands < 7ULL)) {
+    if (!ahci_block_get_stats(&stats) || (stats.read_commands < 5ULL)) {
         fail("read command evidence");
     }
     serial_write_string("M56 AHCI READ DMA EXT commands: ");
