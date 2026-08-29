@@ -129,3 +129,81 @@ bool ahci_wait_mask_bounded(ahci_poll_reader read, void *context,
     *last_value = value;
     return false;
 }
+
+bool ahci_parse_identify(const uint16_t words[AHCI_IDENTIFY_WORDS],
+                         struct ahci_identify_geometry *geometry) {
+    uint64_t logical_blocks;
+    uint32_t logical_block_size = 512U;
+    bool lba_supported;
+    bool lba48_supported;
+
+    if ((words == NULL) || (geometry == NULL)) {
+        return false;
+    }
+
+    lba_supported = (words[49] & (1U << 9U)) != 0U;
+    lba48_supported = ((words[83] & 0xc000U) == 0x4000U) &&
+                      ((words[83] & (1U << 10U)) != 0U);
+
+    if (lba48_supported) {
+        logical_blocks = (uint64_t)words[100] |
+                         ((uint64_t)words[101] << 16U) |
+                         ((uint64_t)words[102] << 32U) |
+                         ((uint64_t)words[103] << 48U);
+    } else if (lba_supported) {
+        logical_blocks = (uint64_t)words[60] |
+                         ((uint64_t)words[61] << 16U);
+    } else {
+        return false;
+    }
+
+    if (((words[106] & 0xc000U) == 0x4000U) &&
+        ((words[106] & (1U << 12U)) != 0U)) {
+        const uint32_t logical_words = (uint32_t)words[117] |
+                                       ((uint32_t)words[118] << 16U);
+        if ((logical_words == 0U) || (logical_words > (UINT32_MAX / 2U))) {
+            return false;
+        }
+        logical_block_size = logical_words * 2U;
+    }
+
+    if ((logical_blocks == 0ULL) || (logical_block_size == 0U) ||
+        (logical_blocks > (UINT64_MAX / (uint64_t)logical_block_size))) {
+        return false;
+    }
+
+    geometry->logical_blocks = logical_blocks;
+    geometry->logical_block_size = logical_block_size;
+    geometry->lba_supported = lba_supported || lba48_supported;
+    geometry->lba48_supported = lba48_supported;
+    return true;
+}
+
+bool ahci_lba_range_valid(uint64_t logical_blocks, uint64_t first_block,
+                          uint32_t block_count) {
+    if ((logical_blocks == 0ULL) || (block_count == 0U) ||
+        (first_block >= logical_blocks)) {
+        return false;
+    }
+    return (uint64_t)block_count <= (logical_blocks - first_block);
+}
+
+bool ahci_compute_transfer_bytes(uint32_t logical_block_size,
+                                 uint32_t block_count,
+                                 uint32_t transfer_limit,
+                                 uint32_t *byte_count) {
+    uint32_t bytes;
+
+    if ((byte_count == NULL) || (logical_block_size == 0U) ||
+        (block_count == 0U) || (transfer_limit == 0U) ||
+        (block_count > (UINT32_MAX / logical_block_size))) {
+        return false;
+    }
+
+    bytes = logical_block_size * block_count;
+    if ((bytes == 0U) || (bytes > transfer_limit)) {
+        return false;
+    }
+    *byte_count = bytes;
+    return true;
+}
