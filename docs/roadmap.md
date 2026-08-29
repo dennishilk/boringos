@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.59-dev
+BoringKernel 0.0.60-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1695,3 +1695,46 @@ Boot #668 / `33258288413`.
 Active version after runtime-neutral closeout: **BoringKernel 0.0.59-dev**. No
 M59 implementation is included.
 See [m58-high-memory-pmm.md](m58-high-memory-pmm.md).
+
+
+## Milestone 59: bounded Cthulhu physical-smoke boot readiness — COMPLETE, Semantic Frozen
+
+M59 adds the smallest repository/QEMU preparation for the first physical
+Cthulhu boot without claiming that the physical machine has already succeeded.
+A dedicated diagnostic boot path reuses the established PMM/VMM/heap,
+framebuffer, CPUID, PCI, SMBIOS and xHCI/HID foundations, then deliberately
+stops before normal block-root initialization. Internal-storage writes remain
+explicitly disabled; no AHCI write path or VirtIO root dependency is entered.
+
+The focused q35 acceptance uses `i8042=off`, `qemu-xhci`, `usb-kbd` and
+`usb-tablet`, including a real 32-GiB guest memory map. Exact freeze acceptance
+observed 34,354,835,456 usable bytes, memory above 4 GiB, two canonical USB input
+events, zero drops, `Storage writes: DISABLED`, and the final marker
+`M59 PHYSICAL SMOKE HARNESS PASSED`.
+
+The exact frozen build was also packaged as
+`boringos-m59-cthulhu-smoke.img` (5,455,872 bytes, SHA-256
+`86d74a14c7ca885166b518d630d7d72b27cc21a81d0436b9f64add057b60ee06`,
+artifact `9717400218`). OVMF booted that image successfully as read-only xHCI USB
+mass storage, with metadata bound to the frozen implementation SHA. Repository
+automation never guesses or flashes a host block device.
+
+Runtime Semantic Freeze: `297b140260d2597df9be54b242a5361532168718`, tree
+`af3844ee38221588bd593a3bba231db5d9a6932b`. All 24 permanent feature-head
+workflows were terminal SUCCESS at freeze, including focused M59 run
+`33261514849` and complete BoringKernel boot Run #680 / `33261514756`.
+
+Physical status remains deliberately separate:
+
+```text
+M59 repository/QEMU readiness: PROVEN
+M59 physical Cthulhu validation: PENDING USER HARDWARE TEST
+```
+
+The pending physical hardware test does not block M60. M59 adds no USB mass
+storage driver, partition parsing, NVMe, networking, installer or physical-PC
+success claim.
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.60-dev**. No
+M60 implementation is included.
+See [m59-cthulhu-physical-smoke.md](m59-cthulhu-physical-smoke.md).

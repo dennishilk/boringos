@@ -288,7 +288,7 @@ long boring_system_info(struct boring_system_info *info) {
     (void)strcpy(info->username, "boring");
     (void)strcpy(info->os_name, "BoringOS");
     (void)strcpy(info->kernel_name, "BoringKernel");
-    (void)strcpy(info->kernel_version, "0.0.59-dev");
+    (void)strcpy(info->kernel_version, "0.0.60-dev");
     (void)strcpy(info->arch, "x86_64");
     (void)strcpy(info->root_fs, "RAMFS");
     (void)strcpy(info->root_device, "memory");
