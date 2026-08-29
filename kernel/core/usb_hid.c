@@ -220,10 +220,6 @@ static void m52_barrier(void) {
     __asm__ volatile ("mfence" ::: "memory");
 }
 
-static uint32_t m52_mmio_read32(const volatile uint8_t *base, uint32_t offset) {
-    return *(const volatile uint32_t *)(const volatile void *)(base + offset);
-}
-
 static void m52_mmio_write32(volatile uint8_t *base, uint32_t offset,
                              uint32_t value) {
     *(volatile uint32_t *)(volatile void *)(base + offset) = value;
