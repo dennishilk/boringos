@@ -40,7 +40,7 @@ if grep -Fq 'M56 AHCI READ QEMU FAILED:' "$LOG"; then
     exit 1
 fi
 for marker in \
-    'BoringKernel 0.0.58-dev' \
+    'BoringKernel 0.0.59-dev' \
     'M56 AHCI IDENTIFY: PASS' \
     'M56 AHCI capacity blocks: 16384' \
     'M56 AHCI logical sector size: 512' \

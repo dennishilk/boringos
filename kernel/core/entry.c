@@ -1154,7 +1154,7 @@ void boring_kernel_entry(void) {
     if (framebuffer_surface != NULL) {
         const struct boring_boot_dashboard_info dashboard_info = {
             .kernel_name = "BoringKernel",
-            .kernel_version = "0.0.58-dev",
+            .kernel_version = "0.0.59-dev",
             .arch = "x86_64",
             .memory_bytes = pmm_stats.usable_bytes,
             .root_fs = "N/A",
