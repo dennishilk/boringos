@@ -45,10 +45,10 @@ sha256sum "$BEFORE" | tee "$OUT/sha256-before.txt"
     -display none -serial "file:$LOG" -monitor none \
     -no-reboot -no-shutdown \
     -device qemu-xhci,id=xhci \
-    -device usb-kbd,bus=xhci.0 \
-    -device usb-tablet,bus=xhci.0 \
+    -device usb-kbd,bus=xhci.0,port=1 \
+    -device usb-tablet,bus=xhci.0,port=2 \
     -drive "file=$IMAGE,if=none,format=raw,id=m60usb,cache=writeback" \
-    -device usb-storage,bus=xhci.0,drive=m60usb,removable=on \
+    -device usb-storage,bus=xhci.0,port=3,drive=m60usb,removable=on \
     -trace enable=usb_xhci_xfer_* \
     -trace enable=usb_xhci_queue_event \
     >>"$QEMU_LOG" 2>&1 &
