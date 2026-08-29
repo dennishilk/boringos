@@ -167,6 +167,12 @@ struct xhci_state {
     bool controller_running;
 };
 
+enum xhci_shared_transfer_owner {
+    XHCI_SHARED_TRANSFER_REJECT = 0,
+    XHCI_SHARED_TRANSFER_STORAGE,
+    XHCI_SHARED_TRANSFER_HID
+};
+
 /* Pure bounded capability parser used by the hardware path and host fixtures. */
 bool xhci_parse_capabilities(const volatile void *mmio, uint32_t length,
                              struct xhci_capabilities *capabilities);
@@ -252,6 +258,17 @@ bool xhci_validate_interrupt_transfer_event(
     uint64_t expected_trb_physical, uint16_t requested_length,
     uint16_t *actual_length, bool *short_packet);
 
+/* Pure M61 shared-Event-Ring classifier. A nonmatching transfer is REJECT
+ * unless it strictly owns either the awaited Storage TRB or one currently
+ * outstanding configured HID Interrupt-IN TRB. */
+bool xhci_classify_shared_transfer_event(
+    const struct xhci_state *state, const struct xhci_trb *event,
+    uint8_t storage_slot_id, uint8_t storage_endpoint_id,
+    uint64_t storage_ring_physical, uint16_t storage_ring_usable,
+    uint64_t storage_expected_trb_physical, uint32_t storage_requested_length,
+    enum xhci_shared_transfer_owner *owner,
+    uint32_t *storage_actual_length, bool *storage_short_packet);
+
 /* Initializes one segment-zero xHCI controller through PCI BAR0. */
 bool xhci_init(struct xhci_state *state);
 bool xhci_address_connected(struct xhci_state *state);
@@ -259,6 +276,12 @@ bool xhci_discover_descriptors(struct xhci_state *state);
 bool xhci_configure_hid_devices(struct xhci_state *state);
 bool xhci_poll_hid_reports(struct xhci_state *state, uint32_t completion_goal);
 bool xhci_service_hid_reports(struct xhci_state *state);
+/* Consume exactly this already-fetched HID Transfer Event. This never fetches
+ * another Event Ring entry; successful consumption accounts it once and may
+ * rearm the established HID endpoint transport. */
+bool xhci_consume_hid_transfer_event(struct xhci_state *state,
+                                     const struct xhci_trb *event,
+                                     bool rearm_after_completion);
 const struct xhci_state *xhci_get_state(void);
 
 _Static_assert(sizeof(struct xhci_trb) == XHCI_TRB_SIZE,

@@ -21,6 +21,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-system-x86 ovmf gdisk dosfstools mtools xz-utils
+      - name: Prove HID-before-Storage shared Event Ring ordering
+        run: sh tests/m61-xhci-event-coexistence-host.sh
       - name: Build M61 runtime and negative contracts
         run: sh tests/m61-build.sh
       - name: Build deterministic bounded flashable USB image

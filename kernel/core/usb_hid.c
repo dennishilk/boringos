@@ -24,6 +24,116 @@ bool xhci_service_hid_reports_legacy(struct xhci_state *state);
 
 #include "usb_hid_impl.inc"
 
+static bool m61_storage_pointer_owned(uint64_t pointer,
+                                      uint64_t ring_physical,
+                                      uint16_t ring_usable) {
+    uint64_t span;
+    uint64_t end;
+    if ((ring_physical == 0ULL) || (ring_usable == 0U) ||
+        ((pointer & 0x0fULL) != 0ULL)) {
+        return false;
+    }
+    span = (uint64_t)ring_usable * XHCI_TRB_SIZE;
+    if (ring_physical > UINT64_MAX - span) { return false; }
+    end = ring_physical + span;
+    return (pointer >= ring_physical) && (pointer < end);
+}
+
+bool xhci_classify_shared_transfer_event(
+    const struct xhci_state *state, const struct xhci_trb *event,
+    uint8_t storage_slot_id, uint8_t storage_endpoint_id,
+    uint64_t storage_ring_physical, uint16_t storage_ring_usable,
+    uint64_t storage_expected_trb_physical, uint32_t storage_requested_length,
+    enum xhci_shared_transfer_owner *owner,
+    uint32_t *storage_actual_length, bool *storage_short_packet) {
+    uint8_t type;
+    uint8_t endpoint;
+    uint8_t slot;
+    uint8_t completion;
+    uint32_t residual;
+    uint8_t device_index;
+    uint32_t hid_matches = 0U;
+
+    if ((state == NULL) || (event == NULL) || (owner == NULL) ||
+        (storage_actual_length == NULL) || (storage_short_packet == NULL) ||
+        (storage_slot_id == 0U) || (storage_endpoint_id <= 1U) ||
+        (storage_endpoint_id > 31U) || (storage_requested_length == 0U) ||
+        !m61_storage_pointer_owned(storage_expected_trb_physical,
+                                   storage_ring_physical,
+                                   storage_ring_usable)) {
+        return false;
+    }
+
+    *owner = XHCI_SHARED_TRANSFER_REJECT;
+    *storage_actual_length = 0U;
+    *storage_short_packet = false;
+
+    type = (uint8_t)((event->control >> M52_TRB_TYPE_SHIFT) &
+                     M52_TRB_TYPE_MASK);
+    if (type != XHCI_TRB_TYPE_TRANSFER_EVENT) { return true; }
+
+    endpoint = (uint8_t)((event->control >> M52_EVENT_ENDPOINT_SHIFT) &
+                         M52_EVENT_ENDPOINT_MASK);
+    slot = (uint8_t)(event->control >> M52_EVENT_SLOT_SHIFT);
+    completion = (uint8_t)(event->status >> M52_EVENT_COMPLETION_SHIFT);
+    residual = event->status & M52_EVENT_RESIDUAL_MASK;
+
+    if ((endpoint == storage_endpoint_id) && (slot == storage_slot_id) &&
+        (event->parameter == storage_expected_trb_physical)) {
+        if (!m61_storage_pointer_owned(event->parameter,
+                                       storage_ring_physical,
+                                       storage_ring_usable) ||
+            (residual > storage_requested_length) ||
+            ((completion != XHCI_COMPLETION_SUCCESS) &&
+             (completion != XHCI_COMPLETION_SHORT_PACKET))) {
+            return true;
+        }
+        *storage_actual_length = storage_requested_length - residual;
+        *storage_short_packet =
+            completion == XHCI_COMPLETION_SHORT_PACKET;
+        *owner = XHCI_SHARED_TRANSFER_STORAGE;
+        return true;
+    }
+
+    if (state->addressed_count > XHCI_MAX_ADDRESSED_DEVICES) { return false; }
+    for (device_index = 0U; device_index < state->addressed_count;
+         ++device_index) {
+        const struct xhci_addressed_device *device =
+            &state->addressed[device_index];
+        uint8_t endpoint_index;
+        if (!device->device_configured || !device->hid_endpoint_ready) {
+            continue;
+        }
+        if (device->hid_configuration.endpoint_count > XHCI_MAX_HID_ENDPOINTS) {
+            return false;
+        }
+        for (endpoint_index = 0U;
+             endpoint_index < device->hid_configuration.endpoint_count;
+             ++endpoint_index) {
+            const struct xhci_hid_endpoint_runtime *runtime =
+                &device->hid_runtime[endpoint_index];
+            const struct xhci_hid_endpoint_descriptor *descriptor =
+                &device->hid_configuration.endpoints[endpoint_index];
+            uint16_t actual = 0U;
+            bool short_packet = false;
+            if (!runtime->transfer_outstanding) { continue; }
+            if (!xhci_validate_interrupt_transfer_event(
+                    event, device->hid_ring_physical[endpoint_index],
+                    device->slot_id, descriptor->endpoint_id,
+                    runtime->expected_trb_physical, descriptor->max_packet,
+                    &actual, &short_packet)) {
+                continue;
+            }
+            (void)actual;
+            (void)short_packet;
+            ++hid_matches;
+            if (hid_matches > 1U) { return false; }
+        }
+    }
+    if (hid_matches == 1U) { *owner = XHCI_SHARED_TRANSFER_HID; }
+    return true;
+}
+
 #if !__STDC_HOSTED__
 #undef xhci_poll_hid_reports
 #undef xhci_service_hid_reports
@@ -87,6 +197,89 @@ static enum m60_hid_classification m60_classify_hid_device(
     return M60_HID_SUPPORTED;
 }
 
+static bool m60_rearm_hid_endpoints(struct xhci_state *active,
+                                     volatile uint8_t *mmio) {
+    uint8_t device_index;
+    if ((active == NULL) || (mmio == NULL)) { return false; }
+    for (device_index = 0U; device_index < active->addressed_count;
+         ++device_index) {
+        struct xhci_addressed_device *device = &active->addressed[device_index];
+        enum m60_hid_classification classification =
+            m60_classify_hid_device(device);
+        uint8_t endpoint_index;
+
+        if (classification == M60_HID_INVALID) { return false; }
+        if (classification == M60_HID_NOT_HID) { continue; }
+        if (!device->device_configured || !device->hid_endpoint_ready ||
+            (device->hid_configuration.endpoint_count > XHCI_MAX_HID_ENDPOINTS)) {
+            return false;
+        }
+        for (endpoint_index = 0U;
+             endpoint_index < device->hid_configuration.endpoint_count;
+             ++endpoint_index) {
+            if (!device->hid_runtime[endpoint_index].transfer_outstanding &&
+                !m52_submit_endpoint(mmio, device, endpoint_index)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool m60_consume_hid_event_mapped(struct xhci_state *active,
+                                          volatile uint8_t *mmio,
+                                          const struct xhci_trb *event,
+                                          bool rearm_after_completion,
+                                          uint32_t *completed) {
+    uint32_t before;
+    if ((active == NULL) || (mmio == NULL) || (event == NULL) ||
+        (completed == NULL)) {
+        return false;
+    }
+    before = *completed;
+    if (!m52_complete_event(active, event, completed) ||
+        (*completed != before + 1U)) {
+        return false;
+    }
+    if (rearm_after_completion && !m60_rearm_hid_endpoints(active, mmio)) {
+        return false;
+    }
+    return true;
+}
+
+bool xhci_consume_hid_transfer_event(struct xhci_state *state,
+                                     const struct xhci_trb *event,
+                                     bool rearm_after_completion) {
+    const struct xhci_state *published;
+    struct xhci_state *active;
+    volatile void *mapping = NULL;
+    uint32_t completed = 0U;
+    bool success = false;
+
+    if ((state == NULL) || (event == NULL)) { return false; }
+    published = xhci_get_state();
+    if ((published == NULL) || !published->controller_running ||
+        !state->controller_running ||
+        (state->mmio_physical != published->mmio_physical) ||
+        (state->event_ring_physical != published->event_ring_physical) ||
+        (state->addressed_count != published->addressed_count) ||
+        !vmm_map_mmio_region(published->mmio_physical,
+                             M52_MMIO_WINDOW_SIZE, &mapping)) {
+        if (mapping != NULL) {
+            (void)vmm_unmap_mmio_region(mapping, M52_MMIO_WINDOW_SIZE);
+        }
+        return false;
+    }
+
+    active = (struct xhci_state *)(uintptr_t)published;
+    success = m60_consume_hid_event_mapped(
+        active, (volatile uint8_t *)mapping, event,
+        rearm_after_completion, &completed) && (completed == 1U);
+    *state = *active;
+    (void)vmm_unmap_mmio_region(mapping, M52_MMIO_WINDOW_SIZE);
+    return success;
+}
+
 static bool m60_poll_hid_reports_limit(struct xhci_state *state,
                                         uint32_t completion_goal,
                                         uint32_t wait_limit,
@@ -102,7 +295,6 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
     bool event_cycle;
     uint32_t completed = 0U;
     uint32_t attempt;
-    uint8_t device_index;
     bool success = false;
 
     if ((state == NULL) || (completion_goal == 0U) || (wait_limit == 0U)) {
@@ -125,27 +317,7 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
     mmio = (volatile uint8_t *)mapping;
     event_ring = (volatile struct xhci_trb *)event_virtual;
 
-    for (device_index = 0U; device_index < active->addressed_count;
-         ++device_index) {
-        struct xhci_addressed_device *device = &active->addressed[device_index];
-        enum m60_hid_classification classification =
-            m60_classify_hid_device(device);
-        uint8_t endpoint_index;
-
-        if (classification == M60_HID_INVALID) { goto out; }
-        if (classification == M60_HID_NOT_HID) { continue; }
-        if (!device->device_configured || !device->hid_endpoint_ready) {
-            goto out;
-        }
-        for (endpoint_index = 0U;
-             endpoint_index < device->hid_configuration.endpoint_count;
-             ++endpoint_index) {
-            if (!device->hid_runtime[endpoint_index].transfer_outstanding &&
-                !m52_submit_endpoint(mmio, device, endpoint_index)) {
-                goto out;
-            }
-        }
-    }
+    if (!m60_rearm_hid_endpoints(active, mmio)) { goto out; }
 
     consumed = m52_consumed_events(active);
     event_index = (uint16_t)(consumed % XHCI_EVENT_RING_TRBS);
@@ -182,32 +354,12 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
             goto out;
         }
         if ((type != XHCI_TRB_TYPE_TRANSFER_EVENT) ||
-            !m52_complete_event(active, &event, &completed)) {
+            !m60_consume_hid_event_mapped(
+                active, mmio, &event,
+                (completed + 1U < completion_goal) ||
+                    rearm_after_completion,
+                &completed)) {
             goto out;
-        }
-        if ((completed < completion_goal) || rearm_after_completion) {
-            for (device_index = 0U; device_index < active->addressed_count;
-                 ++device_index) {
-                struct xhci_addressed_device *device =
-                    &active->addressed[device_index];
-                enum m60_hid_classification classification =
-                    m60_classify_hid_device(device);
-                uint8_t endpoint_index;
-
-                if (classification == M60_HID_INVALID) { goto out; }
-                if (classification == M60_HID_NOT_HID) { continue; }
-                if (!device->device_configured || !device->hid_endpoint_ready) {
-                    goto out;
-                }
-                for (endpoint_index = 0U;
-                     endpoint_index < device->hid_configuration.endpoint_count;
-                     ++endpoint_index) {
-                    if (!device->hid_runtime[endpoint_index].transfer_outstanding &&
-                        !m52_submit_endpoint(mmio, device, endpoint_index)) {
-                        goto out;
-                    }
-                }
-            }
         }
     }
 
