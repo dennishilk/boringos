@@ -33,4 +33,5 @@ for marker in \
 do
     grep -Fq "$marker" "$LOG" || { cat "$LOG"; exit 1; }
 done
+cat "$LOG"
 echo 'm50-xhci-descriptors-qemu: PASS'
