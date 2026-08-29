@@ -213,8 +213,11 @@ def run_session(name, expect_existing):
                                 if tile["token"] == frame["focus"])
             marker = f"fd-read: pid {shell_for(terminal_pid)} fd 0 bytes 1"
             before = text().count(marker)
-            key(codes.get(char, char))
+            code = codes.get(char, char)
+            qmp("input-send-event", {"events": [QMP["key_event"](code, True)]})
             witness(marker, before + 1)
+            qmp("input-send-event", {"events": [QMP["key_event"](code, False)]})
+            time.sleep(0.025)
 
     def command_line(value):
         type_text(value)
