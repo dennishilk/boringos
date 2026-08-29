@@ -165,7 +165,8 @@ def run_session(name, root_image, expect_existing):
         try:
             ppm = out / "persisted-cat.ppm"
             qmp("screendump", {"filename": str(ppm)})
-            meta = dict(frame, width=width, height=height)
+            meta = dict(frame, width=width, height=height,
+                        cursor_x=width - 1, cursor_y=height - 1)
             (out / "persisted-cat.json").write_text(json.dumps(meta, indent=2) + "\n")
             TERM["decode"].__globals__["MAX_COLS"] = 160
             TERM["decode"].__globals__["MAX_ROWS"] = 96
