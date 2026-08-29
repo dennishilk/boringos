@@ -41,4 +41,5 @@ grep -Eq 'M55 AHCI port [0-9]+ SSTS=.+ SIG=.+' "$LOG" || {
     exit 1
 }
 
+cat "$LOG"
 echo 'm55-ahci-qemu: PASS'
