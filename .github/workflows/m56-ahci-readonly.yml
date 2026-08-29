@@ -1,0 +1,39 @@
+name: M56 AHCI read-only block path
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ahci-readonly:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install focused QEMU dependencies
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 xorriso
+      - name: Defensive IDENTIFY and transfer host fixtures
+        run: |
+          mkdir -p build
+          cc -Ikernel/include -std=c11 -fno-builtin \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            tests/m56-ahci-host-test.c kernel/core/ahci.c \
+            -o build/m56-ahci-host-test
+          ./build/m56-ahci-host-test
+      - name: Sanitized IDENTIFY and transfer host fixtures
+        run: |
+          cc -Ikernel/include -std=c11 -fno-builtin \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/m56-ahci-host-test.c kernel/core/ahci.c \
+            -o build/m56-ahci-host-test-sanitized
+          ASAN_OPTIONS=detect_leaks=0 ./build/m56-ahci-host-test-sanitized
+      - name: Real q35 AHCI IDENTIFY and synchronous reads
+        run: sh ./tests/m56-ahci-readonly-qemu.sh
