@@ -21,8 +21,36 @@ jobs:
       - name: Align stale README token in temporary helper
         run: sed -i 's#i8042/PS2#i8042/PS/2#g' scripts/m58-closeout.py
 
+      - name: Protect historical M57 version witness
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('docs/roadmap.md')
+          text = p.read_text()
+          old = 'Active version after runtime-neutral closeout: **BoringKernel 0.0.58-dev**. No\nM58 implementation is included.'
+          new = 'Active version after runtime-neutral closeout: **__M57_VERSION_WITNESS__**. No\nM58 implementation is included.'
+          if text.count(old) != 1:
+              raise SystemExit('historical M57 version witness mismatch')
+          p.write_text(text.replace(old, new, 1))
+          PY
+
       - name: Apply runtime-neutral closeout
         run: python3 scripts/m58-closeout.py
+
+      - name: Restore historical M57 version witness
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('docs/roadmap.md')
+          text = p.read_text()
+          old = 'Active version after runtime-neutral closeout: **__M57_VERSION_WITNESS__**. No\nM58 implementation is included.'
+          new = 'Active version after runtime-neutral closeout: **BoringKernel 0.0.58-dev**. No\nM58 implementation is included.'
+          if text.count(old) != 1:
+              raise SystemExit('historical M57 version restore mismatch')
+          p.write_text(text.replace(old, new, 1))
+          PY
 
       - name: Remove temporary closeout helpers
         run: |
