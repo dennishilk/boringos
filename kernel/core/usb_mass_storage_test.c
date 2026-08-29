@@ -13,6 +13,7 @@
 #define M60_MAX_BLOCK_BYTES 4096U
 
 static uint8_t neighbor_before[M60_MAX_BLOCK_BYTES];
+static uint8_t neighbor_next_before[M60_MAX_BLOCK_BYTES];
 static uint8_t target_before[M60_MAX_BLOCK_BYTES];
 static uint8_t neighbor_after[M60_MAX_BLOCK_BYTES];
 static uint8_t target_after[M60_MAX_BLOCK_BYTES];
@@ -126,9 +127,10 @@ void usb_mass_storage_test_run(void) {
     if (!xhci_address_connected(&state)) { fail("USB addressing"); }
     if (!xhci_discover_descriptors(&state)) { fail("descriptor discovery"); }
 
-    /* QEMU enumerates the two HID devices before the storage fixture.  The
-       established HID configurator configures those real descriptor-derived
-       devices and then returns false on the deliberately non-HID third device. */
+    /* The focused QEMU fixture pins keyboard/tablet to root ports 1/2 and
+       storage to port 3. The established HID configurator therefore proves
+       both HID endpoint configurations before deliberately stopping at the
+       non-HID mass-storage interface. */
     hid_config_result = xhci_configure_hid_devices(&state);
     (void)hid_config_result;
     hid_count = configured_hid_devices(&state);
@@ -183,6 +185,9 @@ void usb_mass_storage_test_run(void) {
     if (result != BLOCK_DEVICE_RESULT_OK) { fail("neighbor read before"); }
     result = block_device_read(usb0, M60_TEST_LBA, 1U, target_before);
     if (result != BLOCK_DEVICE_RESULT_OK) { fail("target read before"); }
+    result = block_device_read(usb0, M60_TEST_LBA + 1ULL, 1U,
+                               neighbor_next_before);
+    if (result != BLOCK_DEVICE_RESULT_OK) { fail("following neighbor read before"); }
 
     make_pattern(write_pattern, (size_t)block_size);
     if (bytes_equal(write_pattern, target_before, (size_t)block_size)) {
@@ -209,12 +214,9 @@ void usb_mass_storage_test_run(void) {
     serial_write_string("M60 neighboring sector before: unchanged\n");
 
     result = block_device_read(usb0, M60_TEST_LBA + 1ULL, 1U,
-                               neighbor_before);
-    if (result != BLOCK_DEVICE_RESULT_OK) { fail("neighbor after baseline"); }
-    result = block_device_read(usb0, M60_TEST_LBA + 1ULL, 1U,
                                neighbor_after);
     if ((result != BLOCK_DEVICE_RESULT_OK) ||
-        !bytes_equal(neighbor_before, neighbor_after, (size_t)block_size)) {
+        !bytes_equal(neighbor_next_before, neighbor_after, (size_t)block_size)) {
         fail("neighboring sector after changed");
     }
     serial_write_string("M60 neighboring sector after: unchanged\n");
@@ -234,7 +236,7 @@ void usb_mass_storage_test_run(void) {
     if ((stats == NULL) || (stats->bot_commands < 8U) ||
         (stats->bulk_in_transfers == 0U) ||
         (stats->bulk_out_transfers == 0U) ||
-        (stats->read_commands < 4U) || (stats->write_commands != 1U) ||
+        (stats->read_commands < 5U) || (stats->write_commands != 1U) ||
         (stats->flush_commands != 1U)) {
         fail("transport counters");
     }
