@@ -20,7 +20,7 @@ QMP = runpy.run_path(str(ROOT / "tests/qmp-input.py"))
 WM = runpy.run_path(str(ROOT / "tests/validate-wm-screenshot.py"))
 TERM = runpy.run_path(str(ROOT / "tests/validate-m36-terminal-screenshot.py"))
 SECTOR = 512
-ROOT_FIRST_LBA = 67584
+ROOT_FIRST_LBA = 133120
 ROOT_SECTORS = 32768
 IMAGE_SECTORS = 196608
 ROOT_START = ROOT_FIRST_LBA * SECTOR
@@ -272,7 +272,7 @@ def run_session(name, expect_existing):
         witness("m54-desktop: q35 i8042-free xHCI USB keyboard/tablet path online")
         witness("m61-root: Mass Storage 08/06/50 usb0 registered through M21")
         witness("m61-root: descriptor-derived Bulk OUT=")
-        witness("m61-root: usb0 sectors=196608 root first/count=67584/32768")
+        witness("m61-root: usb0 sectors=196608 root first/count=133120/32768")
         witness("m61-root: writable BoringFS mounted from usb0 bounded region")
         witness("m61-root: AHCI/VirtIO/RAMFS fallback disabled")
         witness("m37-desktop: real BoringFS root mounted")
@@ -304,9 +304,6 @@ def run_session(name, expect_existing):
             settled_capture(frame)
             (out / "SECOND_BOOT_RENDER_PROOF.txt").write_text(
                 "persistent file -> userspace cat -> BoringTerminal pixels: survived-usb\n")
-            # The reboot read/render proof is already complete. Rewrite the exact
-            # same bytes only so this session also proves WRITE(10)+flush before
-            # its bounded clean-drain success witness.
             command_line("write m61.txt survived-usb")
         else:
             command_line("mkdir persist")
@@ -434,9 +431,6 @@ def run():
         "UEFI boot, same usb0 BoringFS root, first write+flush, host exact bytes, "
         "same-image reboot terminal pixels, HID coexistence, and protected boot region passed.\n")
 
-    # Keep the published flashable artifact fresh while retaining evidence from
-    # the exact raw image that was booted twice. This restoration happens only
-    # after both boots and both host checks are complete.
     shutil.copyfile(pristine, IMAGE)
     if sha256(IMAGE) != initial_sha:
         raise RuntimeError("failed to restore exact fresh flashable image")

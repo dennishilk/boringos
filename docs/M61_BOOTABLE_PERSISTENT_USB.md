@@ -9,8 +9,8 @@ The layout is defined once for the kernel in `kernel/include/boring/m61_usb_layo
 - logical sector: 512 bytes
 - raw image: 196608 sectors = 100663296 bytes (96 MiB)
 - GPT metadata
-- EFI System Partition: LBA 2048, 65536 sectors (32 MiB)
-- BoringFS root slice: LBA 67584, 32768 sectors (16 MiB)
+- EFI System Partition: LBA 2048, 131072 sectors (64 MiB)
+- BoringFS root slice: LBA 133120, 32768 sectors (16 MiB)
 - remaining sectors intentionally unused except required GPT metadata
 
 The EFI System Partition contains `EFI/BOOT/BOOTX64.EFI`, the pinned Limine 12.5.2 path, `boot/limine/limine.conf`, `boot/kernel.elf`, and the single boot module `boot/user/boring-init.elf`. Desktop children are not sourced from the EFI partition: they are loaded through VFS from BoringFS.
