@@ -15,6 +15,6 @@ xHCI
 
 Acceptance must prove both keyboard and pointer events originate from real QEMU USB devices through qemu-xhci with the legacy i8042 path disabled. Direct synthetic injection at the queue/output end is not acceptable evidence.
 
-Pre-freeze CI diagnostics intentionally expose the canonical queue state when the focused real-USB acceptance fails; this is test evidence only and does not alter runtime input semantics.
+The focused acceptance consumes real HID completions one at a time under a fixed upper bound and succeeds only after the canonical queue reaches the required final state. Neutral HID reports may therefore add transport completions, but they do not relax the required seven-event Super+A / tablet-movement / left-button ordering or the final modifier-release state.
 
 M53 must not create a second input stack and must not expand into the full i8042-free desktop closeout reserved for a later milestone. USB storage, AHCI/NVMe, installer, networking, audio and M54 semantics are out of scope.
