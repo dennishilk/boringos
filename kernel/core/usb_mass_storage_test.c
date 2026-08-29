@@ -8,6 +8,7 @@
 #include <boring/usb_mass_storage.h>
 #include <boring/usb_mass_storage_test.h>
 #include <boring/xhci.h>
+#include <boring/xhci_mixed.h>
 
 #define M60_TEST_LBA 8ULL
 #define M60_MAX_BLOCK_BYTES 4096U
@@ -119,7 +120,6 @@ void usb_mass_storage_test_run(void) {
     enum block_device_result result;
     uint32_t block_size;
     uint32_t hid_count;
-    bool hid_config_result;
 
     validate_csw_rejections();
     block_device_init();
@@ -127,12 +127,9 @@ void usb_mass_storage_test_run(void) {
     if (!xhci_address_connected(&state)) { fail("USB addressing"); }
     if (!xhci_discover_descriptors(&state)) { fail("descriptor discovery"); }
 
-    /* The focused QEMU fixture pins keyboard/tablet to root ports 1/2 and
-       storage to port 3. The established HID configurator therefore proves
-       both HID endpoint configurations before deliberately stopping at the
-       non-HID mass-storage interface. */
-    hid_config_result = xhci_configure_hid_devices(&state);
-    (void)hid_config_result;
+    if (!xhci_configure_hid_devices_mixed(&state)) {
+        fail("mixed-class HID configuration");
+    }
     hid_count = configured_hid_devices(&state);
     if (hid_count != 2U) { fail("HID coexistence configuration"); }
     serial_write_string("M60 keyboard/tablet descriptor coexistence: PASS\n");

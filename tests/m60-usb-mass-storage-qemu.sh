@@ -19,7 +19,7 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 
 make TEST_MODE=m49-xhci-address \
-    TEST_HARNESS_C='kernel/core/usb_mass_storage.c kernel/core/usb_mass_storage_test.c kernel/core/usb_mass_storage_test_adapter.c' \
+    TEST_HARNESS_C='kernel/core/xhci_mixed.c kernel/arch/x86_64/xhci_mixed.c kernel/core/usb_mass_storage.c kernel/core/usb_mass_storage_test.c kernel/core/usb_mass_storage_test_adapter.c' \
     all
 
 python3 - "$IMAGE" <<'PY'
@@ -77,6 +77,7 @@ trap - EXIT INT TERM
 
 for marker in \
     'BoringKernel 0.0.60-dev' \
+    'M60 keyboard/tablet descriptor coexistence: PASS' \
     'M60 USB mass-storage interface detected: PASS' \
     'M60 descriptor-derived Bulk OUT: PASS' \
     'M60 descriptor-derived Bulk IN: PASS' \
