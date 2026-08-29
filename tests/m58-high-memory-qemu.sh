@@ -3,15 +3,20 @@ set -eu
 
 QEMU_BIN=${QEMU:-qemu-system-x86_64}
 LOG=build/m58-high-memory-serial.log
+RAM_FILE=build/m58-high-memory.ram
 
 rm -rf build/kernel build/iso_root
-rm -f build/kernel.elf build/boringos.iso build/.test-mode
+rm -f build/kernel.elf build/boringos.iso build/.test-mode "$RAM_FILE"
 make TEST_MODE=runtime \
     TEST_HARNESS_C='kernel/core/m58_high_memory_test.c kernel/core/m58_high_memory_test_adapter.c' \
     all
 rm -f "$LOG"
+truncate -s 32G "$RAM_FILE"
+trap 'rm -f "$RAM_FILE"' EXIT INT TERM
 timeout 50s "$QEMU_BIN" \
-    -M q35 -m 32G -cdrom build/boringos.iso -boot d \
+    -M q35,memory-backend=m58ram -m 32G \
+    -object memory-backend-file,id=m58ram,size=32G,mem-path="$RAM_FILE",share=off,prealloc=off \
+    -cdrom build/boringos.iso -boot d \
     -display none -serial "file:$LOG" -monitor none \
     -no-reboot -no-shutdown || true
 
