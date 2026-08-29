@@ -4,6 +4,7 @@
 
 #include <boring/block_device.h>
 #include <boring/cpu.h>
+#include <boring/input.h>
 #include <boring/serial.h>
 #include <boring/usb_mass_storage.h>
 #include <boring/usb_mass_storage_test.h>
@@ -12,6 +13,9 @@
 
 #define M60_TEST_LBA 8ULL
 #define M60_MAX_BLOCK_BYTES 4096U
+#define M60_INPUT_OWNER_PID 60ULL
+#define M60_EXPECTED_EVENTS 7U
+#define M60_MAX_HID_COMPLETIONS 16U
 
 static uint8_t neighbor_before[M60_MAX_BLOCK_BYTES];
 static uint8_t neighbor_next_before[M60_MAX_BLOCK_BYTES];
@@ -35,6 +39,16 @@ static bool bytes_equal(const uint8_t *left, const uint8_t *right,
         if (left[index] != right[index]) { return false; }
     }
     return true;
+}
+
+static bool input_event_matches(const struct boring_input_event *event,
+                                uint32_t type, uint32_t code,
+                                int32_t value1, int32_t value2,
+                                uint32_t modifiers) {
+    return (event != NULL) && (event->type == type) &&
+           (event->code == code) && (event->value1 == value1) &&
+           (event->value2 == value2) &&
+           (event->modifiers == modifiers) && (event->flags == 0U);
 }
 
 static void make_pattern(uint8_t *bytes, size_t length) {
@@ -113,6 +127,90 @@ static uint32_t configured_hid_devices(const struct xhci_state *state) {
     return count;
 }
 
+static void verify_hid_queue_after_storage(struct xhci_state *state) {
+    struct boring_input_stats stats;
+    struct boring_input_event events[BORING_INPUT_READ_MAX];
+    size_t event_count = 0U;
+    uint32_t poll_count;
+
+    if (!boring_input_init() ||
+        (boring_input_claim(M60_INPUT_OWNER_PID) != BORING_INPUT_RESULT_OK)) {
+        fail("canonical HID input ownership");
+    }
+    serial_write_string(
+        "M60 HID input queue ready after storage; inject real USB input now.\n");
+
+    for (poll_count = 0U; poll_count < M60_MAX_HID_COMPLETIONS; ++poll_count) {
+        if (!xhci_poll_hid_reports(state, 1U)) {
+            fail("post-storage HID Interrupt-IN completion");
+        }
+        if (!boring_input_get_stats(&stats) || !stats.initialized ||
+            !stats.owned || (stats.owner_pid != M60_INPUT_OWNER_PID) ||
+            (stats.dropped_events != 0ULL) ||
+            (stats.queued_events > M60_EXPECTED_EVENTS)) {
+            fail("post-storage bounded canonical HID queue");
+        }
+        if ((stats.queued_events == M60_EXPECTED_EVENTS) &&
+            (stats.modifiers == 0U)) {
+            break;
+        }
+    }
+    if (poll_count == M60_MAX_HID_COMPLETIONS) {
+        fail("post-storage canonical HID queue end state");
+    }
+    if (!boring_input_get_stats(&stats) ||
+        (stats.queued_events != M60_EXPECTED_EVENTS) ||
+        (stats.dropped_events != 0ULL) || (stats.modifiers != 0U)) {
+        fail("post-storage canonical HID queue state");
+    }
+    serial_write_string("M60 canonical HID queue precheck queued=");
+    serial_write_u64((uint64_t)stats.queued_events);
+    serial_write_string(" dropped=");
+    serial_write_u64(stats.dropped_events);
+    serial_write_string(" modifiers=");
+    serial_write_u64((uint64_t)stats.modifiers);
+    serial_write_string("\n");
+
+    if ((boring_input_read(M60_INPUT_OWNER_PID, events,
+                           BORING_INPUT_READ_MAX, &event_count) !=
+         BORING_INPUT_RESULT_OK) ||
+        (event_count != M60_EXPECTED_EVENTS)) {
+        fail("post-storage canonical HID queue read");
+    }
+    if (!input_event_matches(&events[0], BORING_INPUT_EVENT_KEY,
+                             BORING_KEY_LEFT_SUPER, BORING_KEY_DOWN_VALUE,
+                             0, BORING_MOD_SUPER) ||
+        !input_event_matches(&events[1], BORING_INPUT_EVENT_KEY,
+                             BORING_KEY_A, BORING_KEY_DOWN_VALUE,
+                             0, BORING_MOD_SUPER) ||
+        !input_event_matches(&events[2], BORING_INPUT_EVENT_MOUSE_MOVE,
+                             0U, 2345, 3456, BORING_MOD_SUPER) ||
+        !input_event_matches(&events[3], BORING_INPUT_EVENT_MOUSE_BUTTON,
+                             BORING_MOUSE_BUTTON_LEFT, 1, 0,
+                             BORING_MOD_SUPER) ||
+        !input_event_matches(&events[4], BORING_INPUT_EVENT_KEY,
+                             BORING_KEY_A, BORING_KEY_UP_VALUE,
+                             0, BORING_MOD_SUPER) ||
+        !input_event_matches(&events[5], BORING_INPUT_EVENT_MOUSE_BUTTON,
+                             BORING_MOUSE_BUTTON_LEFT, 0, 0,
+                             BORING_MOD_SUPER) ||
+        !input_event_matches(&events[6], BORING_INPUT_EVENT_KEY,
+                             BORING_KEY_LEFT_SUPER, BORING_KEY_UP_VALUE,
+                             0, 0U)) {
+        fail("post-storage canonical HID event ordering");
+    }
+    if (!boring_input_get_stats(&stats) || (stats.queued_events != 0U) ||
+        (stats.dropped_events != 0ULL) || (stats.modifiers != 0U)) {
+        fail("post-storage canonical HID queue drain");
+    }
+    serial_write_string("M60 canonical HID events after storage: 7\n");
+    serial_write_string("M60 canonical HID ordering after storage: PASS\n");
+    serial_write_string("M60 canonical HID dropped after storage: 0\n");
+    if (boring_input_release(M60_INPUT_OWNER_PID) != BORING_INPUT_RESULT_OK) {
+        fail("canonical HID input release");
+    }
+}
+
 void usb_mass_storage_test_run(void) {
     struct xhci_state state;
     const struct block_device *usb0;
@@ -184,7 +282,9 @@ void usb_mass_storage_test_run(void) {
     if (result != BLOCK_DEVICE_RESULT_OK) { fail("target read before"); }
     result = block_device_read(usb0, M60_TEST_LBA + 1ULL, 1U,
                                neighbor_next_before);
-    if (result != BLOCK_DEVICE_RESULT_OK) { fail("following neighbor read before"); }
+    if (result != BLOCK_DEVICE_RESULT_OK) {
+        fail("following neighbor read before");
+    }
 
     make_pattern(write_pattern, (size_t)block_size);
     if (bytes_equal(write_pattern, target_before, (size_t)block_size)) {
@@ -243,7 +343,10 @@ void usb_mass_storage_test_run(void) {
     serial_write_u64((uint64_t)stats->bulk_in_transfers);
     serial_write_string(" bulk_out=");
     serial_write_u64((uint64_t)stats->bulk_out_transfers);
-    serial_write_string("\nM60 HID coexistence: PASS (usb-kbd + usb-tablet + usb0)\n");
+    serial_write_string("\n");
+
+    verify_hid_queue_after_storage(&state);
+    serial_write_string("M60 HID coexistence: PASS (usb-kbd + usb-tablet + usb0)\n");
 
     /* Clear M21's registry before releasing backend-owned DMA. */
     block_device_init();

@@ -7,6 +7,7 @@ IMAGE=$OUT/m60-usb.raw
 BEFORE=$OUT/m60-usb.before.raw
 LOG=$OUT/serial.log
 QEMU_LOG=$OUT/qemu.log
+QMP=$OUT/qmp.sock
 
 fail() {
     echo "m60-usb-mass-storage-qemu: FAIL: $*" >&2
@@ -38,11 +39,13 @@ cp "$IMAGE" "$BEFORE"
 sha256sum "$BEFORE" | tee "$OUT/sha256-before.txt"
 : > "$LOG"
 : > "$QEMU_LOG"
+rm -f "$QMP"
 
 "$QEMU_BIN" \
     -M q35,i8042=off -cpu "${QEMU_CPU:-qemu64,apic=off}" -m 256M \
     -cdrom build/boringos.iso -boot d \
     -display none -serial "file:$LOG" -monitor none \
+    -qmp "unix:$QMP,server=on,wait=off" \
     -no-reboot -no-shutdown \
     -device qemu-xhci,id=xhci,p3=0 \
     -device usb-kbd,bus=xhci.0,port=1 \
@@ -53,12 +56,30 @@ sha256sum "$BEFORE" | tee "$OUT/sha256-before.txt"
     -trace enable=usb_xhci_queue_event \
     >>"$QEMU_LOG" 2>&1 &
 PID=$!
-trap 'kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true' EXIT INT TERM
+trap 'kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; rm -f "$QMP"' EXIT INT TERM
 
 attempt=0
 while [ "$attempt" -lt 1200 ]; do
     if grep -Fq 'M60 USB MASS STORAGE TEST FAILED:' "$LOG"; then
-        fail 'guest reported failure'
+        fail 'guest reported failure before HID injection'
+    fi
+    if grep -Fq 'M60 HID input queue ready after storage; inject real USB input now.' "$LOG"; then
+        break
+    fi
+    if ! kill -0 "$PID" 2>/dev/null; then
+        fail 'QEMU exited before M60 HID injection window'
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.05
+done
+[ "$attempt" -lt 1200 ] || fail 'guest did not reach post-storage HID injection window'
+
+python3 tests/m53-qmp-input.py "$QMP" || fail 'QMP mixed-topology USB input injection failed'
+
+attempt=0
+while [ "$attempt" -lt 1200 ]; do
+    if grep -Fq 'M60 USB MASS STORAGE TEST FAILED:' "$LOG"; then
+        fail 'guest reported failure after HID injection'
     fi
     if grep -Fq 'M60 USB MASS STORAGE TEST PASSED' "$LOG"; then
         break
@@ -74,6 +95,7 @@ done
 kill "$PID" 2>/dev/null || true
 wait "$PID" 2>/dev/null || true
 trap - EXIT INT TERM
+rm -f "$QMP"
 
 for marker in \
     'BoringKernel 0.0.60-dev' \
@@ -97,6 +119,11 @@ for marker in \
     'M60 bad CSW signature: REJECTED' \
     'M60 bad CSW tag: REJECTED' \
     'M60 bad CSW residue/status: REJECTED' \
+    'M60 HID input queue ready after storage; inject real USB input now.' \
+    'M60 canonical HID queue precheck queued=7 dropped=0 modifiers=0' \
+    'M60 canonical HID events after storage: 7' \
+    'M60 canonical HID ordering after storage: PASS' \
+    'M60 canonical HID dropped after storage: 0' \
     'M60 HID coexistence: PASS (usb-kbd + usb-tablet + usb0)' \
     'M60 cleanup: PASS' \
     'M60 USB MASS STORAGE TEST PASSED'
