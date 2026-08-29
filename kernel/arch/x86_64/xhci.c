@@ -70,7 +70,8 @@ static struct xhci_runtime runtime_state;
 enum xhci_event_expectation {
     XHCI_EXPECT_COMMAND = 0,
     XHCI_EXPECT_CONTROL_FIRST,
-    XHCI_EXPECT_CONTROL_STATUS
+    XHCI_EXPECT_CONTROL_STATUS,
+    XHCI_EXPECT_CONTROL_NODATA_STATUS
 };
 
 struct xhci_dispatch_result {
@@ -401,14 +402,24 @@ static bool event_dispatch_wait(enum xhci_event_expectation expectation,
             return true;
         }
         if ((device == NULL) || !device->control_outstanding ||
-            (type != XHCI_TRB_TYPE_TRANSFER_EVENT) ||
-            !xhci_validate_control_transfer_event(
-                &event, device->ep0_ring_physical, device->slot_id,
-                device->expected_data_trb_physical,
-                device->expected_status_trb_physical,
-                device->outstanding_length,
-                expectation == XHCI_EXPECT_CONTROL_STATUS,
-                &result->actual_length, &result->short_packet)) {
+            (type != XHCI_TRB_TYPE_TRANSFER_EVENT)) {
+            return false;
+        }
+        if (expectation == XHCI_EXPECT_CONTROL_NODATA_STATUS) {
+            if (!xhci_validate_no_data_control_event(
+                    &event, device->ep0_ring_physical, device->slot_id,
+                    device->expected_status_trb_physical)) {
+                return false;
+            }
+            result->actual_length = 0U;
+            result->short_packet = false;
+        } else if (!xhci_validate_control_transfer_event(
+                       &event, device->ep0_ring_physical, device->slot_id,
+                       device->expected_data_trb_physical,
+                       device->expected_status_trb_physical,
+                       device->outstanding_length,
+                       expectation == XHCI_EXPECT_CONTROL_STATUS,
+                       &result->actual_length, &result->short_packet)) {
             return false;
         }
         result->slot_id = device->slot_id;
@@ -549,6 +560,9 @@ static bool root_port_reset(uint8_t root_port_id, uint8_t *speed) {
 static void device_frames_release(struct xhci_addressed_device *device) {
     uint8_t *bytes = (uint8_t *)device;
     size_t index;
+    for (index = 0U; index < XHCI_MAX_HID_ENDPOINTS; ++index) {
+        frame_release(device->hid_ring_physical[index]);
+    }
     frame_release(device->descriptor_buffer_physical);
     frame_release(device->ep0_ring_physical);
     frame_release(device->device_context_physical);
@@ -717,6 +731,134 @@ static bool descriptor_buffer_bytes(struct xhci_addressed_device *device,
     return true;
 }
 
+static bool ep0_submit_set_configuration(
+    struct xhci_addressed_device *device, uint8_t configuration_value) {
+    void *ep0_virtual = NULL;
+    volatile struct xhci_trb *ring;
+    struct xhci_control_td td;
+    struct xhci_dispatch_result result;
+    uint16_t start_index;
+    uint32_t doorbell;
+    if ((device == NULL) || !device->addressed || !device->descriptors_ready ||
+        device->control_outstanding || runtime_state.command_outstanding ||
+        (configuration_value == 0U) || (device->slot_id == 0U) ||
+        (active_state.capabilities.doorbell_offset > XHCI_MMIO_WINDOW_SIZE - 4U) ||
+        ((uint32_t)device->slot_id >
+         (XHCI_MMIO_WINDOW_SIZE - active_state.capabilities.doorbell_offset - 4U) / 4U) ||
+        !vmm_pmm_frame_to_hhdm(device->ep0_ring_physical, &ep0_virtual) ||
+        !xhci_build_set_configuration_control_td(
+            &td, device->ep0_ring_physical, device->ep0_producer_index,
+            device->ep0_producer_cycle, configuration_value)) {
+        return false;
+    }
+    ring = (volatile struct xhci_trb *)ep0_virtual;
+    start_index = device->ep0_producer_index;
+    ring[start_index] = td.setup;
+    ring[(uint16_t)(start_index + 1U)] = td.status;
+    if (start_index == XHCI_EP0_RING_USABLE - 2U) {
+        ring[XHCI_EP0_RING_USABLE].parameter = device->ep0_ring_physical;
+        ring[XHCI_EP0_RING_USABLE].status = 0U;
+        ring[XHCI_EP0_RING_USABLE].control =
+            ((uint32_t)XHCI_TRB_TYPE_LINK << XHCI_TRB_TYPE_SHIFT) |
+            XHCI_TRB_TOGGLE_CYCLE |
+            (device->ep0_producer_cycle ? XHCI_TRB_CYCLE : 0U);
+    }
+    device->expected_data_trb_physical = 0ULL;
+    device->expected_status_trb_physical = td.status_physical;
+    device->outstanding_length = 0U;
+    device->control_outstanding = true;
+    device->ep0_producer_index = td.next_producer_index;
+    device->ep0_producer_cycle = td.next_producer_cycle;
+    memory_barrier();
+    doorbell = active_state.capabilities.doorbell_offset +
+               ((uint32_t)device->slot_id * 4U);
+    mmio_write32(runtime_state.mmio, doorbell, 1U);
+    if (!event_dispatch_wait(XHCI_EXPECT_CONTROL_NODATA_STATUS, 0ULL,
+                             device, &result)) {
+        device->control_outstanding = false;
+        device->expected_status_trb_physical = 0ULL;
+        return false;
+    }
+    device->control_outstanding = false;
+    device->expected_status_trb_physical = 0ULL;
+    if (device->set_configuration_completions == UINT32_MAX) { return false; }
+    ++device->set_configuration_completions;
+    return true;
+}
+
+static bool command_configure_hid(struct xhci_addressed_device *device) {
+    struct xhci_trb command;
+    uint64_t command_physical;
+    uint8_t completed_slot;
+    if ((device == NULL) ||
+        !xhci_build_configure_endpoint_command(
+            &command, device->input_context_physical,
+            active_state.capabilities.max_slots, device->slot_id) ||
+        !command_submit(command.parameter, command.status, command.control,
+                        &command_physical) ||
+        !command_wait(command_physical, &completed_slot) ||
+        (completed_slot != device->slot_id)) {
+        return false;
+    }
+    return true;
+}
+
+static bool configure_hid_device(struct xhci_addressed_device *device) {
+    struct xhci_hid_configuration configuration;
+    uint64_t rings[XHCI_MAX_HID_ENDPOINTS] = {0ULL};
+    void *input_virtual = NULL;
+    uint8_t *descriptor_bytes = NULL;
+    uint8_t index;
+    bool success = false;
+    if ((device == NULL) || !device->addressed || !device->descriptors_ready ||
+        device->device_configured || device->hid_endpoint_ready ||
+        device->control_outstanding || runtime_state.command_outstanding ||
+        !descriptor_buffer_bytes(device, &descriptor_bytes) ||
+        !xhci_parse_hid_configuration(
+            descriptor_bytes, device->descriptors.configuration_length,
+            device->speed, &configuration) ||
+        !ep0_submit_set_configuration(device, configuration.configuration_value)) {
+        return false;
+    }
+    for (index = 0U; index < configuration.endpoint_count; ++index) {
+        void *ring_virtual = NULL;
+        struct xhci_trb *ring;
+        if (!frame_alloc_zero(&rings[index], &ring_virtual)) { goto out; }
+        ring = (struct xhci_trb *)ring_virtual;
+        ring[XHCI_INTERRUPT_RING_USABLE].parameter = rings[index];
+        ring[XHCI_INTERRUPT_RING_USABLE].status = 0U;
+        ring[XHCI_INTERRUPT_RING_USABLE].control =
+            ((uint32_t)XHCI_TRB_TYPE_LINK << XHCI_TRB_TYPE_SHIFT) |
+            XHCI_TRB_TOGGLE_CYCLE | XHCI_TRB_CYCLE;
+    }
+    if (!vmm_pmm_frame_to_hhdm(device->input_context_physical, &input_virtual) ||
+        !xhci_build_configure_hid_context(
+            input_virtual, (uint32_t)PMM_PAGE_SIZE,
+            active_state.capabilities.context_64_bytes,
+            active_state.capabilities.max_slots, device->slot_id,
+            active_state.capabilities.max_ports, device->root_port_id,
+            device->speed, &configuration, rings)) {
+        goto out;
+    }
+    memory_barrier();
+    if (!command_configure_hid(device)) { goto out; }
+    if (device->configure_endpoint_completions == UINT32_MAX) { goto out; }
+    for (index = 0U; index < configuration.endpoint_count; ++index) {
+        device->hid_ring_physical[index] = rings[index];
+        rings[index] = 0ULL;
+    }
+    device->hid_configuration = configuration;
+    ++device->configure_endpoint_completions;
+    device->device_configured = true;
+    device->hid_endpoint_ready = true;
+    success = true;
+out:
+    for (index = 0U; index < XHCI_MAX_HID_ENDPOINTS; ++index) {
+        frame_release(rings[index]);
+    }
+    return success;
+}
+
 static bool discover_device_descriptors(struct xhci_addressed_device *device) {
     void *buffer_virtual = NULL;
     uint8_t *bytes;
@@ -878,6 +1020,22 @@ bool xhci_discover_descriptors(struct xhci_state *state) {
     }
     for (index = 0U; index < active_state.addressed_count; ++index) {
         if (!discover_device_descriptors(&active_state.addressed[index])) {
+            *state = active_state;
+            return false;
+        }
+    }
+    *state = active_state;
+    return true;
+}
+
+bool xhci_configure_hid_devices(struct xhci_state *state) {
+    uint8_t index;
+    if ((state == NULL) || !active_state.controller_running ||
+        (runtime_state.mmio == NULL) || (active_state.addressed_count == 0U)) {
+        return false;
+    }
+    for (index = 0U; index < active_state.addressed_count; ++index) {
+        if (!configure_hid_device(&active_state.addressed[index])) {
             *state = active_state;
             return false;
         }

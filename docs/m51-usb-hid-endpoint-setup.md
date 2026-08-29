@@ -14,3 +14,13 @@ Planned runtime boundary:
 - publish device_configured / hid_endpoint_ready only after hardware success
 
 Explicitly excluded: HID report transfers, keyboard/pointer event delivery, input-queue integration, hubs, hotplug, storage, generic control-transfer APIs, generic HID parsing and all M52 work.
+
+
+Implementation notes:
+- only alternate setting zero HID interfaces are selected; M51 does not issue SET_INTERFACE
+- HID Interrupt-IN endpoint address, packet size and interval are taken from validated configuration bytes
+- endpoint DCI is derived from the USB endpoint address
+- Full/Low-Speed interrupt intervals use the xHCI base-2 125 us encoding; High-Speed uses bInterval-1
+- SuperSpeed HID endpoint configuration is rejected in M51 because companion-descriptor semantics are deliberately outside this bounded milestone
+- the EP0 extension is exactly standard SET_CONFIGURATION with no data stage
+- endpoint transfer rings are PMM-owned and no HID report TRB is submitted in M51

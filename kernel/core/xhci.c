@@ -452,3 +452,293 @@ bool xhci_validate_configuration_descriptor(
     *facts = parsed;
     return true;
 }
+
+
+static bool hid_interrupt_packet_size(uint8_t speed, uint16_t raw,
+                                      uint16_t *max_packet) {
+    uint16_t packet;
+    if ((max_packet == NULL) || ((raw & 0xf800U) != 0U)) { return false; }
+    packet = (uint16_t)(raw & 0x07ffU);
+    if (packet == 0U) { return false; }
+    switch (speed) {
+        case 1U:
+            if (packet > 64U) { return false; }
+            break;
+        case 2U:
+            if (packet > 8U) { return false; }
+            break;
+        case 3U:
+            if (packet > 1024U) { return false; }
+            break;
+        default:
+            return false;
+    }
+    *max_packet = packet;
+    return true;
+}
+
+static bool hid_interrupt_interval(uint8_t speed, uint8_t descriptor_interval,
+                                   uint8_t *xhci_interval) {
+    uint8_t encoded;
+    if ((xhci_interval == NULL) || (descriptor_interval == 0U)) { return false; }
+    if ((speed == 1U) || (speed == 2U)) {
+        uint16_t units = (uint16_t)descriptor_interval * 8U;
+        encoded = 0U;
+        while (units > 1U) {
+            units >>= 1U;
+            ++encoded;
+        }
+        if ((encoded < 3U) || (encoded > 10U)) { return false; }
+    } else if (speed == 3U) {
+        if (descriptor_interval > 16U) { return false; }
+        encoded = (uint8_t)(descriptor_interval - 1U);
+    } else {
+        /* SuperSpeed companion descriptors are deliberately outside M51. */
+        return false;
+    }
+    *xhci_interval = encoded;
+    return true;
+}
+
+bool xhci_usb_endpoint_id(uint8_t endpoint_address, uint8_t *endpoint_id) {
+    const uint8_t number = (uint8_t)(endpoint_address & 0x0fU);
+    uint8_t id;
+    if ((endpoint_id == NULL) || (number == 0U) ||
+        ((endpoint_address & 0x70U) != 0U)) {
+        return false;
+    }
+    id = (uint8_t)((number * 2U) +
+                   (((endpoint_address & 0x80U) != 0U) ? 1U : 0U));
+    if ((id < 2U) || (id > 31U)) { return false; }
+    *endpoint_id = id;
+    return true;
+}
+
+bool xhci_parse_hid_configuration(
+    const uint8_t *bytes, uint16_t received, uint8_t speed,
+    struct xhci_hid_configuration *configuration) {
+    struct xhci_hid_configuration parsed = {0};
+    uint16_t total;
+    uint32_t offset = 0U;
+    bool current_hid = false;
+    uint8_t current_interface = 0U;
+    uint8_t current_alternate = 0U;
+    uint8_t current_protocol = 0U;
+
+    if ((bytes == NULL) || (configuration == NULL) || (received < 9U) ||
+        (received > XHCI_DESCRIPTOR_BUFFER_BYTES) ||
+        (bytes[0] < 9U) || (bytes[1] != XHCI_USB_DESCRIPTOR_CONFIGURATION)) {
+        return false;
+    }
+    total = little16(&bytes[2]);
+    if ((total < 9U) || (total > received) ||
+        (total > XHCI_DESCRIPTOR_BUFFER_BYTES) || (bytes[5] == 0U)) {
+        return false;
+    }
+    parsed.configuration_value = bytes[5];
+    while (offset < total) {
+        uint8_t descriptor_length;
+        uint8_t descriptor_type;
+        if ((uint32_t)total - offset < 2U) { return false; }
+        descriptor_length = bytes[offset];
+        descriptor_type = bytes[offset + 1U];
+        if ((descriptor_length < 2U) ||
+            ((uint32_t)descriptor_length > (uint32_t)total - offset)) {
+            return false;
+        }
+        if (descriptor_type == XHCI_USB_DESCRIPTOR_INTERFACE) {
+            if (descriptor_length < 9U) { return false; }
+            current_interface = bytes[offset + 2U];
+            current_alternate = bytes[offset + 3U];
+            current_protocol = bytes[offset + 7U];
+            current_hid = (current_alternate == 0U) &&
+                          (bytes[offset + 5U] == XHCI_USB_CLASS_HID);
+        } else if ((descriptor_type == XHCI_USB_DESCRIPTOR_ENDPOINT) &&
+                   current_hid) {
+            struct xhci_hid_endpoint_descriptor endpoint = {0};
+            uint16_t raw_packet;
+            uint8_t endpoint_id;
+            uint8_t previous;
+            if ((descriptor_length < 7U) ||
+                (parsed.endpoint_count == XHCI_MAX_HID_ENDPOINTS)) {
+                return false;
+            }
+            endpoint.endpoint_address = bytes[offset + 2U];
+            if ((endpoint.endpoint_address & 0x80U) == 0U) { return false; }
+            if ((bytes[offset + 3U] & 0x03U) !=
+                XHCI_USB_ENDPOINT_TRANSFER_INTERRUPT) {
+                return false;
+            }
+            if (!xhci_usb_endpoint_id(endpoint.endpoint_address, &endpoint_id)) {
+                return false;
+            }
+            for (previous = 0U; previous < parsed.endpoint_count; ++previous) {
+                if (parsed.endpoints[previous].endpoint_id == endpoint_id) {
+                    return false;
+                }
+            }
+            raw_packet = little16(&bytes[offset + 4U]);
+            if (!hid_interrupt_packet_size(speed, raw_packet,
+                                           &endpoint.max_packet) ||
+                !hid_interrupt_interval(speed, bytes[offset + 6U],
+                                        &endpoint.xhci_interval)) {
+                return false;
+            }
+            endpoint.interface_number = current_interface;
+            endpoint.alternate_setting = current_alternate;
+            endpoint.protocol = current_protocol;
+            endpoint.endpoint_id = endpoint_id;
+            endpoint.interval = bytes[offset + 6U];
+            parsed.endpoints[parsed.endpoint_count] = endpoint;
+            ++parsed.endpoint_count;
+        }
+        offset += descriptor_length;
+    }
+    if ((offset != total) || (parsed.endpoint_count == 0U)) { return false; }
+    *configuration = parsed;
+    return true;
+}
+
+bool xhci_build_set_configuration_control_td(
+    struct xhci_control_td *td, uint64_t ep0_ring_physical,
+    uint16_t producer_index, bool producer_cycle, uint8_t configuration_value) {
+    struct xhci_control_td built = {0};
+    uint8_t setup[8] = {0U, 9U, configuration_value, 0U, 0U, 0U, 0U, 0U};
+    uint64_t parameter = 0ULL;
+    uint8_t index;
+    uint32_t cycle;
+    if ((td == NULL) || (configuration_value == 0U) ||
+        (ep0_ring_physical == 0ULL) ||
+        ((ep0_ring_physical & 0x3fULL) != 0ULL) ||
+        (producer_index > XHCI_EP0_RING_USABLE - 2U)) {
+        return false;
+    }
+    for (index = 0U; index < 8U; ++index) {
+        parameter |= (uint64_t)setup[index] << ((uint64_t)index * 8ULL);
+    }
+    cycle = producer_cycle ? XHCI_TRB_CYCLE : 0U;
+    built.setup.parameter = parameter;
+    built.setup.status = 8U;
+    built.setup.control =
+        ((uint32_t)XHCI_TRB_TYPE_SETUP_STAGE << XHCI_TRB_TYPE_SHIFT) |
+        XHCI_TRB_IDT | cycle;
+    built.status.control =
+        ((uint32_t)XHCI_TRB_TYPE_STATUS_STAGE << XHCI_TRB_TYPE_SHIFT) |
+        XHCI_TRB_DIRECTION_IN | XHCI_TRB_IOC | cycle;
+    built.setup_physical = ep0_ring_physical +
+        ((uint64_t)producer_index * XHCI_TRB_SIZE);
+    built.status_physical = built.setup_physical + XHCI_TRB_SIZE;
+    if (producer_index == XHCI_EP0_RING_USABLE - 2U) {
+        built.next_producer_index = 0U;
+        built.next_producer_cycle = !producer_cycle;
+    } else {
+        built.next_producer_index = (uint16_t)(producer_index + 2U);
+        built.next_producer_cycle = producer_cycle;
+    }
+    *td = built;
+    return true;
+}
+
+bool xhci_validate_no_data_control_event(
+    const struct xhci_trb *event, uint64_t ep0_ring_physical,
+    uint8_t expected_slot_id, uint64_t expected_status_trb_physical) {
+    uint8_t type;
+    uint8_t endpoint;
+    uint8_t slot;
+    uint8_t completion;
+    uint32_t residual;
+    if ((event == NULL) || (ep0_ring_physical == 0ULL) ||
+        ((ep0_ring_physical & 0x3fULL) != 0ULL) ||
+        (expected_slot_id == 0U) ||
+        !trb_pointer_owned(expected_status_trb_physical, ep0_ring_physical)) {
+        return false;
+    }
+    type = (uint8_t)((event->control >> XHCI_TRB_TYPE_SHIFT) & XHCI_TRB_TYPE_MASK);
+    endpoint = (uint8_t)((event->control >> XHCI_EVENT_ENDPOINT_SHIFT) &
+                         XHCI_EVENT_ENDPOINT_MASK);
+    slot = (uint8_t)(event->control >> XHCI_EVENT_SLOT_SHIFT);
+    completion = (uint8_t)(event->status >> XHCI_EVENT_COMPLETION_SHIFT);
+    residual = event->status & XHCI_EVENT_RESIDUAL_MASK;
+    return (type == XHCI_TRB_TYPE_TRANSFER_EVENT) && (endpoint == 1U) &&
+           (slot == expected_slot_id) &&
+           (event->parameter == expected_status_trb_physical) &&
+           (completion == XHCI_COMPLETION_SUCCESS) && (residual == 0U);
+}
+
+bool xhci_build_configure_hid_context(
+    void *buffer, uint32_t length, bool context_64_bytes,
+    uint8_t max_slots, uint8_t slot_id, uint8_t max_ports,
+    uint8_t root_port_id, uint8_t speed,
+    const struct xhci_hid_configuration *configuration,
+    const uint64_t ring_physical[XHCI_MAX_HID_ENDPOINTS]) {
+    uint8_t *bytes = (uint8_t *)buffer;
+    const uint32_t context_size = context_64_bytes ?
+                                  XHCI_CONTEXT_64_SIZE : XHCI_CONTEXT_32_SIZE;
+    uint8_t highest_dci = 0U;
+    uint32_t add_flags = 1U;
+    uint32_t required;
+    uint8_t index;
+    uint8_t *slot;
+    if ((bytes == NULL) || (configuration == NULL) || (ring_physical == NULL) ||
+        (configuration->endpoint_count == 0U) ||
+        (configuration->endpoint_count > XHCI_MAX_HID_ENDPOINTS) ||
+        (max_slots == 0U) || (slot_id == 0U) || (slot_id > max_slots) ||
+        (max_ports == 0U) || (root_port_id == 0U) ||
+        (root_port_id > max_ports) || (speed == 0U) || (speed > 3U)) {
+        return false;
+    }
+    for (index = 0U; index < configuration->endpoint_count; ++index) {
+        const struct xhci_hid_endpoint_descriptor *endpoint =
+            &configuration->endpoints[index];
+        uint8_t mapped;
+        if (!xhci_usb_endpoint_id(endpoint->endpoint_address, &mapped) ||
+            (mapped != endpoint->endpoint_id) || (mapped <= 1U) ||
+            (endpoint->max_packet == 0U) ||
+            (ring_physical[index] == 0ULL) ||
+            ((ring_physical[index] & 0x3fULL) != 0ULL)) {
+            return false;
+        }
+        if (mapped > highest_dci) { highest_dci = mapped; }
+        add_flags |= 1U << mapped;
+    }
+    required = ((uint32_t)highest_dci + 2U) * context_size;
+    if (length < required) { return false; }
+    zero_bytes(bytes, required);
+    context_write32(bytes, 4U, add_flags);
+    slot = bytes + context_size;
+    context_write32(slot, 0U, ((uint32_t)speed << 20U) |
+                                  ((uint32_t)highest_dci << 27U));
+    context_write32(slot, 4U, (uint32_t)root_port_id << 16U);
+    for (index = 0U; index < configuration->endpoint_count; ++index) {
+        const struct xhci_hid_endpoint_descriptor *endpoint =
+            &configuration->endpoints[index];
+        uint8_t *ep = bytes +
+            (((uint32_t)endpoint->endpoint_id + 1U) * context_size);
+        context_write32(ep, 0U, (uint32_t)endpoint->xhci_interval << 16U);
+        context_write32(ep, 4U, (3U << 1U) | (7U << 3U) |
+                                  ((uint32_t)endpoint->max_packet << 16U));
+        context_write32(ep, 8U, (uint32_t)(ring_physical[index] | 1ULL));
+        context_write32(ep, 12U,
+                        (uint32_t)((ring_physical[index] | 1ULL) >> 32U));
+        context_write32(ep, 16U, (uint32_t)endpoint->max_packet |
+                         ((uint32_t)endpoint->max_packet << 16U));
+    }
+    return true;
+}
+
+bool xhci_build_configure_endpoint_command(
+    struct xhci_trb *command, uint64_t input_context_physical,
+    uint8_t max_slots, uint8_t slot_id) {
+    struct xhci_trb built = {0};
+    if ((command == NULL) || (input_context_physical == 0ULL) ||
+        ((input_context_physical & 0x3fULL) != 0ULL) ||
+        (max_slots == 0U) || (slot_id == 0U) || (slot_id > max_slots)) {
+        return false;
+    }
+    built.parameter = input_context_physical;
+    built.control = ((uint32_t)XHCI_TRB_TYPE_CONFIGURE_ENDPOINT <<
+                     XHCI_TRB_TYPE_SHIFT) |
+                    ((uint32_t)slot_id << XHCI_EVENT_SLOT_SHIFT);
+    *command = built;
+    return true;
+}
