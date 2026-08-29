@@ -14,6 +14,10 @@
 #define M58_PATTERN_NEIGHBOR_LAST 0x4d35384e45494732ULL
 
 static void m58_fail(const char *reason) __attribute__((noreturn));
+static void m58_memory_barrier(void) {
+    __asm__ volatile ("mfence" ::: "memory");
+}
+
 static void m58_fail(const char *reason) {
     serial_write_string("M58 HIGH MEMORY TEST FAILED: ");
     serial_write_string(reason);
@@ -85,7 +89,7 @@ void m58_high_memory_test_run(void) {
     high[last_word] = M58_PATTERN_HIGH_LAST;
     neighbor[0] = M58_PATTERN_NEIGHBOR_FIRST;
     neighbor[last_word] = M58_PATTERN_NEIGHBOR_LAST;
-    x86_64_memory_barrier();
+    m58_memory_barrier();
     if ((high[0] != M58_PATTERN_HIGH_FIRST) ||
         (high[last_word] != M58_PATTERN_HIGH_LAST) ||
         (neighbor[0] != M58_PATTERN_NEIGHBOR_FIRST) ||
@@ -94,7 +98,7 @@ void m58_high_memory_test_run(void) {
     }
 
     high[0] = ~M58_PATTERN_HIGH_FIRST;
-    x86_64_memory_barrier();
+    m58_memory_barrier();
     if ((high[0] != ~M58_PATTERN_HIGH_FIRST) ||
         (neighbor[0] != M58_PATTERN_NEIGHBOR_FIRST) ||
         (neighbor[last_word] != M58_PATTERN_NEIGHBOR_LAST)) {
@@ -112,7 +116,7 @@ void m58_high_memory_test_run(void) {
         high[index] = 0ULL;
         neighbor[index] = 0ULL;
     }
-    x86_64_memory_barrier();
+    m58_memory_barrier();
     if (!pmm_free_frame(neighbor_physical) ||
         !pmm_free_frame(high_physical)) {
         m58_fail("high-frame free");
