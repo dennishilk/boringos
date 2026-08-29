@@ -67,7 +67,7 @@ done
 [ "${attempt}" -lt 250 ] || fail 'M36 QEMU SPAWN acceptance timeout'
 
 for line in \
-    'BoringKernel 0.0.54-dev' \
+    'BoringKernel 0.0.55-dev' \
     'M36 Scheduler + Ring3 + BoringFS + PTY + SPAWN acceptance:' \
     'm36-spawn-test: scheduler active' \
     'm36-spawn-test: real BoringFS root mounted' \
