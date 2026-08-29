@@ -2,8 +2,10 @@ name: M50 runtime-neutral closeout helper
 
 on:
   push:
-    branches: [agent/m50-xhci-descriptor-discovery]
-    paths: [.github/workflows/m50-closeout-helper.yml]
+    branches:
+      - agent/m50-xhci-descriptor-discovery
+    paths:
+      - .github/workflows/m50-closeout-helper.yml
 
 permissions:
   contents: write
@@ -16,10 +18,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: agent/m50-xhci-descriptor-discovery
-          fetch-depth: 2
+          fetch-depth: 3
       - name: Verify helper anchor
         run: |
-          test "$(git rev-parse HEAD^)" = "67bce968b6ef6a6994fcac74956345173d33548f"
+          test "$(git rev-parse HEAD^)" = "1f87118e60d91b38283772e4fae089486d6489d8"
           test "$(git diff --name-only HEAD^ HEAD)" = ".github/workflows/m50-closeout-helper.yml"
       - name: Apply bounded runtime-neutral closeout
         shell: bash
@@ -80,50 +82,16 @@ jobs:
           if "## Milestone 50: bounded xHCI EP0 control-IN and USB descriptor discovery" in text:
               raise SystemExit("roadmap already contains M50 closeout section")
           text = text.replace(banner_old, banner_new, 1)
-          text += r'''
-
-
-## Milestone 50: bounded xHCI EP0 control-IN and USB descriptor discovery — COMPLETE, Semantic Frozen
-
-The M49 addressed-device state now supports the smallest bounded EP0 discovery
-path required to learn real generic USB device facts. Standard GET_DESCRIPTOR
-control-IN requests run synchronously through Setup, IN Data and OUT Status
-stages on each existing M49 EP0 ring, backed by one PMM-owned descriptor page
-per device and exact Transfer Event validation. Producer index/cycle state,
-Link-TRB bounds, exact slot/Endpoint-ID ownership, residual lengths, Short
-Packet completion and the mandatory terminal Status event are all bounded.
-
-Discovery is ordered through the first 8 Device Descriptor bytes, speed-specific
-bMaxPacketSize0 validation and an EP0-only Evaluate Context command only when
-the real value differs, then the complete 18-byte Device Descriptor, 9-byte
-Configuration Descriptor header and the bounded complete configuration block.
-Only structurally validated generic facts become visible and descriptors_ready
-is set last. M50 does not configure the device, interpret HID endpoints, issue
-interrupt transfers, deliver input, support hubs/storage or begin M51.
-
-## Semantic Freeze
-
-Implementation: `7d07323d2c7f5cbe729b5cfa03b2278691416aa5`.
-Tree: `e2ad5fd1ac8708baceb0034d67c76ced089c8aee`.
-Exact-head SUCCESS: M50 #3 / 33227985224; M49 #8 / 33227985211;
-M48 #13 / 33227985244; M47 #16 / 33227985152;
-M46 #20 / 33227985208; M45 #24 / 33227985166;
-M44 #29 / 33227985199; M43 #33 / 33227985165;
-M42 #37 / 33227985163; M41 #41 / 33227985148;
-M40 #44 / 33227985190; M39 #47 / 33227985221;
-M38 #58 / 33227985215; M37 #91 / 33227985170;
-complete Boot #557 / 33227985155.
-The focused real-QEMU gate consumed eight real Transfer Events and 138
-descriptor bytes for the two CLI-provided devices after M49 addressing. The
-reference run required zero Evaluate Context commands because both real EP0
-maximum-packet values matched their M49 initial contexts; that count and all
-reported port/slot/speed/VID/PID/configuration facts are evidence, not constants.
-This separate closeout changes only documentation and active version witnesses.
-
-Active version after runtime-neutral closeout: **BoringKernel 0.0.51-dev**.
-No M51 work is included.
-See [m50-xhci-descriptor-discovery.md](m50-xhci-descriptor-discovery.md).
-'''
+          text += (
+              "\n\n## Milestone 50: bounded xHCI EP0 control-IN and USB descriptor discovery — COMPLETE, Semantic Frozen\n\n"
+              "M50 adds only the bounded synchronous EP0 standard GET_DESCRIPTOR control-IN discovery path on M49-addressed direct root-port devices. The ordered path validates real Device and Configuration descriptor data, speed-specific bMaxPacketSize0, an EP0-only Evaluate Context when required, exact Transfer Events including Short Packet plus terminal Status handling, one-page descriptor bounds, structural descriptor bounds, and descriptors_ready only after success. It does not configure devices, interpret HID endpoints, perform interrupt transfers, integrate input, support hubs/storage, or begin M51.\n\n"
+              "Semantic Freeze implementation: `7d07323d2c7f5cbe729b5cfa03b2278691416aa5`.\n"
+              "Tree: `e2ad5fd1ac8708baceb0034d67c76ced089c8aee`.\n"
+              "Exact-head SUCCESS: M50 #3 / 33227985224; M49 #8 / 33227985211; M48 #13 / 33227985244; M47 #16 / 33227985152; M46 #20 / 33227985208; M45 #24 / 33227985166; M44 #29 / 33227985199; M43 #33 / 33227985165; M42 #37 / 33227985163; M41 #41 / 33227985148; M40 #44 / 33227985190; M39 #47 / 33227985221; M38 #58 / 33227985215; M37 #91 / 33227985170; complete Boot #557 / 33227985155.\n"
+              "The focused real-QEMU gate consumed eight real Transfer Events and 138 descriptor bytes for the two CLI-provided devices; the reference run required zero Evaluate Context commands because both real EP0 maximum-packet values matched their M49 initial contexts. Observed ports, slots, speeds, VID/PID, configuration facts and Evaluate count are evidence only, never constants.\n\n"
+              "Active version after runtime-neutral closeout: **BoringKernel 0.0.51-dev**. No M51 work is included.\n"
+              "See [m50-xhci-descriptor-discovery.md](m50-xhci-descriptor-discovery.md).\n"
+          )
           roadmap.write_text(text)
 
           m50 = Path("docs/m50-xhci-descriptor-discovery.md")
@@ -131,11 +99,11 @@ See [m50-xhci-descriptor-discovery.md](m50-xhci-descriptor-discovery.md).
           marker = "Active version after runtime-neutral closeout: **BoringKernel 0.0.51-dev**."
           if marker in text:
               raise SystemExit("M50 closeout marker already present")
-          text += "\n\n" + marker + "\nNo M51 work is included.\n"
-          m50.write_text(text)
+          m50.write_text(text + "\n\n" + marker + "\nNo M51 work is included.\n")
           PY
           git rm .github/workflows/m50-closeout-helper.yml
           expected=$(printf '%s\n' \
+            .github/workflows/m50-closeout-helper.yml \
             README.de.md README.md docs/m50-xhci-descriptor-discovery.md docs/roadmap.md \
             kernel/core/boringfs_ro_test.c kernel/core/entry.c kernel/core/syscall.c \
             tests/block-device-qemu.sh tests/boot-qemu.sh tests/boringfetch-host-test.c \
@@ -145,16 +113,14 @@ See [m50-xhci-descriptor-discovery.md](m50-xhci-descriptor-discovery.md).
             tests/m48-xhci-qemu.sh tests/m49-xhci-address-qemu.sh tests/persistent-root-qemu.sh \
             tests/ramfs-qemu.sh tests/ring3-qemu.sh tests/runtime-qemu.sh \
             tests/shell-host-test.c tests/shell-qemu.sh tests/syscall-qemu.sh \
-            tests/validate-m36-terminal-screenshot.py tests/vfs-qemu.sh tests/virtio-block-qemu.sh \
-            .github/workflows/m50-closeout-helper.yml | sort)
+            tests/validate-m36-terminal-screenshot.py tests/vfs-qemu.sh tests/virtio-block-qemu.sh | sort)
           actual=$(git diff --name-only | sort)
           test "$actual" = "$expected"
       - name: Commit runtime-neutral closeout
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add README.de.md README.md docs/m50-xhci-descriptor-discovery.md docs/roadmap.md \
-            kernel/core/boringfs_ro_test.c kernel/core/entry.c kernel/core/syscall.c tests
+          git add -A
           git diff --cached --check
           git commit -m 'M50: runtime-neutral closeout and advance version'
           git push origin HEAD:agent/m50-xhci-descriptor-discovery
