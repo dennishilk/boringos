@@ -56,7 +56,7 @@ done
 [ "$attempt" -lt 500 ] || fail 'M53 USB input acceptance timed out'
 
 for marker in \
-    'BoringKernel 0.0.57-dev' \
+    'BoringKernel 0.0.58-dev' \
     'M53 USB input queue ready; inject real USB input now.' \
     'M53 canonical input events: 7' \
     'M53 queue event 0 type=1 code=81 value1=1 value2=0 modifiers=8' \

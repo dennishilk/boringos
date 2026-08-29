@@ -14,10 +14,10 @@ It is **not a Linux distribution**, **not BSD**, and **not based on another oper
 The current main line is:
 
 ```text
-BoringKernel 0.0.57-dev
+BoringKernel 0.0.58-dev
 ```
 
-Development is complete through **Milestone 56**.
+Development is complete through **Milestone 57**.
 
 BoringOS is no longer just an early boot kernel: under QEMU it now boots into a real native Ring-3 desktop session with its own display service, tiling window manager, graphical terminal, shell, editor, file manager, persistent BoringFS storage, hardware inventory, and a growing BoringOS-owned xHCI/USB stack.
 
@@ -40,7 +40,7 @@ processes + independent address spaces
         ↓
 Ring 3 + native SYSCALL/SYSRETQ ABI
         ↓
-VFS + RAMFS + VirtIO block + BoringFS
+VFS + RAMFS + VirtIO/AHCI block + BoringFS
         ↓
      boring-init
         ↓
@@ -62,7 +62,7 @@ Implemented and verified foundations include:
 - process identity, independent page-table roots, CR3 switching, CPL3 and TSS/RSP0 transitions
 - native x86_64 `SYSCALL` / `SYSRETQ`
 - validated static ELF64 userspace loading and a BoringOS-owned freestanding C runtime
-- VFS, mutable RAMFS, writable persistent BoringFS, generic block I/O and modern VirtIO block storage
+- VFS, mutable RAMFS, writable persistent BoringFS, generic block I/O, VirtIO and bounded synchronous AHCI/SATA storage
 - PID 1 `boring-init`, native `boring-shell`, process lifecycle, PTYs, file descriptors/stdio and scheduler-owned `SPAWN`
 - anonymous Ring-3 memory, a small userspace heap, shared buffers, native service registry and IPC
 - framebuffer ownership/presentation, native `boring-display`, software composition and cursor
@@ -150,7 +150,7 @@ There is still no USB hub support or USB mass-storage driver.
 
 BoringOS has its own small filesystem format, **BoringFS**. The repository contains the codec/validator, deterministic formatter, `boringfsck`, kernel mount support and synchronous writable operation.
 
-The verified persistent QEMU root currently uses modern VirtIO PCI block storage. AHCI and NVMe are not implemented yet, so recognizing a controller in PCI inventory must not be confused with having a storage driver for it.
+The verified persistent QEMU root can use modern VirtIO PCI block storage or the bounded synchronous AHCI/SATA path completed in M57. The AHCI path performs real reads, writes and required cache flushes through the generic block-device API; NVMe is not implemented.
 
 ## Current boundaries
 
@@ -162,8 +162,8 @@ The verified persistent QEMU root currently uses modern VirtIO PCI block storage
 | Graphics | firmware/Limine framebuffer + software compositor; no native AMD/NVIDIA/Intel GPU acceleration |
 | Desktop input | native i8042/PS/2 path |
 | USB | xHCI devices addressed/configured; real HID Interrupt-IN report transport + bounded decode proven; input-queue integration still pending |
-| Persistent root | VirtIO block + BoringFS |
-| AHCI / NVMe | not implemented |
+| Persistent root | VirtIO or AHCI/SATA block + BoringFS |
+| AHCI / NVMe | bounded synchronous AHCI read/write/flush; NVMe not implemented |
 | Networking | not implemented |
 | Audio | not implemented |
 | SMP runtime | not implemented; current runtime remains deliberately bounded |

@@ -32,6 +32,7 @@
 #define AHCI_PXTFD_BSY (1U << 7)
 #define AHCI_PXIS_TFES (1U << 30)
 #define AHCI_COMMAND_FIS_DWORDS 5U
+#define AHCI_COMMAND_WRITE (1U << 6)
 #define AHCI_PRDT_DBC_MASK 0x003fffffU
 #define AHCI_BLOCK_POLL_LIMIT 50000000U
 #define AHCI_DMA_FRAME_COUNT 4U
@@ -97,10 +98,14 @@ static enum block_device_result ahci_backend_read(void *context,
                                                    uint64_t first_block,
                                                    uint32_t block_count,
                                                    void *buffer);
+static enum block_device_result ahci_backend_write(void *context,
+                                                    uint64_t first_block,
+                                                    uint32_t block_count,
+                                                    const void *buffer);
 
 static const struct block_device_ops ahci_block_ops = {
     .read = ahci_backend_read,
-    .write = NULL
+    .write = ahci_backend_write
 };
 
 static void bytes_zero(void *buffer, size_t length) {
@@ -350,24 +355,26 @@ static bool program_port(uint8_t port) {
            (AHCI_PXCMD_ST | AHCI_PXCMD_FRE);
 }
 
-static bool prepare_command(const uint8_t *fis, uint32_t byte_count) {
+static bool prepare_command(const uint8_t *fis, uint32_t byte_count,
+                            bool write) {
     volatile struct ahci_command_header *header;
     size_t index;
     const uint64_t table_physical =
         runtime.dma_physical[AHCI_DMA_COMMAND_TABLE];
     const uint64_t data_physical = runtime.dma_physical[AHCI_DMA_BOUNCE];
 
-    if ((fis == NULL) || (byte_count == 0U) ||
-        (byte_count > AHCI_BLOCK_DMA_BYTES) ||
-        ((byte_count - 1U) > AHCI_PRDT_DBC_MASK)) {
+    if ((fis == NULL) || (byte_count > AHCI_BLOCK_DMA_BYTES) ||
+        ((byte_count != 0U) &&
+         ((byte_count - 1U) > AHCI_PRDT_DBC_MASK))) {
         return false;
     }
 
     dma_page_zero(runtime.dma_virtual[AHCI_DMA_COMMAND_LIST]);
     dma_page_zero(runtime.dma_virtual[AHCI_DMA_COMMAND_TABLE]);
     header = &runtime.headers[0];
-    header->flags = (uint16_t)AHCI_COMMAND_FIS_DWORDS;
-    header->prdt_length = 1U;
+    header->flags = (uint16_t)(AHCI_COMMAND_FIS_DWORDS |
+        (write ? AHCI_COMMAND_WRITE : 0U));
+    header->prdt_length = (uint16_t)((byte_count == 0U) ? 0U : 1U);
     header->prd_byte_count = 0U;
     header->command_table_base =
         (uint32_t)(table_physical & 0xffffffffULL);
@@ -376,17 +383,20 @@ static bool prepare_command(const uint8_t *fis, uint32_t byte_count) {
     for (index = 0U; index < (size_t)AHCI_BLOCK_FIS_BYTES; ++index) {
         runtime.table->cfis[index] = fis[index];
     }
-    runtime.table->prdt[0].data_base =
-        (uint32_t)(data_physical & 0xffffffffULL);
-    runtime.table->prdt[0].data_base_upper =
-        (uint32_t)(data_physical >> 32U);
-    runtime.table->prdt[0].reserved = 0U;
-    runtime.table->prdt[0].byte_count_flags = byte_count - 1U;
+    if (byte_count != 0U) {
+        runtime.table->prdt[0].data_base =
+            (uint32_t)(data_physical & 0xffffffffULL);
+        runtime.table->prdt[0].data_base_upper =
+            (uint32_t)(data_physical >> 32U);
+        runtime.table->prdt[0].reserved = 0U;
+        runtime.table->prdt[0].byte_count_flags = byte_count - 1U;
+    }
     x86_64_memory_barrier();
     return true;
 }
 
-static bool issue_command(const uint8_t *fis, uint32_t byte_count) {
+static bool issue_command(const uint8_t *fis, uint32_t byte_count,
+                          bool write) {
     uint32_t tfd_offset;
     uint32_t is_offset;
     uint32_t ci_offset;
@@ -401,7 +411,7 @@ static bool issue_command(const uint8_t *fis, uint32_t byte_count) {
                    false, AHCI_BLOCK_POLL_LIMIT) ||
         (mmio_read32(ci_offset) != 0U) ||
         (mmio_read32(sact_offset) != 0U) ||
-        !prepare_command(fis, byte_count)) {
+        !prepare_command(fis, byte_count, write)) {
         return false;
     }
 
@@ -458,13 +468,52 @@ static enum block_device_result ahci_backend_read(void *context,
 
     runtime.busy = true;
     dma_page_zero(runtime.dma_virtual[AHCI_DMA_BOUNCE]);
-    if (!issue_command(fis, byte_count)) {
+    if (!issue_command(fis, byte_count, false)) {
         runtime.busy = false;
         return BLOCK_DEVICE_RESULT_IO_ERROR;
     }
     bytes_copy((uint8_t *)buffer, runtime.bounce, (size_t)byte_count);
     runtime.busy = false;
     ++runtime.stats.reads_completed;
+    return BLOCK_DEVICE_RESULT_OK;
+}
+
+static enum block_device_result ahci_backend_write(void *context,
+                                                    uint64_t first_block,
+                                                    uint32_t block_count,
+                                                    const void *buffer) {
+    uint8_t fis[AHCI_BLOCK_FIS_BYTES];
+    uint32_t byte_count;
+
+    if ((context != &runtime) || !runtime.initialized || runtime.busy ||
+        (buffer == NULL) || (block_count == 0U) ||
+        (block_count > runtime.stats.max_blocks_per_transfer) ||
+        !ahci_dma_transfer_bytes(runtime.stats.logical_block_size,
+                                 block_count, &byte_count) ||
+        !ahci_build_write_fis(&runtime.identify, first_block,
+                              (uint16_t)block_count,
+                              fis, sizeof(fis))) {
+        return BLOCK_DEVICE_RESULT_IO_ERROR;
+    }
+
+    runtime.busy = true;
+    bytes_copy(runtime.bounce, (const uint8_t *)buffer, (size_t)byte_count);
+    x86_64_memory_barrier();
+    if (!issue_command(fis, byte_count, true)) {
+        runtime.busy = false;
+        return BLOCK_DEVICE_RESULT_IO_ERROR;
+    }
+    ++runtime.stats.writes_completed;
+
+    if (runtime.identify.write_cache_enabled) {
+        if (!ahci_build_flush_fis(&runtime.identify, fis, sizeof(fis)) ||
+            !issue_command(fis, 0U, false)) {
+            runtime.busy = false;
+            return BLOCK_DEVICE_RESULT_IO_ERROR;
+        }
+        ++runtime.stats.flushes_completed;
+    }
+    runtime.busy = false;
     return BLOCK_DEVICE_RESULT_OK;
 }
 
@@ -506,7 +555,7 @@ enum ahci_block_result ahci_block_init(const struct ahci_state *controller) {
 
     dma_page_zero(runtime.dma_virtual[AHCI_DMA_BOUNCE]);
     if (!ahci_build_identify_fis(fis, sizeof(fis)) ||
-        !issue_command(fis, AHCI_BLOCK_IDENTIFY_BYTES)) {
+        !issue_command(fis, AHCI_BLOCK_IDENTIFY_BYTES, false)) {
         cleanup_failed_init();
         return AHCI_BLOCK_RESULT_IDENTIFY_IO;
     }
@@ -522,12 +571,17 @@ enum ahci_block_result ahci_block_init(const struct ahci_state *controller) {
     runtime.stats.max_blocks_per_transfer =
         AHCI_BLOCK_DMA_BYTES / runtime.identify.logical_block_size;
     runtime.stats.lba48 = runtime.identify.lba48;
+    runtime.stats.write_cache_supported =
+        runtime.identify.write_cache_supported;
+    runtime.stats.write_cache_enabled = runtime.identify.write_cache_enabled;
+    runtime.stats.flush_cache_ext_supported =
+        runtime.identify.flush_cache_ext_supported;
     runtime.stats.identify_complete = true;
 
     runtime.block_device.name = AHCI_BLOCK_DEVICE_NAME;
     runtime.block_device.logical_block_size = runtime.identify.logical_block_size;
     runtime.block_device.block_count = runtime.identify.block_count;
-    runtime.block_device.read_only = true;
+    runtime.block_device.read_only = false;
     runtime.block_device.context = &runtime;
     runtime.block_device.ops = &ahci_block_ops;
 

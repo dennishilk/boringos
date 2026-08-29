@@ -31,16 +31,24 @@ struct ahci_identify_info {
     uint64_t block_count;
     uint32_t logical_block_size;
     bool lba48;
+    bool write_cache_supported;
+    bool write_cache_enabled;
+    bool flush_cache_ext_supported;
 };
 
 struct ahci_block_stats {
     uint64_t capacity_blocks;
     uint64_t commands_completed;
     uint64_t reads_completed;
+    uint64_t writes_completed;
+    uint64_t flushes_completed;
     uint32_t logical_block_size;
     uint32_t max_blocks_per_transfer;
     uint8_t port;
     bool lba48;
+    bool write_cache_supported;
+    bool write_cache_enabled;
+    bool flush_cache_ext_supported;
     bool identify_complete;
     bool registered;
 };
@@ -55,8 +63,13 @@ bool ahci_build_identify_fis(uint8_t *fis, size_t fis_length);
 bool ahci_build_read_fis(const struct ahci_identify_info *info,
                          uint64_t first_block, uint16_t block_count,
                          uint8_t *fis, size_t fis_length);
+bool ahci_build_write_fis(const struct ahci_identify_info *info,
+                          uint64_t first_block, uint16_t block_count,
+                          uint8_t *fis, size_t fis_length);
+bool ahci_build_flush_fis(const struct ahci_identify_info *info,
+                          uint8_t *fis, size_t fis_length);
 
-/* Hardware path: one selected SATA port, synchronous read-only block device. */
+/* Hardware path: one selected SATA port, one synchronous request at a time. */
 enum ahci_block_result ahci_block_init(const struct ahci_state *controller);
 const struct block_device *ahci_block_device(void);
 bool ahci_block_get_stats(struct ahci_block_stats *stats);

@@ -28,6 +28,9 @@ int main(void) {
 
     words_zero(words);
     words[83] = (uint16_t)(1U << 10);
+    words[82] = (uint16_t)(1U << 5);
+    words[85] = (uint16_t)(1U << 5);
+    words[83] |= (uint16_t)(1U << 12);
     words[100] = 0x9abcU;
     words[101] = 0x5678U;
     words[102] = 0x1234U;
@@ -46,6 +49,14 @@ int main(void) {
                 (fis[8] == 0x03U) && (fis[9] == 0x02U) &&
                 (fis[10] == 0x01U) && (fis[12] == 4U) &&
                 (fis[13] == 0U), "READ DMA EXT fields") ||
+        !expect(info.write_cache_supported && info.write_cache_enabled &&
+                info.flush_cache_ext_supported, "write/cache capability") ||
+        !expect(ahci_build_write_fis(&info, 0x1234ULL, 4U,
+                                     fis, sizeof(fis)) &&
+                (fis[2] == 0x35U) && (fis[12] == 4U),
+                "WRITE DMA EXT fields") ||
+        !expect(ahci_build_flush_fis(&info, fis, sizeof(fis)) &&
+                (fis[2] == 0xeaU), "FLUSH CACHE EXT fields") ||
         !expect(ahci_dma_transfer_bytes(512U, 8U, &bytes) &&
                 (bytes == 4096U), "4K PRDT bound") ||
         !expect(!ahci_dma_transfer_bytes(512U, 9U, &bytes),
@@ -79,6 +90,11 @@ int main(void) {
         !expect((fis[2] == 0xc8U) && (fis[4] == 0x34U) &&
                 (fis[5] == 0x12U) && (fis[12] == 2U),
                 "READ DMA fields") ||
+        !expect(ahci_build_write_fis(&info, 0x1234ULL, 2U,
+                                     fis, sizeof(fis)) &&
+                (fis[2] == 0xcaU), "WRITE DMA fields") ||
+        !expect(ahci_build_flush_fis(&info, fis, sizeof(fis)) &&
+                (fis[2] == 0xe7U), "FLUSH CACHE fields") ||
         !expect(!ahci_build_read_fis(&info, info.block_count, 1U,
                                      fis, sizeof(fis)),
                 "read range rejection")) {
