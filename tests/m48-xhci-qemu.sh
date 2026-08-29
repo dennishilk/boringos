@@ -17,7 +17,7 @@ if grep -Fq 'M48 xHCI QEMU FAILED:' "$LOG"; then
     exit 1
 fi
 for marker in \
-    'BoringKernel 0.0.49-dev' \
+    'BoringKernel 0.0.50-dev' \
     'M48 xHCI DMA command/event transport online' \
     'M48 xHCI/USB-HID foundation QEMU passed.'
 do
