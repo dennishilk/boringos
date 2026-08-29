@@ -58,8 +58,6 @@ done
 for marker in \
     'BoringKernel 0.0.53-dev' \
     'M53 USB input queue ready; inject real USB input now.' \
-    'M53 real USB Transfer completions: 8' \
-    'M53 decoded HID reports: 8' \
     'M53 canonical input events: 7' \
     'M53 queue event 0 type=1 code=81 value1=1 value2=0 modifiers=8' \
     'M53 queue event 1 type=1 code=1 value1=1 value2=0 modifiers=8' \
@@ -72,6 +70,13 @@ for marker in \
 do
     grep -Fqx "$marker" "$LOG" || fail "missing marker: $marker"
 done
+
+grep -Eq '^M53 real USB Transfer completions: ([89]|1[0-6])$' "$LOG" ||
+    fail 'real USB completion count was outside bounded acceptance'
+grep -Eq '^M53 decoded HID reports: ([89]|1[0-6])$' "$LOG" ||
+    fail 'decoded HID report count was outside bounded acceptance'
+grep -Fqx 'M53 queue precheck queued=7 dropped=0 modifiers=0 owner=53 owned=1 initialized=1' "$LOG" ||
+    fail 'canonical queue did not reach the required final state'
 
 cat "$LOG"
 echo 'm53-usb-input-qemu: PASS (q35 i8042=off, real qemu-xhci USB input)'

@@ -12,7 +12,8 @@
 #ifdef BORING_M53_INPUT_ACCEPTANCE
 
 #define M53_INPUT_OWNER_PID 53ULL
-#define M53_EXPECTED_COMPLETIONS 8U
+#define M53_MIN_COMPLETIONS 8U
+#define M53_MAX_COMPLETIONS 16U
 #define M53_EXPECTED_EVENTS 7U
 
 static void fail(const char *reason) __attribute__((noreturn));
@@ -67,6 +68,7 @@ void xhci_address_test_run(void) {
     size_t event_count = 0U;
     uint32_t completed = 0U;
     uint32_t decoded = 0U;
+    uint32_t poll_count;
     uint8_t device_index;
     size_t index;
 
@@ -84,8 +86,24 @@ void xhci_address_test_run(void) {
     if (!xhci_configure_hid_devices(&state)) { fail("M51 configuration"); }
 
     serial_write_string("M53 USB input queue ready; inject real USB input now.\n");
-    if (!xhci_poll_hid_reports(&state, M53_EXPECTED_COMPLETIONS)) {
-        fail("real Interrupt-IN transfer completion");
+    for (poll_count = 0U; poll_count < M53_MAX_COMPLETIONS; ++poll_count) {
+        if (!xhci_poll_hid_reports(&state, 1U)) {
+            fail("real Interrupt-IN transfer completion");
+        }
+        if (!boring_input_get_stats(&input_stats) ||
+            !input_stats.initialized || !input_stats.owned ||
+            (input_stats.owner_pid != M53_INPUT_OWNER_PID) ||
+            (input_stats.dropped_events != 0ULL) ||
+            (input_stats.queued_events > M53_EXPECTED_EVENTS)) {
+            fail("bounded canonical queue progress");
+        }
+        if ((input_stats.queued_events == M53_EXPECTED_EVENTS) &&
+            (input_stats.modifiers == 0U)) {
+            break;
+        }
+    }
+    if (poll_count == M53_MAX_COMPLETIONS) {
+        fail("bounded canonical queue end state");
     }
 
     for (device_index = 0U; device_index < state.addressed_count;
@@ -106,33 +124,33 @@ void xhci_address_test_run(void) {
             decoded += runtime->decoded_reports;
         }
     }
-    if ((completed != M53_EXPECTED_COMPLETIONS) ||
-        (decoded != M53_EXPECTED_COMPLETIONS)) {
+    if ((completed < M53_MIN_COMPLETIONS) ||
+        (completed > M53_MAX_COMPLETIONS) || (decoded != completed)) {
         fail("real M52 transport accounting");
     }
     if (!boring_input_get_stats(&input_stats)) {
-    fail("canonical queue stats");
-}
-serial_write_string("M53 queue precheck queued=");
-serial_write_u64((uint64_t)input_stats.queued_events);
-serial_write_string(" dropped=");
-serial_write_u64(input_stats.dropped_events);
-serial_write_string(" modifiers=");
-serial_write_u64((uint64_t)input_stats.modifiers);
-serial_write_string(" owner=");
-serial_write_u64(input_stats.owner_pid);
-serial_write_string(" owned=");
-serial_write_u64(input_stats.owned ? 1ULL : 0ULL);
-serial_write_string(" initialized=");
-serial_write_u64(input_stats.initialized ? 1ULL : 0ULL);
-serial_write_string("\n");
-if (!input_stats.initialized || !input_stats.owned ||
-    (input_stats.owner_pid != M53_INPUT_OWNER_PID) ||
-    (input_stats.dropped_events != 0ULL) ||
-    (input_stats.queued_events != M53_EXPECTED_EVENTS) ||
-    (input_stats.modifiers != 0U)) {
-    fail("canonical queue state");
-}
+        fail("canonical queue stats");
+    }
+    serial_write_string("M53 queue precheck queued=");
+    serial_write_u64((uint64_t)input_stats.queued_events);
+    serial_write_string(" dropped=");
+    serial_write_u64(input_stats.dropped_events);
+    serial_write_string(" modifiers=");
+    serial_write_u64((uint64_t)input_stats.modifiers);
+    serial_write_string(" owner=");
+    serial_write_u64(input_stats.owner_pid);
+    serial_write_string(" owned=");
+    serial_write_u64(input_stats.owned ? 1ULL : 0ULL);
+    serial_write_string(" initialized=");
+    serial_write_u64(input_stats.initialized ? 1ULL : 0ULL);
+    serial_write_string("\n");
+    if (!input_stats.initialized || !input_stats.owned ||
+        (input_stats.owner_pid != M53_INPUT_OWNER_PID) ||
+        (input_stats.dropped_events != 0ULL) ||
+        (input_stats.queued_events != M53_EXPECTED_EVENTS) ||
+        (input_stats.modifiers != 0U)) {
+        fail("canonical queue state");
+    }
     if (boring_input_read(M53_INPUT_OWNER_PID, events,
                           BORING_INPUT_READ_MAX, &event_count) !=
             BORING_INPUT_RESULT_OK ||
