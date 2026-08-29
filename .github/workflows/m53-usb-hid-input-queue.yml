@@ -1,0 +1,25 @@
+name: M53 USB HID input queue
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  usb-input:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install focused QEMU dependencies
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 xorriso
+      - name: Existing canonical input model fixtures
+        run: |
+          make input-host-test
+          ./build/input-host-test
+      - name: Real xHCI USB HID to canonical input queue
+        run: sh ./tests/m53-usb-input-qemu.sh
