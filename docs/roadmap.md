@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.50-dev
+BoringKernel 0.0.51-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1544,3 +1544,16 @@ only documentation and active version witnesses.
 Active version after runtime-neutral closeout: **BoringKernel 0.0.50-dev**.
 No M50 work is included.
 See [m49-xhci-device-addressing.md](m49-xhci-device-addressing.md).
+
+
+## Milestone 50: bounded xHCI EP0 control-IN and USB descriptor discovery — COMPLETE, Semantic Frozen
+
+M50 adds only the bounded synchronous EP0 standard GET_DESCRIPTOR control-IN discovery path on M49-addressed direct root-port devices. The ordered path validates real Device and Configuration descriptor data, speed-specific bMaxPacketSize0, an EP0-only Evaluate Context when required, exact Transfer Events including Short Packet plus terminal Status handling, one-page descriptor bounds, structural descriptor bounds, and descriptors_ready only after success. It does not configure devices, interpret HID endpoints, perform interrupt transfers, integrate input, support hubs/storage, or begin M51.
+
+Semantic Freeze implementation: `7d07323d2c7f5cbe729b5cfa03b2278691416aa5`.
+Tree: `e2ad5fd1ac8708baceb0034d67c76ced089c8aee`.
+Exact-head SUCCESS: M50 #3 / 33227985224; M49 #8 / 33227985211; M48 #13 / 33227985244; M47 #16 / 33227985152; M46 #20 / 33227985208; M45 #24 / 33227985166; M44 #29 / 33227985199; M43 #33 / 33227985165; M42 #37 / 33227985163; M41 #41 / 33227985148; M40 #44 / 33227985190; M39 #47 / 33227985221; M38 #58 / 33227985215; M37 #91 / 33227985170; complete Boot #557 / 33227985155.
+The focused real-QEMU gate consumed eight real Transfer Events and 138 descriptor bytes for the two CLI-provided devices; the reference run required zero Evaluate Context commands because both real EP0 maximum-packet values matched their M49 initial contexts. Observed ports, slots, speeds, VID/PID, configuration facts and Evaluate count are evidence only, never constants.
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.51-dev**. No M51 work is included.
+See [m50-xhci-descriptor-discovery.md](m50-xhci-descriptor-discovery.md).
