@@ -1,0 +1,29 @@
+name: M54 USB-only graphical desktop
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  usb-desktop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install focused QEMU dependencies
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 xorriso
+      - name: Static acceptance checks
+        run: |
+          git diff --check
+          python3 -m py_compile tests/m54-usb-only-desktop-qemu.py tests/validate-m36-terminal-screenshot.py
+      - name: Existing canonical input model fixtures
+        run: |
+          make input-host-test
+          ./build/input-host-test
+      - name: Real i8042-free xHCI USB graphical desktop
+        run: python3 tests/m54-usb-only-desktop-qemu.py

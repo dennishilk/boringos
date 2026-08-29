@@ -110,12 +110,18 @@ def decode(ppm, metadata):
             raise ValueError(f"terminal {field} is not independent")
     if sum(t["token"] == metadata["focus"] for t in tiles) != 1:
         raise ValueError("focus is not unique")
-    # This keyboard-only path never moves the M31 pointer from the center.
+    # Historical keyboard-only callers default to the center. M54 supplies
+    # the independently expected real USB cursor position.
     pointer = {}
-    cx, cy = width // 2, height // 2
+    cx = int(metadata.get("cursor_x", width // 2))
+    cy = int(metadata.get("cursor_y", height // 2))
+    if not (0 <= cx < width and 0 <= cy < height):
+        raise ValueError("cursor metadata outside framebuffer")
     for row in range(12):
         for col in range(row // 2 + 1):
-            pointer[cx + col, cy + row] = bytes((0xFF, 0xEE, 0xF5)) if col == 0 else bytes((0x30, 0xEE, 0xF5))
+            px, py = cx + col, cy + row
+            if px < width and py < height:
+                pointer[px, py] = bytes((0xFF, 0xEE, 0xF5)) if col == 0 else bytes((0x30, 0xEE, 0xF5))
     expected = bytearray(WM_BG * (width * height))
     screens = {}
     for tile, rect in zip(tiles, expected_layout(width, height, len(tiles))):
@@ -151,7 +157,7 @@ def validate(ppm, metadata, mode):
         if len(screens) != 1:
             raise ValueError("fetch proof requires exactly one terminal")
         rows = next(iter(screens.values()))
-        for text in ("BoringOS", "Kernel: BoringKernel 0.0.54-dev", "Root FS: BoringFS"):
+        for text in ("BoringOS", "Kernel: BoringKernel 0.0.55-dev", "Root FS: BoringFS"):
             if not contains(rows, text):
                 raise ValueError(f"graphical boringfetch text missing: {text}: {rows}")
     elif mode == "dual-ready":
