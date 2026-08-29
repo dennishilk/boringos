@@ -122,7 +122,7 @@ grep -Fq 'boring@boringos:/$ ' "${LOG}" ||
     fail_dump 'missing real root CWD identity prompt'
 
 for line in \
-    'BoringKernel 0.0.48-dev' \
+    'BoringKernel 0.0.49-dev' \
     'boring-shell launch:' \
     '  boot-modules-found: PASS' \
     '  init-module-found: PASS' \
@@ -186,7 +186,7 @@ wait_for_line 'boringos'
 send_command 'whoami'
 wait_for_line 'boring'
 send_command 'uname'
-wait_for_line 'BoringOS BoringKernel 0.0.48-dev x86_64'
+wait_for_line 'BoringOS BoringKernel 0.0.49-dev x86_64'
 send_command 'ps'
 wait_for_line 'PID PPID STATE NAME'
 wait_for_line '1 0 WAITING boring-init'
