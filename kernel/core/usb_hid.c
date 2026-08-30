@@ -466,33 +466,8 @@ out:
             M52_EVENT_ENDPOINT_MASK);
         const uint8_t slot =
             (uint8_t)(control >> M52_EVENT_SLOT_SHIFT);
-        bool published_match = false;
-        uint8_t device_index;
-        for (device_index = 0U;
-             !published_match && (device_index < active->addressed_count);
-             ++device_index) {
-            const struct xhci_addressed_device *device =
-                &active->addressed[device_index];
-            uint8_t endpoint_index;
-            for (endpoint_index = 0U;
-                 endpoint_index < device->hid_configuration.endpoint_count;
-                 ++endpoint_index) {
-                const struct xhci_hid_endpoint_runtime *runtime =
-                    &device->hid_runtime[endpoint_index];
-                const struct xhci_hid_endpoint_descriptor *descriptor =
-                    &device->hid_configuration.endpoints[endpoint_index];
-                if (runtime->transfer_outstanding &&
-                    (slot == device->slot_id) &&
-                    (endpoint == descriptor->endpoint_id) &&
-                    (event_ring[event_index].parameter ==
-                     runtime->expected_trb_physical)) {
-                    published_match = true;
-                    break;
-                }
-            }
-        }
         if ((entry_cycle == event_cycle) &&
-            (type == XHCI_TRB_TYPE_TRANSFER_EVENT) && published_match) {
+            (type == XHCI_TRB_TYPE_TRANSFER_EVENT)) {
             ++matching_failures;
             if ((matching_failures == 1ULL) ||
                 ((matching_failures & 0x3ffULL) == 0ULL)) {
@@ -513,6 +488,10 @@ out:
                 serial_write_u64(event_ring[event_index].parameter);
                 serial_write_string("/");
                 serial_write_u64((uint64_t)event_ring[event_index].status);
+                serial_write_string(" event-slot/ep=");
+                serial_write_u64((uint64_t)slot);
+                serial_write_string("/");
+                serial_write_u64((uint64_t)endpoint);
                 serial_write_string("\n");
             }
         }
