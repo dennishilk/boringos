@@ -759,9 +759,45 @@ static bool m52_complete_event(struct xhci_state *active,
             ++device->transfer_events;
             if (!m52_decode_report(device, endpoint_index,
                                    (const uint8_t *)buffer_virtual, actual)) {
+                static bool traced_decode_failure;
+                if (!traced_decode_failure) {
+                    uint16_t report_index;
+                    traced_decode_failure = true;
+                    serial_write_string(
+                        "m52-complete-late-diag: reason=decode dev/slot/index/ep/proto/actual=");
+                    serial_write_u64((uint64_t)device_index);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)device->slot_id);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)endpoint_index);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)descriptor->endpoint_id);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)descriptor->protocol);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)actual);
+                    serial_write_string(" report=");
+                    for (report_index = 0U; report_index < actual;
+                         ++report_index) {
+                        if (report_index != 0U) {
+                            serial_write_string("/");
+                        }
+                        serial_write_u64(
+                            ((const uint8_t *)buffer_virtual)[report_index]);
+                    }
+                    serial_write_string("\n");
+                }
                 return false;
             }
-            if (*completed == UINT32_MAX) { return false; }
+            if (*completed == UINT32_MAX) {
+                static bool traced_completed_overflow;
+                if (!traced_completed_overflow) {
+                    traced_completed_overflow = true;
+                    serial_write_string(
+                        "m52-complete-late-diag: reason=completed-overflow\n");
+                }
+                return false;
+            }
             ++*completed;
             return true;
         }

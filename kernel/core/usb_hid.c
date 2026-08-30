@@ -372,6 +372,7 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
     uint32_t completed = 0U;
     uint32_t attempt;
     bool success = false;
+    const char *failure_stage = "wait";
 
     if ((state == NULL) || (completion_goal == 0U) || (wait_limit == 0U)) {
         return false;
@@ -392,12 +393,15 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
     active = (struct xhci_state *)(uintptr_t)published;
     mmio = (volatile uint8_t *)mapping;
     event_ring = (volatile struct xhci_trb *)event_virtual;
-
-    if (!m60_rearm_hid_endpoints(active, mmio)) { goto out; }
-
     consumed = m52_consumed_events(active);
     event_index = (uint16_t)(consumed % XHCI_EVENT_RING_TRBS);
     event_cycle = (((consumed / XHCI_EVENT_RING_TRBS) & 1ULL) == 0ULL);
+
+    if (!m60_rearm_hid_endpoints(active, mmio)) {
+        failure_stage = "rearm";
+        goto out;
+    }
+
     for (attempt = 0U;
          (attempt < wait_limit) && (completed < completion_goal);
          ++attempt) {
@@ -419,8 +423,12 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
         event.control = control;
         type = (uint8_t)((event.control >> M52_TRB_TYPE_SHIFT) &
                          M52_TRB_TYPE_MASK);
-        if ((type != XHCI_TRB_TYPE_TRANSFER_EVENT) ||
-            !m60_consume_hid_event_mapped(active, &event, &completed)) {
+        if (type != XHCI_TRB_TYPE_TRANSFER_EVENT) {
+            failure_stage = "event-type";
+            goto out;
+        }
+        if (!m60_consume_hid_event_mapped(active, &event, &completed)) {
+            failure_stage = "consume";
             goto out;
         }
         next_index = (uint16_t)(event_index + 1U);
@@ -430,7 +438,10 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
             next_cycle = !next_cycle;
         }
         m52_barrier();
-        if (interrupter > M52_MMIO_WINDOW_SIZE - 0x20U) { goto out; }
+        if (interrupter > M52_MMIO_WINDOW_SIZE - 0x20U) {
+            failure_stage = "interrupter";
+            goto out;
+        }
         m52_mmio_write64(mmio, interrupter + 0x18U,
             (active->event_ring_physical +
              ((uint64_t)next_index * XHCI_TRB_SIZE)) | (1ULL << 3U));
@@ -444,6 +455,29 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
 
     success = completed >= completion_goal;
 out:
+    if (!success && (event_virtual != NULL)) {
+        static bool traced_poll_failure;
+        const uint32_t control = event_ring[event_index].control;
+        const bool entry_cycle = (control & M52_TRB_CYCLE) != 0U;
+        if (!traced_poll_failure && (entry_cycle == event_cycle)) {
+            traced_poll_failure = true;
+            serial_write_string("m60-poll-diag: stage=");
+            serial_write_string(failure_stage);
+            serial_write_string(" consumed/index/cycle/control/param/status=");
+            serial_write_u64(m52_consumed_events(active));
+            serial_write_string("/");
+            serial_write_u64((uint64_t)event_index);
+            serial_write_string("/");
+            serial_write_u64(event_cycle ? 1ULL : 0ULL);
+            serial_write_string("/");
+            serial_write_u64((uint64_t)control);
+            serial_write_string("/");
+            serial_write_u64(event_ring[event_index].parameter);
+            serial_write_string("/");
+            serial_write_u64((uint64_t)event_ring[event_index].status);
+            serial_write_string("\n");
+        }
+    }
     *state = *active;
     if (mapping != NULL) {
         (void)vmm_unmap_mmio_region(mapping, M52_MMIO_WINDOW_SIZE);
