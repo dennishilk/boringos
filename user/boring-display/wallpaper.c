@@ -35,20 +35,40 @@ static uint8_t glyph_row(char character, uint32_t row) {
     return glyph[row];
 }
 
-static void pixel(uint8_t *output, size_t offset, uint8_t red,
-                  uint8_t green, uint8_t blue) {
-    output[offset] = blue;
-    output[offset + 1U] = green;
-    output[offset + 2U] = red;
-    output[offset + 3U] = 0U;
+static bool pixel(const struct boring_display_core *core,
+                  uint8_t *output, size_t size,
+                  uint32_t x, uint32_t y,
+                  uint8_t red, uint8_t green, uint8_t blue) {
+    size_t row_offset;
+    size_t pixel_offset;
+
+    if ((core == NULL) || (output == NULL) || (size < 4U) ||
+        (x >= core->width) || (y >= core->height) ||
+        ((size_t)y > SIZE_MAX / (size_t)core->stride)) {
+        return false;
+    }
+    row_offset = (size_t)y * (size_t)core->stride;
+    if (((size_t)x > (SIZE_MAX - row_offset) / 4U)) {
+        return false;
+    }
+    pixel_offset = row_offset + ((size_t)x * 4U);
+    if (pixel_offset > size - 4U) {
+        return false;
+    }
+    output[pixel_offset] = blue;
+    output[pixel_offset + 1U] = green;
+    output[pixel_offset + 2U] = red;
+    output[pixel_offset + 3U] = 0U;
+    return true;
 }
 
-static void background(uint8_t *output, uint32_t stride) {
+static bool background(const struct boring_display_core *core,
+                       uint8_t *output, size_t size) {
     uint32_t y;
-    for (y = 0U; y < BORING_WALLPAPER_HEIGHT; ++y) {
+    for (y = 0U; y < core->height; ++y) {
         uint32_t x;
         const uint32_t vertical_distance = y > 365U ? y - 365U : 365U - y;
-        for (x = 0U; x < BORING_WALLPAPER_WIDTH; ++x) {
+        for (x = 0U; x < core->width; ++x) {
             uint32_t glow = 0U;
             uint32_t noise;
             uint32_t hash = x * 0x45d9f3bU;
@@ -61,15 +81,19 @@ static void background(uint8_t *output, uint32_t stride) {
             noise = (hash >> 29U) & 3U;
             if ((hash & 0x1fffU) == 0U) { noise += 9U; }
             if (glow + noise > 29U) { noise = 29U - glow; }
-            pixel(output, (size_t)y * stride + (size_t)x * 4U,
-                  (uint8_t)(glow + noise),
-                  (uint8_t)(glow + noise + 1U),
-                  (uint8_t)(glow + noise + 3U));
+            if (!pixel(core, output, size, x, y,
+                       (uint8_t)(glow + noise),
+                       (uint8_t)(glow + noise + 1U),
+                       (uint8_t)(glow + noise + 3U))) {
+                return false;
+            }
         }
     }
+    return true;
 }
 
-static void logo(uint8_t *output, uint32_t stride) {
+static bool logo(const struct boring_display_core *core,
+                 uint8_t *output, size_t size) {
     static const char mark[] = "boring by design.";
     uint32_t x = 596U;
     size_t index;
@@ -85,10 +109,16 @@ static void logo(uint8_t *output, uint32_t stride) {
                     for (yy = 0U; yy < 2U; ++yy) {
                         uint32_t xx;
                         for (xx = 0U; xx < 2U; ++xx) {
-                            const size_t offset = (size_t)(529U + row * 2U + yy) * stride +
-                                (size_t)(x + column * 2U + xx) * 4U;
-                            if (index < 6U) { pixel(output, offset, 98U, 96U, 100U); }
-                            else { pixel(output, offset, 76U, 75U, 80U); }
+                            const uint32_t pixel_x = x + column * 2U + xx;
+                            const uint32_t pixel_y = 529U + row * 2U + yy;
+                            const bool ready = index < 6U ?
+                                pixel(core, output, size, pixel_x, pixel_y,
+                                      98U, 96U, 100U) :
+                                pixel(core, output, size, pixel_x, pixel_y,
+                                      76U, 75U, 80U);
+                            if (!ready) {
+                                return false;
+                            }
                         }
                     }
                 }
@@ -96,17 +126,23 @@ static void logo(uint8_t *output, uint32_t stride) {
         }
         x += character == ' ' ? 8U : 12U;
     }
+    return true;
 }
 
 bool display_wallpaper_compose(const struct boring_display_core *core,
                                uint8_t *output, size_t size) {
+    size_t required;
+
     if ((core == NULL) || (output == NULL) || (size != core->byte_size) ||
         (core->width != BORING_WALLPAPER_WIDTH) ||
         (core->height != BORING_WALLPAPER_HEIGHT) ||
-        (core->stride < BORING_WALLPAPER_WIDTH * 4U)) {
+        (core->stride < BORING_WALLPAPER_WIDTH * 4U) ||
+        ((size_t)core->height > SIZE_MAX / (size_t)core->stride)) {
         return false;
     }
-    background(output, core->stride);
-    logo(output, core->stride);
-    return true;
+    required = (size_t)core->height * (size_t)core->stride;
+    if (required != size) {
+        return false;
+    }
+    return background(core, output, size) && logo(core, output, size);
 }

@@ -25,6 +25,8 @@ jobs:
         run: sh tests/m61-xhci-event-coexistence-host.sh
       - name: Build M61 runtime and negative contracts
         run: sh tests/m61-build.sh
+      - name: Relink M61 physical trace kernel
+        run: sh tests/m61-physical-trace-kernel.sh
       - name: Build physical image and deterministic QEMU test twin
         run: env -u GITHUB_SHA sh tests/m61-build-usb-image.sh
       - name: Prove physical/QEMU twin runtime payload equivalence
@@ -80,6 +82,14 @@ jobs:
             tail -n 500 build/m61-bootable-persistent-usb/first-boot/qemu.log || true
           fi
           exit "$rc"
+      - name: Verify physical boot trace progression
+        run: |
+          log=build/m61-bootable-persistent-usb/first-boot/serial.log
+          grep -Fq 'M61 TRACE [08+] EXCEPTIONS' "$log"
+          grep -Fq 'M61 TRACE [16+] XHCI HID CONFIG' "$log"
+          grep -Fq 'M61 TRACE [18+] BORINGFS ROOT' "$log"
+          grep -Fq 'M61 TRACE [25+] WM SERVICE' "$log"
+          grep -Fq 'M61 TRACE [26+] DESKTOP PRESENT' "$log"
       - name: Verify restored physical raw and compressed artifact hashes
         run: |
           test ! -e build/boringos-m61-usb-qemu.img
@@ -90,10 +100,18 @@ jobs:
           test "$actual" = "$expected"
           grep -Fqx 'limine_timeout_seconds=5' build/m61-usb-image.txt
           grep -Fqx 'physical_breadcrumbs=enabled' build/m61-usb-image.txt
+      - name: Record physical raw identity
+        id: physical
+        run: |
+          raw_size=$(stat -c %s build/boringos-m61-usb.img)
+          raw_sha256=$(awk '{print $1}' build/boringos-m61-usb.img.sha256)
+          echo "raw_size=$raw_size" >> "$GITHUB_OUTPUT"
+          echo "raw_sha256=$raw_sha256" >> "$GITHUB_OUTPUT"
+          printf 'physical raw size=%s sha256=%s\n' "$raw_size" "$raw_sha256"
       - name: Publish final physical M61 image and acceptance evidence
         uses: actions/upload-artifact@v4
         with:
-          name: m61-bootable-persistent-usb-${{ github.event.pull_request.head.sha || github.sha }}
+          name: m61-bootable-persistent-usb-${{ github.event.pull_request.head.sha || github.sha }}-${{ steps.physical.outputs.raw_size }}-${{ steps.physical.outputs.raw_sha256 }}
           path: |
             build/boringos-m61-usb.img.xz
             build/boringos-m61-usb.img.sha256
