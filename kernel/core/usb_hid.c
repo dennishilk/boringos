@@ -328,6 +328,8 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
         struct xhci_trb event;
         uint32_t control = event_ring[event_index].control;
         uint8_t type;
+        uint16_t next_index;
+        bool next_cycle;
         const uint32_t interrupter = active->capabilities.runtime_offset +
                                      M52_RUNTIME_INTERRUPTER0;
 
@@ -338,21 +340,8 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
         event.parameter = event_ring[event_index].parameter;
         event.status = event_ring[event_index].status;
         event.control = control;
-        ++event_index;
-        if (event_index == XHCI_EVENT_RING_TRBS) {
-            event_index = 0U;
-            event_cycle = !event_cycle;
-        }
-        m52_barrier();
-        if (interrupter > M52_MMIO_WINDOW_SIZE - 0x20U) { goto out; }
-        m52_mmio_write64(mmio, interrupter + 0x18U,
-            (active->event_ring_physical +
-             ((uint64_t)event_index * XHCI_TRB_SIZE)) | (1ULL << 3U));
         type = (uint8_t)((event.control >> M52_TRB_TYPE_SHIFT) &
                          M52_TRB_TYPE_MASK);
-        if (type == M52_TRB_TYPE_PORT_STATUS_EVENT) {
-            goto out;
-        }
         if ((type != XHCI_TRB_TYPE_TRANSFER_EVENT) ||
             !m60_consume_hid_event_mapped(
                 active, mmio, &event,
@@ -361,6 +350,19 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
                 &completed)) {
             goto out;
         }
+        next_index = (uint16_t)(event_index + 1U);
+        next_cycle = event_cycle;
+        if (next_index == XHCI_EVENT_RING_TRBS) {
+            next_index = 0U;
+            next_cycle = !next_cycle;
+        }
+        m52_barrier();
+        if (interrupter > M52_MMIO_WINDOW_SIZE - 0x20U) { goto out; }
+        m52_mmio_write64(mmio, interrupter + 0x18U,
+            (active->event_ring_physical +
+             ((uint64_t)next_index * XHCI_TRB_SIZE)) | (1ULL << 3U));
+        event_index = next_index;
+        event_cycle = next_cycle;
     }
 
     success = completed >= completion_goal;
