@@ -77,5 +77,7 @@ make TEST_MODE=m36-desktop \
 
 nm build/kernel.elf | grep -Fq 'boring_m61_physical_breadcrumbs_enabled'
 grep -Fqx 'timeout: 5' limine-m61-usb.conf
+grep -Fqx 'mouse: no' limine-m61-usb.conf
 printf '%s\n' 'M61 physical framebuffer breadcrumbs: ENABLED'
+printf '%s\n' 'M61 USB Limine bounded autoboot: 5 seconds, mouse countdown cancellation disabled'
 printf '%s\n' 'M61 USB-root desktop build passed.'
