@@ -28,7 +28,17 @@ jobs:
       - name: Build deterministic bounded flashable USB image
         run: env -u GITHUB_SHA sh tests/m61-build-usb-image.sh
       - name: Two-boot same-image UEFI USB-root persistence acceptance
-        run: python3 tests/m61-bootable-persistent-usb-qemu.py
+        run: |
+          cat > /tmp/qemu-m61 <<'EOF'
+          #!/bin/sh
+          exec qemu-system-x86_64 "$@" -trace enable=usb_xhci_queue_event
+          EOF
+          chmod +x /tmp/qemu-m61
+          if ! QEMU=/tmp/qemu-m61 python3 tests/m61-bootable-persistent-usb-qemu.py; then
+            echo '--- M61 focused QEMU xHCI diagnostic tail ---'
+            tail -n 500 build/m61-bootable-persistent-usb/first-boot/qemu.log || true
+            exit 1
+          fi
       - name: Verify restored fresh raw and compressed artifact hashes
         run: |
           sha256sum -c build/boringos-m61-usb.img.sha256
