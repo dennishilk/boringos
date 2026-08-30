@@ -59,10 +59,26 @@ jobs:
           if ! QEMU=/tmp/qemu-m61 python3 tests/m61-bootable-persistent-usb-qemu.py; then
             echo '--- M61 focused QEMU Limine boot-drive evidence ---'
             cat build/m61-bootable-persistent-usb/first-boot/limine-boot-drive.log || true
+            echo '--- M61 focused QEMU pre/post-send-key framebuffer hashes ---'
+            sha256sum build/m61-bootable-persistent-usb/first-boot/limine-before-send-key.ppm \
+                      build/m61-bootable-persistent-usb/first-boot/limine-after-send-key.ppm || true
             echo '--- M61 focused QEMU xHCI diagnostic tail ---'
             tail -n 700 build/m61-bootable-persistent-usb/first-boot/qemu.log || true
             exit 1
           fi
+      - name: Publish failed pre-kernel Limine framebuffer diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: m61-prekernel-limine-diagnostic-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            build/m61-bootable-persistent-usb/first-boot/limine-boot-drive.log
+            build/m61-bootable-persistent-usb/first-boot/limine-before-send-key.ppm
+            build/m61-bootable-persistent-usb/first-boot/limine-after-send-key.ppm
+            build/m61-bootable-persistent-usb/first-boot/serial.log
+            build/m61-bootable-persistent-usb/first-boot/qemu.log
+          if-no-files-found: error
+          retention-days: 7
       - name: Verify restored fresh raw and compressed artifact hashes
         run: |
           (cd build && sha256sum -c boringos-m61-usb.img.sha256)
