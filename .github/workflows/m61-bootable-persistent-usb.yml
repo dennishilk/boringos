@@ -31,12 +31,33 @@ jobs:
         run: |
           cat > /tmp/qemu-m61 <<'EOF'
           #!/bin/sh
+          set -eu
+          serial_path=
+          want_serial=0
+          for arg in "$@"; do
+            if [ "$want_serial" -eq 1 ]; then
+              case "$arg" in
+                file:*) serial_path=${arg#file:} ;;
+              esac
+              want_serial=0
+            elif [ "$arg" = "-serial" ]; then
+              want_serial=1
+            fi
+          done
+          test -n "$serial_path"
+          boot_qmp="/tmp/m61-limine-qmp-$$.sock"
+          rm -f "$boot_qmp"
+          python3 tests/m61-limine-boot-drive.py "$boot_qmp" "$serial_path" >/dev/null 2>&1 &
           exec qemu-system-x86_64 "$@" \
+            -chardev "socket,id=m61bootqmp,path=$boot_qmp,server=on,wait=off" \
+            -mon "chardev=m61bootqmp,mode=control,pretty=off" \
             -trace enable=usb_xhci_queue_event \
             -trace enable=usb_xhci_doorbell_write
           EOF
           chmod +x /tmp/qemu-m61
           if ! QEMU=/tmp/qemu-m61 python3 tests/m61-bootable-persistent-usb-qemu.py; then
+            echo '--- M61 focused QEMU Limine boot-drive evidence ---'
+            cat build/m61-bootable-persistent-usb/first-boot/limine-boot-drive.log || true
             echo '--- M61 focused QEMU xHCI diagnostic tail ---'
             tail -n 700 build/m61-bootable-persistent-usb/first-boot/qemu.log || true
             exit 1
