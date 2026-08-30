@@ -337,6 +337,40 @@ def run_session(name, expect_existing):
         finally:
             qmp("cont")
 
+    def capture_wallpaper():
+        geometry = re.search(r"boring-framebuffer: (\d+)x(\d+)x(?:24|32)", text())
+        if geometry is None:
+            raise RuntimeError("missing framebuffer geometry")
+        width, height = map(int, geometry.groups())
+        if (width, height) != (800, 600):
+            raise RuntimeError("M61 wallpaper acceptance requires exact 800x600 scanout")
+        qmp("stop")
+        try:
+            ppm = out / "empty-desktop-wallpaper.ppm"
+            qmp("screendump", {"filename": str(ppm)})
+            actual_width, actual_height, actual = WM["parse_ppm"](ppm)
+            if (actual_width, actual_height) != (width, height):
+                raise ValueError("wallpaper screenshot geometry mismatch")
+            expected = WM["desktop_background"](width, height)
+            x, y, region_width, region_height = 590, 520, 205, 35
+            actual_region = bytearray()
+            expected_region = bytearray()
+            for row in range(y, y + region_height):
+                first = (row * width + x) * 3
+                last = first + region_width * 3
+                actual_region.extend(actual[first:last])
+                expected_region.extend(expected[first:last])
+            if actual_region != expected_region:
+                raise ValueError("empty desktop does not contain exact boring by design wallpaper region")
+            if len(set(actual_region)) < 16:
+                raise ValueError("wallpaper region is not visually distinctive")
+            (out / "wallpaper-proof.txt").write_text(
+                "empty 800x600 desktop exact wallpaper logo region: PASS\n"
+                f"region={x},{y} {region_width}x{region_height}\n"
+                f"region-sha256={hashlib.sha256(actual_region).hexdigest()}\n")
+        finally:
+            qmp("cont")
+
     def settled_capture(frame):
         deadline = time.monotonic() + 20
         while True:
@@ -361,6 +395,8 @@ def run_session(name, expect_existing):
         witness("boring-spawn: VFS executable source /bin/boringwm")
         witness("display: M35 service and M31 input ready")
         witness("wm: boring.wm Ring3 policy ready; no pixel mappings")
+        latest(0)
+        capture_wallpaper()
         current = text()
         if ("VirtIO block:" in current) or ("m57-desktop:" in current) or ("AHCI:" in current):
             raise RuntimeError("M61 USB-root mode entered a forbidden fallback path")
