@@ -36,7 +36,7 @@ ROOT_BYTES=$((ROOT_SECTORS * SECTOR))
 ESP_BYTES=$((ESP_SECTORS * SECTOR))
 [ "$IMAGE_BYTES" -lt 15682240512 ] || { echo 'M61 image exceeds physical target' >&2; exit 1; }
 
-for tool in sgdisk mkfs.fat mmd mcopy xz; do
+for tool in sgdisk mkfs.fat mmd mcopy xz cmp nm; do
     command -v "$tool" >/dev/null 2>&1 || { echo "M61 image builder missing tool: $tool" >&2; exit 1; }
 done
 for file in build/kernel.elf build/user/boring-init-desktop.elf \
@@ -75,6 +75,24 @@ sgdisk --verify "$IMAGE" | tee "$WORK/gpt-verify.txt"
 dd if="$ESP" of="$IMAGE" bs="$SECTOR" seek="$ESP_FIRST" conv=notrunc status=none
 dd if="$ROOTFS" of="$IMAGE" bs="$SECTOR" seek="$ROOT_FIRST" conv=notrunc status=none
 
+PROOF=$WORK/image-proof
+mkdir -p "$PROOF"
+IMAGE_ESP="${IMAGE}@@$((ESP_FIRST * SECTOR))"
+mcopy -i "$IMAGE_ESP" ::/boot/kernel.elf "$PROOF/kernel.elf"
+mcopy -i "$IMAGE_ESP" ::/boot/limine/limine.conf "$PROOF/limine.conf"
+cmp -s build/kernel.elf "$PROOF/kernel.elf" || {
+    echo 'M61 image proof FAILED: embedded kernel differs from candidate kernel' >&2
+    exit 1
+}
+cmp -s limine-m61-usb.conf "$PROOF/limine.conf" || {
+    echo 'M61 image proof FAILED: embedded Limine config differs from candidate config' >&2
+    exit 1
+}
+nm "$PROOF/kernel.elf" | grep -Fq 'boring_m61_physical_breadcrumbs_enabled'
+grep -Fqx 'timeout: 5' "$PROOF/limine.conf"
+grep -Fqx 'mouse: no' "$PROOF/limine.conf"
+printf '%s\n' 'M61 raw image proof: diagnostic kernel + timeout: 5 + bounded Limine autoboot: PASS'
+
 actual_bytes=$(wc -c < "$IMAGE" | tr -d ' ')
 [ "$actual_bytes" -eq "$IMAGE_BYTES" ] || { echo 'M61 raw image size drift' >&2; exit 1; }
 sha=$(sha256sum "$IMAGE" | awk '{print $1}')
@@ -102,6 +120,9 @@ if [ -z "$commit" ] && command -v git >/dev/null 2>&1; then commit=$(git rev-par
     printf 'boringfs_payload_bytes=%s\n' "$root_bytes"
     printf 'build_commit=%s\n' "$commit"
     printf 'kernel_version=%s\n' "$version"
+    printf 'physical_breadcrumbs=enabled\n'
+    printf 'limine_timeout_seconds=5\n'
+    printf 'limine_mouse_countdown_cancel=disabled\n'
 } > "$META"
 cat "$META"
 printf '%s\n' 'M61 FLASHABLE USB IMAGE BUILT'
