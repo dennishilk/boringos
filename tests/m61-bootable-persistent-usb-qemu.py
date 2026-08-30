@@ -242,12 +242,12 @@ def run_session(name, expect_existing):
 
         qmp("input-send-event", {"events": [QMP["key_event"]("ret", True)]})
         witness(stdin_marker, stdin_before + 1)
-        witness(newline_marker, newline_before + 1)
 
         release_before = text().count(service_marker)
         qmp("input-send-event", {"events": [QMP["key_event"]("ret", False)]})
         witness(service_marker, release_before + 1)
 
+        witness(newline_marker, newline_before + 1)
         wait(lambda current_text: len(shell_write_pattern.findall(current_text)) >=
              shell_writes_before + 2,
              f"shell pid {shell_pid} regenerated prompt after command")
