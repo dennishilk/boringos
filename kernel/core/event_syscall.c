@@ -107,6 +107,8 @@ static long poll_watches(struct process *process,
 }
 
 #if defined(BORING_M54_USB_ONLY_DESKTOP)
+#define M61_TRACE_TRB_CYCLE (1U << 0U)
+
 static bool m54_is_input_owner(const struct process *process) {
     struct boring_input_stats input;
     return (process != NULL) && boring_input_get_stats(&input) &&
@@ -183,7 +185,7 @@ static void m61_trace_failed_hid_service(void) {
     cycle = (((consumed / XHCI_EVENT_RING_TRBS) & 1ULL) == 0ULL);
     ring = (volatile struct xhci_trb *)ring_virtual;
     control = ring[index].control;
-    entry_cycle = (control & M52_TRB_CYCLE) != 0U;
+    entry_cycle = (control & M61_TRACE_TRB_CYCLE) != 0U;
     if ((entry_cycle == cycle) || ((failures & 0x3ffULL) == 0ULL)) {
         serial_write_string("m61-hid-stall: failures/consumed/index/cycle/entry/control/param/status=");
         serial_write_u64(failures); serial_write_string("/");
