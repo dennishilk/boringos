@@ -456,7 +456,7 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
     success = completed >= completion_goal;
 out:
     if (!success && (event_virtual != NULL)) {
-        static bool traced_poll_failure;
+        static uint64_t matching_failures;
         const uint32_t control = event_ring[event_index].control;
         const bool entry_cycle = (control & M52_TRB_CYCLE) != 0U;
         const uint8_t type = (uint8_t)(
@@ -491,24 +491,30 @@ out:
                 }
             }
         }
-        if (!traced_poll_failure && (entry_cycle == event_cycle) &&
+        if ((entry_cycle == event_cycle) &&
             (type == XHCI_TRB_TYPE_TRANSFER_EVENT) && published_match) {
-            traced_poll_failure = true;
-            serial_write_string("m60-poll-diag: stage=");
-            serial_write_string(failure_stage);
-            serial_write_string(" consumed/index/cycle/control/param/status=");
-            serial_write_u64(m52_consumed_events(active));
-            serial_write_string("/");
-            serial_write_u64((uint64_t)event_index);
-            serial_write_string("/");
-            serial_write_u64(event_cycle ? 1ULL : 0ULL);
-            serial_write_string("/");
-            serial_write_u64((uint64_t)control);
-            serial_write_string("/");
-            serial_write_u64(event_ring[event_index].parameter);
-            serial_write_string("/");
-            serial_write_u64((uint64_t)event_ring[event_index].status);
-            serial_write_string("\n");
+            ++matching_failures;
+            if ((matching_failures == 1ULL) ||
+                ((matching_failures & 0x3ffULL) == 0ULL)) {
+                serial_write_string("m60-poll-diag: failures/stage=");
+                serial_write_u64(matching_failures);
+                serial_write_string("/");
+                serial_write_string(failure_stage);
+                serial_write_string(
+                    " consumed/index/cycle/control/param/status=");
+                serial_write_u64(m52_consumed_events(active));
+                serial_write_string("/");
+                serial_write_u64((uint64_t)event_index);
+                serial_write_string("/");
+                serial_write_u64(event_cycle ? 1ULL : 0ULL);
+                serial_write_string("/");
+                serial_write_u64((uint64_t)control);
+                serial_write_string("/");
+                serial_write_u64(event_ring[event_index].parameter);
+                serial_write_string("/");
+                serial_write_u64((uint64_t)event_ring[event_index].status);
+                serial_write_string("\n");
+            }
         }
     }
     *state = *active;
