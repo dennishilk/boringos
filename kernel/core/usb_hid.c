@@ -199,6 +199,7 @@ static enum m60_hid_classification m60_classify_hid_device(
 
 static bool m60_rearm_hid_endpoints(struct xhci_state *active,
                                      volatile uint8_t *mmio) {
+    static bool traced_failure;
     uint8_t device_index;
     if ((active == NULL) || (mmio == NULL)) { return false; }
     for (device_index = 0U; device_index < active->addressed_count;
@@ -208,10 +209,49 @@ static bool m60_rearm_hid_endpoints(struct xhci_state *active,
             m60_classify_hid_device(device);
         uint8_t endpoint_index;
 
-        if (classification == M60_HID_INVALID) { return false; }
+        if (classification == M60_HID_INVALID) {
+            if (!traced_failure) {
+                traced_failure = true;
+                serial_write_string(
+                    "m60-rearm-diag: reason=classification dev/addressed/descriptors/configured/ready/descbuf/configlen/endpoints=");
+                serial_write_u64((uint64_t)device_index);
+                serial_write_string("/");
+                serial_write_u64(device->addressed ? 1ULL : 0ULL);
+                serial_write_string("/");
+                serial_write_u64(device->descriptors_ready ? 1ULL : 0ULL);
+                serial_write_string("/");
+                serial_write_u64(device->device_configured ? 1ULL : 0ULL);
+                serial_write_string("/");
+                serial_write_u64(device->hid_endpoint_ready ? 1ULL : 0ULL);
+                serial_write_string("/");
+                serial_write_u64(device->descriptor_buffer_physical);
+                serial_write_string("/");
+                serial_write_u64(
+                    (uint64_t)device->descriptors.configuration_length);
+                serial_write_string("/");
+                serial_write_u64(
+                    (uint64_t)device->hid_configuration.endpoint_count);
+                serial_write_string("\n");
+            }
+            return false;
+        }
         if (classification == M60_HID_NOT_HID) { continue; }
         if (!device->device_configured || !device->hid_endpoint_ready ||
             (device->hid_configuration.endpoint_count > XHCI_MAX_HID_ENDPOINTS)) {
+            if (!traced_failure) {
+                traced_failure = true;
+                serial_write_string(
+                    "m60-rearm-diag: reason=configuration dev/configured/ready/endpoints=");
+                serial_write_u64((uint64_t)device_index);
+                serial_write_string("/");
+                serial_write_u64(device->device_configured ? 1ULL : 0ULL);
+                serial_write_string("/");
+                serial_write_u64(device->hid_endpoint_ready ? 1ULL : 0ULL);
+                serial_write_string("/");
+                serial_write_u64(
+                    (uint64_t)device->hid_configuration.endpoint_count);
+                serial_write_string("\n");
+            }
             return false;
         }
         for (endpoint_index = 0U;
@@ -219,6 +259,47 @@ static bool m60_rearm_hid_endpoints(struct xhci_state *active,
              ++endpoint_index) {
             if (!device->hid_runtime[endpoint_index].transfer_outstanding &&
                 !m52_submit_endpoint(mmio, device, endpoint_index)) {
+                if (!traced_failure) {
+                    const struct xhci_hid_endpoint_runtime *runtime =
+                        &device->hid_runtime[endpoint_index];
+                    const struct xhci_hid_endpoint_descriptor *descriptor =
+                        &device->hid_configuration.endpoints[endpoint_index];
+                    traced_failure = true;
+                    serial_write_string(
+                        "m60-rearm-diag: reason=submit dev/slot/index/ep/proto/max=");
+                    serial_write_u64((uint64_t)device_index);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)device->slot_id);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)endpoint_index);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)descriptor->endpoint_id);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)descriptor->protocol);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)descriptor->max_packet);
+                    serial_write_string("\n");
+                    serial_write_string(
+                        "m60-rearm-diag: ring/report/out/expected/producer/cycle/submitted/completed=");
+                    serial_write_u64(
+                        device->hid_ring_physical[endpoint_index]);
+                    serial_write_string("/");
+                    serial_write_u64(runtime->report_buffer_physical);
+                    serial_write_string("/");
+                    serial_write_u64(runtime->transfer_outstanding ?
+                                     1ULL : 0ULL);
+                    serial_write_string("/");
+                    serial_write_u64(runtime->expected_trb_physical);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)runtime->producer_index);
+                    serial_write_string("/");
+                    serial_write_u64(runtime->producer_cycle ? 1ULL : 0ULL);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)runtime->submitted_transfers);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)runtime->completed_transfers);
+                    serial_write_string("\n");
+                }
                 return false;
             }
         }
