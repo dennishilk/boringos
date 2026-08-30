@@ -25,104 +25,72 @@ jobs:
         run: sh tests/m61-xhci-event-coexistence-host.sh
       - name: Build M61 runtime and negative contracts
         run: sh tests/m61-build.sh
-      - name: Build deterministic bounded flashable USB image
+      - name: Build physical image and deterministic QEMU test twin
         run: env -u GITHUB_SHA sh tests/m61-build-usb-image.sh
-      - name: Two-boot same-image UEFI USB-root persistence acceptance
+      - name: Prove physical/QEMU twin runtime payload equivalence
         run: |
-          cat > /tmp/qemu-m61 <<'EOF'
-          #!/bin/sh
-          set -eu
-          serial_path=
-          want_serial=0
-          for arg in "$@"; do
-            if [ "$want_serial" -eq 1 ]; then
-              case "$arg" in
-                file:*) serial_path=${arg#file:} ;;
-              esac
-              want_serial=0
-            elif [ "$arg" = "-serial" ]; then
-              want_serial=1
+          cat build/m61-qemu-twin-proof.txt
+          grep -Fqx 'physical_timeout_seconds=5' build/m61-qemu-twin-proof.txt
+          grep -Fqx 'qemu_twin_timeout_seconds=0' build/m61-qemu-twin-proof.txt
+          grep -Fqx 'sole_logical_difference=Limine timeout value 5 -> 0' build/m61-qemu-twin-proof.txt
+          grep -Fqx 'qemu_twin_publishable=no' build/m61-qemu-twin-proof.txt
+      - name: Two-boot QEMU-twin USB-root persistence acceptance
+        run: |
+          physical=build/boringos-m61-usb.img
+          physical_sha=build/boringos-m61-usb.img.sha256
+          twin=build/boringos-m61-usb-qemu.img
+          twin_sha=build/boringos-m61-usb-qemu.img.sha256
+          saved=build/.m61-physical-before-qemu.img
+          saved_sha=build/.m61-physical-before-qemu.img.sha256
+
+          restore_physical() {
+            if [ -f "$saved" ]; then
+              rm -f "$physical"
+              mv "$saved" "$physical"
             fi
-          done
-          test -n "$serial_path"
-          boot_qmp="/tmp/m61-limine-qmp-$$.sock"
-          rm -f "$boot_qmp"
-          python3 tests/m61-limine-boot-drive.py "$boot_qmp" "$serial_path" >/dev/null 2>&1 &
-          exec qemu-system-x86_64 "$@" \
-            -chardev "socket,id=m61bootqmp,path=$boot_qmp,server=on,wait=off" \
-            -mon "chardev=m61bootqmp,mode=control,pretty=off" \
-            -trace enable=usb_xhci_queue_event \
-            -trace enable=usb_xhci_doorbell_write
-          EOF
-          chmod +x /tmp/qemu-m61
-          if ! QEMU=/tmp/qemu-m61 python3 tests/m61-bootable-persistent-usb-qemu.py; then
-            echo '--- M61 focused QEMU Limine no-input temporal evidence ---'
-            cat build/m61-bootable-persistent-usb/first-boot/limine-boot-drive.log || true
-            echo '--- M61 focused QEMU no-input framebuffer hashes ---'
-            sha256sum build/m61-bootable-persistent-usb/first-boot/limine-noinput-t0.ppm \
-                      build/m61-bootable-persistent-usb/first-boot/limine-noinput-t2.ppm \
-                      build/m61-bootable-persistent-usb/first-boot/limine-noinput-t4.ppm \
-                      build/m61-bootable-persistent-usb/first-boot/limine-noinput-t7.ppm || true
-            echo '--- M61 focused QEMU xHCI diagnostic tail ---'
-            tail -n 700 build/m61-bootable-persistent-usb/first-boot/qemu.log || true
-            exit 1
-          fi
-      - name: Publish failed pre-kernel Limine framebuffer diagnostics
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: m61-prekernel-limine-noinput-${{ github.event.pull_request.head.sha || github.sha }}
-          path: |
-            build/m61-bootable-persistent-usb/first-boot/limine-boot-drive.log
-            build/m61-bootable-persistent-usb/first-boot/limine-noinput-t0.ppm
-            build/m61-bootable-persistent-usb/first-boot/limine-noinput-t2.ppm
-            build/m61-bootable-persistent-usb/first-boot/limine-noinput-t4.ppm
-            build/m61-bootable-persistent-usb/first-boot/limine-noinput-t7.ppm
-            build/m61-bootable-persistent-usb/first-boot/serial.log
-            build/m61-bootable-persistent-usb/first-boot/qemu.log
-          if-no-files-found: error
-          retention-days: 7
-      - name: One-off diagnostic local-APIC timer comparison
-        if: ${{ failure() }}
-        run: |
-          test -x /tmp/qemu-m61
-          expected=$(awk '{print $1}' build/boringos-m61-usb.img.sha256)
-          before=$(sha256sum build/boringos-m61-usb.img | awk '{print $1}')
-          test "$before" = "$expected"
-          rm -rf build/m61-bootable-persistent-usb build/m61-apic-timer-comparison
+            if [ -f "$saved_sha" ]; then
+              rm -f "$physical_sha"
+              mv "$saved_sha" "$physical_sha"
+            fi
+          }
+          trap restore_physical EXIT INT TERM
+
+          cp "$physical" "$saved"
+          cp "$physical_sha" "$saved_sha"
+          cp "$twin" "$physical"
+          cp "$twin_sha" "$physical_sha"
+
           set +e
-          QEMU_CPU=qemu64 QEMU=/tmp/qemu-m61 python3 tests/m61-bootable-persistent-usb-qemu.py
+          python3 tests/m61-bootable-persistent-usb-qemu.py
           rc=$?
           set -e
-          mkdir -p build/m61-apic-timer-comparison
-          cp -a build/m61-bootable-persistent-usb/. build/m61-apic-timer-comparison/
-          after=$(sha256sum build/boringos-m61-usb.img | awk '{print $1}')
-          {
-            echo "baseline_cpu=qemu64,apic=off"
-            echo "comparison_cpu=qemu64"
-            echo "sole_topology_difference=local APIC enabled"
-            echo "physical_image_sha256_before=$before"
-            echo "physical_image_sha256_after=$after"
-            echo "acceptance_exit_code=$rc"
-          } | tee build/m61-apic-timer-comparison/result.txt
-          test "$after" = "$expected"
+
+          restore_physical
+          trap - EXIT INT TERM
+          expected=$(awk '{print $1}' "$physical_sha")
+          actual=$(sha256sum "$physical" | awk '{print $1}')
+          test "$actual" = "$expected"
+          test "$actual" = "$(grep '^sha256=' build/m61-usb-image.txt | cut -d= -f2)"
+          rm -f "$twin" "$twin_sha"
+          test ! -e "$twin"
+          test ! -e "$twin_sha"
+          if [ "$rc" -ne 0 ]; then
+            echo '--- M61 QEMU test-twin focused diagnostic tail ---'
+            tail -n 500 build/m61-bootable-persistent-usb/first-boot/serial.log || true
+            tail -n 500 build/m61-bootable-persistent-usb/first-boot/qemu.log || true
+          fi
           exit "$rc"
-      - name: Publish local-APIC timer comparison diagnostics
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: m61-apic-timer-comparison-${{ github.event.pull_request.head.sha || github.sha }}
-          path: |
-            build/m61-apic-timer-comparison/**
-          if-no-files-found: error
-          retention-days: 7
-      - name: Verify restored fresh raw and compressed artifact hashes
+      - name: Verify restored physical raw and compressed artifact hashes
         run: |
+          test ! -e build/boringos-m61-usb-qemu.img
+          test ! -e build/boringos-m61-usb-qemu.img.sha256
           (cd build && sha256sum -c boringos-m61-usb.img.sha256)
           expected=$(awk '{print $1}' build/boringos-m61-usb.img.sha256)
           actual=$(xz -dc build/boringos-m61-usb.img.xz | sha256sum | awk '{print $1}')
           test "$actual" = "$expected"
-      - name: Publish final M61 flashable image and acceptance evidence
+          grep -Fqx 'limine_timeout_seconds=5' build/m61-usb-image.txt
+          grep -Fqx 'physical_breadcrumbs=enabled' build/m61-usb-image.txt
+      - name: Publish final physical M61 image and acceptance evidence
         uses: actions/upload-artifact@v4
         with:
           name: m61-bootable-persistent-usb-${{ github.event.pull_request.head.sha || github.sha }}
@@ -130,6 +98,7 @@ jobs:
             build/boringos-m61-usb.img.xz
             build/boringos-m61-usb.img.sha256
             build/m61-usb-image.txt
+            build/m61-qemu-twin-proof.txt
             build/m61-bundle/geometry.txt
             build/m61-bundle/boringfsck-before.txt
             build/m61-bootable-persistent-usb/**
