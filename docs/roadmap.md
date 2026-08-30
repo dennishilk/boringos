@@ -75,7 +75,7 @@ real QEMU raw disk I/O
 The accepted development banner is now:
 
 ```text
-BoringKernel 0.0.61-dev
+BoringKernel 0.0.62-dev
 ```
 
 The current syscall ABI is exactly:
@@ -1753,3 +1753,20 @@ Semantic Freeze: `fbf613bce8a145efc881c3a5eb03bac2f75a188a`, tree `4d0c27df30588
 M59 physical Cthulhu validation remains **PENDING USER HARDWARE TEST**; M60 does not convert QEMU evidence into a physical-hardware success claim.
 
 Active version after runtime-neutral closeout: **BoringKernel 0.0.61-dev**. No M61 implementation is included. USB hubs, SuperSpeed endpoint-companion/burst semantics, BOT reset/stall recovery, filesystem mounting and root-from-USB remain explicit non-goals for M60.
+
+
+## Milestone 61: bootable and persistent USB root — COMPLETE, Semantic Frozen
+
+M61 produces one bounded 96-MiB raw x86_64 UEFI image with GPT metadata, a 64-MiB EFI System Partition and a fixed 16-MiB BoringFS root slice. Firmware and Limine boot from the image, the existing M60 xHCI Bulk/BOT/SCSI path registers that same device as `usb0`, and a bounds-checked block-device slice becomes the writable VFS root. M61 fails closed if `usb0`, the fixed slice or BoringFS cannot be established; it does not fall back to AHCI, VirtIO or RAMFS.
+
+The focused q35 acceptance uses exactly one BoringOS USB disk with `i8042=off`, `usb-kbd` and `usb-tablet`. On the first UEFI boot it creates and flushes `/persist/m61.txt`; host-side inspection proves the exact `survived-usb\n` bytes and protected boot-region integrity. A second boot of the unchanged image proves the file through the real userspace `cat` and BoringTerminal pixels while USB HID remains live. The fresh flashable image is then restored byte-for-byte and its compressed payload is verified against the raw SHA-256.
+
+Final HID regression diagnosis identified the first failing predicate exactly: repeated ongoing HID service calls mapped and unmapped the 64-KiB xHCI window, but the 16-MiB VMM MMIO bump window never reclaimed its allocation cursor. The eventual `vmm_map_mmio_region()` failure left a valid keyboard Transfer Event at the shared Event Ring head. The correction reclaims only a successfully unmapped top MMIO span, preserving all lower live mappings and the existing strict HID/Storage ownership validation.
+
+Runtime Semantic Freeze: `2938d77173fc180a5a42a1103b57e959c0c4217b`, tree `aec1e0cecb83113c4d8461092691a437b6ac4b8e`. All 26 permanent exact-head workflows were terminal SUCCESS: focused M61 run `33307253712`, M60 run `33307253747`, M57 run `33307253719`, M54 run `33307253684`, M53 run `33307253697`, M52 run `33307253659`, and complete BoringKernel boot run `33307253711`. No runtime semantic changes follow this freeze.
+
+M59 physical Cthulhu validation remains **PENDING USER HARDWARE TEST**; M61 automation does not select or flash a host block device and does not convert QEMU evidence into a physical-hardware success claim.
+
+Active version after runtime-neutral closeout: **BoringKernel 0.0.62-dev**. No M62 implementation is included. USB hubs, general GPT discovery, SuperSpeed endpoint-companion/burst semantics, BOT reset/stall recovery, an installer and physical flashing remain outside M61.
+
+See [M61_BOOTABLE_PERSISTENT_USB.md](M61_BOOTABLE_PERSISTENT_USB.md).

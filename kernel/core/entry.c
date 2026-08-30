@@ -990,7 +990,7 @@ void boring_kernel_entry(void) {
 
     serial_init();
     serial_write_string("BoringOS booting...\n");
-    serial_write_string("BoringKernel 0.0.61-dev\n");
+    serial_write_string("BoringKernel 0.0.62-dev\n");
     serial_write_string("Arch: x86_64\n");
     serial_write_string("Hello from BoringKernel.\n\n");
 
@@ -1154,7 +1154,7 @@ void boring_kernel_entry(void) {
     if (framebuffer_surface != NULL) {
         const struct boring_boot_dashboard_info dashboard_info = {
             .kernel_name = "BoringKernel",
-            .kernel_version = "0.0.61-dev",
+            .kernel_version = "0.0.62-dev",
             .arch = "x86_64",
             .memory_bytes = pmm_stats.usable_bytes,
             .root_fs = "N/A",

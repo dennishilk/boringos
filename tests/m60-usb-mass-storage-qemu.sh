@@ -98,7 +98,7 @@ trap - EXIT INT TERM
 rm -f "$QMP"
 
 for marker in \
-    'BoringKernel 0.0.61-dev' \
+    'BoringKernel 0.0.62-dev' \
     'M60 keyboard/tablet descriptor coexistence: PASS' \
     'M60 USB mass-storage interface detected: PASS' \
     'M60 descriptor-derived Bulk OUT: PASS' \
