@@ -456,6 +456,7 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
     success = completed >= completion_goal;
 out:
     if (!success && (event_virtual != NULL)) {
+        static uint64_t poll_failures;
         static uint64_t matching_failures;
         const uint32_t control = event_ring[event_index].control;
         const bool entry_cycle = (control & M52_TRB_CYCLE) != 0U;
@@ -466,6 +467,30 @@ out:
             M52_EVENT_ENDPOINT_MASK);
         const uint8_t slot =
             (uint8_t)(control >> M52_EVENT_SLOT_SHIFT);
+        ++poll_failures;
+        if ((poll_failures == 1ULL) ||
+            ((poll_failures & 0x3ffULL) == 0ULL)) {
+            serial_write_string("m60-poll-return-diag: failures/stage=");
+            serial_write_u64(poll_failures);
+            serial_write_string("/");
+            serial_write_string(failure_stage);
+            serial_write_string(
+                " consumed/index/cycle/entry/control/param/status=");
+            serial_write_u64(m52_consumed_events(active));
+            serial_write_string("/");
+            serial_write_u64((uint64_t)event_index);
+            serial_write_string("/");
+            serial_write_u64(event_cycle ? 1ULL : 0ULL);
+            serial_write_string("/");
+            serial_write_u64(entry_cycle ? 1ULL : 0ULL);
+            serial_write_string("/");
+            serial_write_u64((uint64_t)control);
+            serial_write_string("/");
+            serial_write_u64(event_ring[event_index].parameter);
+            serial_write_string("/");
+            serial_write_u64((uint64_t)event_ring[event_index].status);
+            serial_write_string("\n");
+        }
         if ((entry_cycle == event_cycle) &&
             (type == XHCI_TRB_TYPE_TRANSFER_EVENT)) {
             ++matching_failures;
