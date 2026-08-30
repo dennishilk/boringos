@@ -1,0 +1,62 @@
+name: M61 bootable persistent USB
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bootable-persistent-usb:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install focused UEFI USB-image dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 ovmf gdisk dosfstools mtools xz-utils
+      - name: Prove HID-before-Storage shared Event Ring ordering
+        run: sh tests/m61-xhci-event-coexistence-host.sh
+      - name: Build M61 runtime and negative contracts
+        run: sh tests/m61-build.sh
+      - name: Build deterministic bounded flashable USB image
+        run: env -u GITHUB_SHA sh tests/m61-build-usb-image.sh
+      - name: Two-boot same-image UEFI USB-root persistence acceptance
+        run: |
+          cat > /tmp/qemu-m61 <<'EOF'
+          #!/bin/sh
+          exec qemu-system-x86_64 "$@" \
+            -trace enable=usb_xhci_queue_event \
+            -trace enable=usb_xhci_doorbell_write
+          EOF
+          chmod +x /tmp/qemu-m61
+          if ! QEMU=/tmp/qemu-m61 python3 tests/m61-bootable-persistent-usb-qemu.py; then
+            echo '--- M61 focused QEMU xHCI diagnostic tail ---'
+            tail -n 700 build/m61-bootable-persistent-usb/first-boot/qemu.log || true
+            exit 1
+          fi
+      - name: Verify restored fresh raw and compressed artifact hashes
+        run: |
+          (cd build && sha256sum -c boringos-m61-usb.img.sha256)
+          expected=$(awk '{print $1}' build/boringos-m61-usb.img.sha256)
+          actual=$(xz -dc build/boringos-m61-usb.img.xz | sha256sum | awk '{print $1}')
+          test "$actual" = "$expected"
+      - name: Publish final M61 flashable image and acceptance evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: m61-bootable-persistent-usb-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            build/boringos-m61-usb.img.xz
+            build/boringos-m61-usb.img.sha256
+            build/m61-usb-image.txt
+            build/m61-bundle/geometry.txt
+            build/m61-bundle/boringfsck-before.txt
+            build/m61-bootable-persistent-usb/**
+          if-no-files-found: error
+          retention-days: 14

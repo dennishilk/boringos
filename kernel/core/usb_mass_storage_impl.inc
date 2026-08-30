@@ -308,12 +308,12 @@ static uint64_t consumed_events(const struct xhci_state *state) {
     return total;
 }
 
-static bool take_event(struct xhci_trb *event) {
+static bool take_event(struct xhci_trb *event, uint16_t *next_index) {
     volatile struct xhci_trb *ring = NULL;
     void *ring_virtual = NULL;
     uint32_t attempt;
-    if ((event == NULL) || (msc_runtime.state == NULL) ||
-        (msc_runtime.mmio == NULL) ||
+    if ((event == NULL) || (next_index == NULL) ||
+        (msc_runtime.state == NULL) || (msc_runtime.mmio == NULL) ||
         !vmm_pmm_frame_to_hhdm(msc_runtime.state->event_ring_physical,
                                &ring_virtual)) {
         return false;
@@ -324,7 +324,6 @@ static bool take_event(struct xhci_trb *event) {
         const uint16_t index = (uint16_t)(consumed % XHCI_EVENT_RING_TRBS);
         const bool cycle = (((consumed / XHCI_EVENT_RING_TRBS) & 1ULL) == 0ULL);
         const uint32_t control = ring[index].control;
-        uint16_t next_index;
         if (((control & MSC_TRB_CYCLE) != 0U) != cycle) {
             x86_64_pause();
             continue;
@@ -332,18 +331,26 @@ static bool take_event(struct xhci_trb *event) {
         event->parameter = ring[index].parameter;
         event->status = ring[index].status;
         event->control = control;
-        next_index = (uint16_t)(index + 1U);
-        if (next_index == XHCI_EVENT_RING_TRBS) { next_index = 0U; }
-        barrier();
-        mmio_write64(msc_runtime.mmio,
-                     msc_runtime.state->capabilities.runtime_offset +
-                         MSC_RUNTIME_INTERRUPTER0 + 0x18U,
-                     (msc_runtime.state->event_ring_physical +
-                      ((uint64_t)next_index * XHCI_TRB_SIZE)) |
-                         (1ULL << 3U));
+        *next_index = (uint16_t)(index + 1U);
+        if (*next_index == XHCI_EVENT_RING_TRBS) { *next_index = 0U; }
         return true;
     }
     return false;
+}
+
+static bool commit_event(uint16_t next_index) {
+    if ((msc_runtime.state == NULL) || (msc_runtime.mmio == NULL) ||
+        (next_index >= XHCI_EVENT_RING_TRBS)) {
+        return false;
+    }
+    barrier();
+    mmio_write64(msc_runtime.mmio,
+                 msc_runtime.state->capabilities.runtime_offset +
+                     MSC_RUNTIME_INTERRUPTER0 + 0x18U,
+                 (msc_runtime.state->event_ring_physical +
+                  ((uint64_t)next_index * XHCI_TRB_SIZE)) |
+                     (1ULL << 3U));
+    return true;
 }
 
 static bool consume_port_event(const struct xhci_trb *event) {
@@ -363,11 +370,14 @@ static bool wait_control_status(struct xhci_addressed_device *device,
     uint32_t attempt;
     for (attempt = 0U; attempt < MSC_EVENT_WAIT_LIMIT; ++attempt) {
         struct xhci_trb event;
+        uint16_t next_index;
         uint8_t type;
-        if (!take_event(&event)) { return false; }
+        if (!take_event(&event, &next_index)) { return false; }
         type = (uint8_t)((event.control >> MSC_TRB_TYPE_SHIFT) & MSC_TRB_TYPE_MASK);
         if (type == MSC_TRB_TYPE_PORT_STATUS_EVENT) {
-            if (!consume_port_event(&event)) { return false; }
+            if (!consume_port_event(&event) || !commit_event(next_index)) {
+                return false;
+            }
             continue;
         }
         if (!xhci_validate_no_data_control_event(
@@ -376,7 +386,7 @@ static bool wait_control_status(struct xhci_addressed_device *device,
             return false;
         }
         ++device->transfer_events;
-        return true;
+        return commit_event(next_index);
     }
     return false;
 }
@@ -483,12 +493,15 @@ static bool wait_command(uint64_t expected_command) {
     uint32_t attempt;
     for (attempt = 0U; attempt < MSC_EVENT_WAIT_LIMIT; ++attempt) {
         struct xhci_trb event;
+        uint16_t next_index;
         uint8_t completed_slot = 0U;
         uint8_t type;
-        if (!take_event(&event)) { return false; }
+        if (!take_event(&event, &next_index)) { return false; }
         type = (uint8_t)((event.control >> MSC_TRB_TYPE_SHIFT) & MSC_TRB_TYPE_MASK);
         if (type == MSC_TRB_TYPE_PORT_STATUS_EVENT) {
-            if (!consume_port_event(&event)) { return false; }
+            if (!consume_port_event(&event) || !commit_event(next_index)) {
+                return false;
+            }
             continue;
         }
         if (!xhci_validate_command_completion(
@@ -499,7 +512,7 @@ static bool wait_command(uint64_t expected_command) {
             return false;
         }
         ++msc_runtime.state->command_completions;
-        return true;
+        return commit_event(next_index);
     }
     return false;
 }
@@ -552,49 +565,50 @@ static bool configure_bulk_endpoints(void) {
     return true;
 }
 
-static bool transfer_pointer_owned(uint64_t pointer, uint64_t ring_physical) {
-    const uint64_t end = ring_physical +
-        ((uint64_t)MSC_BULK_RING_USABLE * XHCI_TRB_SIZE);
-    return ((pointer & 0x0fULL) == 0ULL) && (pointer >= ring_physical) &&
-           (pointer < end);
-}
-
 static bool wait_bulk(uint8_t endpoint_id, uint64_t ring_physical,
                       uint64_t expected_trb, uint32_t requested,
                       uint32_t *actual, bool *short_packet) {
     uint32_t attempt;
     for (attempt = 0U; attempt < MSC_EVENT_WAIT_LIMIT; ++attempt) {
         struct xhci_trb event;
+        uint16_t next_index;
         uint8_t type;
-        uint8_t endpoint;
-        uint8_t slot;
-        uint8_t completion;
-        uint32_t residual;
-        if (!take_event(&event)) { return false; }
+        enum xhci_shared_transfer_owner owner = XHCI_SHARED_TRANSFER_REJECT;
+        uint32_t storage_actual = 0U;
+        bool storage_short = false;
+        if (!take_event(&event, &next_index)) { return false; }
         type = (uint8_t)((event.control >> MSC_TRB_TYPE_SHIFT) & MSC_TRB_TYPE_MASK);
         if (type == MSC_TRB_TYPE_PORT_STATUS_EVENT) {
-            if (!consume_port_event(&event)) { return false; }
+            if (!consume_port_event(&event) || !commit_event(next_index)) {
+                return false;
+            }
             continue;
         }
-        endpoint = (uint8_t)((event.control >> MSC_EVENT_ENDPOINT_SHIFT) &
-                             MSC_EVENT_ENDPOINT_MASK);
-        slot = (uint8_t)(event.control >> MSC_EVENT_SLOT_SHIFT);
-        completion = (uint8_t)(event.status >> MSC_EVENT_COMPLETION_SHIFT);
-        residual = event.status & MSC_EVENT_RESIDUAL_MASK;
-        if ((type != XHCI_TRB_TYPE_TRANSFER_EVENT) ||
-            (endpoint != endpoint_id) || (slot != msc_runtime.device->slot_id) ||
-            (event.parameter != expected_trb) ||
-            !transfer_pointer_owned(event.parameter, ring_physical) ||
-            (residual > requested) ||
-            ((completion != XHCI_COMPLETION_SUCCESS) &&
-             (completion != XHCI_COMPLETION_SHORT_PACKET)) ||
-            (msc_runtime.device->transfer_events == UINT32_MAX)) {
+        if (!xhci_classify_shared_transfer_event(
+                msc_runtime.state, &event, msc_runtime.device->slot_id,
+                endpoint_id, ring_physical, MSC_BULK_RING_USABLE,
+                expected_trb, requested, &owner, &storage_actual,
+                &storage_short)) {
             return false;
         }
-        *actual = requested - residual;
-        *short_packet = completion == XHCI_COMPLETION_SHORT_PACKET;
-        ++msc_runtime.device->transfer_events;
-        return true;
+        if (owner == XHCI_SHARED_TRANSFER_STORAGE) {
+            if (msc_runtime.device->transfer_events == UINT32_MAX) {
+                return false;
+            }
+            *actual = storage_actual;
+            *short_packet = storage_short;
+            ++msc_runtime.device->transfer_events;
+            return commit_event(next_index);
+        }
+        if (owner == XHCI_SHARED_TRANSFER_HID) {
+            if (!xhci_consume_hid_transfer_event(msc_runtime.state, &event,
+                                                 true) ||
+                !commit_event(next_index)) {
+                return false;
+            }
+            continue;
+        }
+        return false;
     }
     return false;
 }

@@ -22,7 +22,7 @@ if grep -Fq 'M55 AHCI QEMU FAILED:' "$LOG"; then
     exit 1
 fi
 for marker in \
-    'BoringKernel 0.0.61-dev' \
+    'BoringKernel 0.0.62-dev' \
     'class=01:06 prog_if=01' \
     'M55 AHCI BDF:' \
     'M55 AHCI ABAR:' \

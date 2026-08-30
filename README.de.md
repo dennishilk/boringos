@@ -14,10 +14,10 @@ Es ist **keine Linux-Distribution**, **kein BSD** und **basiert nicht auf dem Ke
 Der aktuelle Main-Stand ist:
 
 ```text
-BoringKernel 0.0.61-dev
+BoringKernel 0.0.62-dev
 ```
 
-Die Entwicklung ist bis einschließlich **Milestone 60** abgeschlossen.
+Die Entwicklung ist bis einschließlich **Milestone 61** abgeschlossen.
 
 BoringOS ist längst nicht mehr nur ein früher Boot-Kernel: Unter QEMU bootet inzwischen eine echte native Ring-3-Desktop-Session mit eigenem Display-Service, Tiling-Window-Manager, grafischem Terminal, Shell, Editor, Dateimanager, persistentem BoringFS, Hardware-Inventar und einem wachsenden BoringOS-eigenen xHCI-/USB-Stack.
 
@@ -73,6 +73,7 @@ Zu den implementierten und verifizierten Grundlagen gehören:
 - begrenzte 32-GiB-PMM-Kapazität mit realem QEMU-Speicher oberhalb 4 GiB
 - ein schreibgeschützter M59-Physical-Smoke-Bootpfad samt exaktem UEFI-USB-Image-Kandidaten und deaktivierten internen Storage-Writes
 - begrenzter xHCI-USB-Mass-Storage-Bulk/BOT/SCSI-Transport als `usb0` mit echtem Read/Write/Cache-Flush-Persistenzbeweis und gleichzeitiger USB-HID-Koexistenz bis M60
+- ein begrenztes GPT-/UEFI-Image, das vom selben `usb0`-Gerät bootet und dessen feste BoringFS-Slice als Root mountet, mit Zwei-Boot-Persistenz und live HID-Koexistenz bis M61
 
 ## Nativer Desktop
 
@@ -115,7 +116,7 @@ Milestone 59 ergänzt den begrenzten Physical-Smoke-Kandidaten: Das exakte Image
 
 Der moderne USB-Pfad ist inzwischen deutlich weiter als reine PCI-Erkennung.
 
-Milestones 48–60 liefern aktuell:
+Milestones 48–61 liefern aktuell:
 
 ```text
 xHCI PCI Discovery / BAR- + MMIO-Validierung
@@ -151,11 +152,13 @@ vollständige i8042-freie grafische Desktop-Acceptance
 
 M59 verwendet den HID-Pfad für einen Storage-Write-deaktivierten Physical-Smoke-Kandidaten. M60 ergänzt auf demselben xHCI-Controller genau ein begrenztes direkt angeschlossenes USB-Mass-Storage-Gerät: aus Deskriptoren abgeleitete Klasse/Subklasse/Protokoll `08/06/50`, aus Deskriptoren abgeleitete Bulk-IN/OUT-Endpunkte, xHCI-Bulk-Transfers, BOT-CBW/CSW-Validierung und ein One-LUN-SCSI-Subset mit INQUIRY, TEST UNIT READY, REQUEST-SENSE-Fallback, READ CAPACITY(10), READ(10), WRITE(10) und SYNCHRONIZE CACHE(10). Das Gerät wird über die bestehende M21-Block-Device-API als `usb0` registriert. Reale q35-Acceptance beweist exakte LBA-8-Persistenz bei unveränderten Bytes außerhalb dieses Sektors, während USB-Tastatur-/Tablet-Input nach Storage-I/O weiter funktioniert. USB-Hubs, SuperSpeed-Companion-Semantik, BOT-Reset/Stall-Recovery, Dateisystem-Mounting und Root-from-USB bleiben außerhalb M60.
 
+M61 ergänzt ein 96-MiB-GPT-/UEFI-Image mit festem Layout, dessen Limine-Bootdateien und beschreibbare BoringFS-Root auf demselben xHCI-USB-Gerät liegen. Zwei aufeinanderfolgende Boots exakt dieses Images beweisen ein geflushtes `/persist/m61.txt`, exakte hostseitige Bytes, die Wiederanzeige im Terminal, live Tastatur-/Tablet-Input und unveränderte geschützte Bootbereiche. Das ist ein begrenztes USB-Root-Image, kein Installer und kein allgemeiner Partitions-Discovery-Pfad.
+
 ## Storage und Dateisysteme
 
 BoringOS besitzt mit **BoringFS** ein eigenes kleines Dateisystemformat. Das Repository enthält Codec/Validator, deterministischen Formatter, `boringfsck`, Kernel-Mount-Support und synchrones schreibbares Verhalten.
 
-Die verifizierte persistente QEMU-Root kann modernen VirtIO-PCI-Block-Storage oder den in M57 abgeschlossenen begrenzten synchronen AHCI-/SATA-Pfad verwenden. Der AHCI-Pfad führt echte Reads, Writes und erforderliche Cache-Flushes über die generische Block-Device-API aus; NVMe ist nicht implementiert.
+Die verifizierte persistente QEMU-Root kann modernen VirtIO-PCI-Block-Storage, den in M57 abgeschlossenen begrenzten synchronen AHCI-/SATA-Pfad oder die feste M61-BoringFS-Slice auf `usb0` verwenden. AHCI- und USB-Pfad führen echte Reads, Writes und erforderliche Cache-Flushes über die generische Block-Device-API aus; NVMe ist nicht implementiert.
 
 Das M59-Physical-Smoke-Image umgeht diese beschreibbaren Root-Pfade absichtlich und meldet interne Storage-Writes als deaktiviert.
 
@@ -168,14 +171,14 @@ Das M59-Physical-Smoke-Image umgeht diese beschreibbaren Root-Pfade absichtlich 
 | Verwalteter RAM | begrenzte 32-GiB-PMM-Kapazität; reale 32-GiB-QEMU-Maps und Frames >= 4 GiB sind verifiziert |
 | Grafik | Firmware-/Limine-Framebuffer + Software-Compositor; keine native AMD/NVIDIA/Intel-GPU-Beschleunigung |
 | Desktop-Input | xHCI-USB-HID-Pfad und Legacy-i8042-/PS/2-Pfad sind jeweils in ihren begrenzten QEMU-Acceptances bewiesen |
-| USB | xHCI HID bis zur kanonischen Inputqueue/i8042-freier Desktop plus begrenzter direkt angeschlossener Bulk/BOT/SCSI-Mass-Storage als `usb0` bis M60 bewiesen; Hubs und SuperSpeed-Companion-Semantik nicht implementiert |
-| Persistente Root | VirtIO- oder AHCI-/SATA-Block + BoringFS |
+| USB | xHCI HID plus begrenzter direkt angeschlossener Bulk/BOT/SCSI-Mass-Storage und Boot-/Root-Nutzung mit festem Layout bis M61; Hubs und SuperSpeed-Companion-Semantik nicht implementiert |
+| Persistente Root | VirtIO, AHCI/SATA oder feste M61-`usb0`-Slice + BoringFS |
 | AHCI / NVMe | begrenztes synchrones AHCI Read/Write/Flush; NVMe nicht implementiert |
 | Networking | nicht implementiert |
 | Audio | nicht implementiert |
 | SMP-Runtime | nicht implementiert; Runtime bleibt bewusst begrenzt |
 | POSIX-Kompatibilität | weder Ziel noch aktueller Vertrag |
-| Installer / polierter Live-USB | nicht implementiert; M59 veröffentlicht nur einen begrenzten Smoke-Test-Image-Kandidaten |
+| Installer / polierter Live-USB | nicht implementiert; M61 veröffentlicht ein begrenztes bootfähiges/persistentes USB-Image mit festem Layout |
 
 Diese Grenzen sind Absicht. BoringOS versucht, nicht unterstützte Hardware und unvollständige Subsysteme ehrlich zu melden, statt aus bloßer Erkennung bereits Support abzuleiten.
 
@@ -205,7 +208,7 @@ Die permanente CI hält frühere Milestone-Beweise am Leben, während neue Fähi
 
 Das Projekt entwickelt sich in kleinen semantischen Milestones. Ein Milestone gilt nicht allein deshalb als fertig, weil der Code baut: fokussierte Acceptance, geerbte Regressionen, Semantic Freeze, runtime-neutraler Versions-Closeout, Exact-Head-CI, guarded Squash Merge und die Verifikation des neuen `main` gehören zur Entwicklungsdisziplin.
 
-Zum Zeitpunkt dieser README-Aktualisierung ist **M60 USB Mass Storage abgeschlossen** und der aktive Entwicklungsbanner lautet **BoringKernel 0.0.61-dev**. Die physische M59-Cthulhu-Validierung bleibt ausdrücklich **PENDING USER HARDWARE TEST**. M61 hat nicht begonnen.
+Zum Zeitpunkt dieser README-Aktualisierung ist **M61 bootfähige persistente USB-Root abgeschlossen** und der aktive Entwicklungsbanner lautet **BoringKernel 0.0.62-dev**. Die physische M59-Cthulhu-Validierung bleibt ausdrücklich **PENDING USER HARDWARE TEST**. Es ist keine M62-Implementierung enthalten.
 
 Für den exakten aktuellen Milestone-Stand gilt [`docs/roadmap.md`](docs/roadmap.md), nicht eine geplante Funktion aus dieser README.
 

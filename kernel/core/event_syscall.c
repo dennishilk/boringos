@@ -32,14 +32,11 @@ static bool user_copy(uintptr_t address, void *buffer, size_t size, bool out) {
         !ring3_user_range_valid(address, size) || !vmm_get_stats(&stats)) {
         return false;
     }
-    /* Validate the whole writable range before any output is written. */
     while (done < size) {
         uint64_t physical;
         size_t chunk = (size_t)VMM_PAGE_SIZE -
             (size_t)((address + done) & (VMM_PAGE_SIZE - 1ULL));
-        if (chunk > size - done) {
-            chunk = size - done;
-        }
+        if (chunk > size - done) { chunk = size - done; }
         if (!ring3_user_translate(&process->address_space, address + done,
                                   true, &physical) ||
             (physical > UINT64_MAX - stats.hhdm_offset)) {
@@ -54,20 +51,15 @@ static bool user_copy(uintptr_t address, void *buffer, size_t size, bool out) {
         size_t chunk = (size_t)VMM_PAGE_SIZE -
             (size_t)((address + done) & (VMM_PAGE_SIZE - 1ULL));
         uint8_t *mapped;
-        if (chunk > size - done) {
-            chunk = size - done;
-        }
+        if (chunk > size - done) { chunk = size - done; }
         if (!ring3_user_translate(&process->address_space, address + done,
                                   true, &physical)) {
             return false;
         }
         mapped = (uint8_t *)(uintptr_t)(stats.hhdm_offset + physical);
         for (index = 0U; index < chunk; ++index) {
-            if (out) {
-                mapped[index] = bytes[done + index];
-            } else {
-                bytes[done + index] = mapped[index];
-            }
+            if (out) { mapped[index] = bytes[done + index]; }
+            else { bytes[done + index] = mapped[index]; }
         }
         done += chunk;
     }
@@ -82,9 +74,7 @@ static long poll_watches(struct process *process,
         struct boring_event_watch *watch = &watches[index];
         watch->events = 0U;
         watch->peer_pid = 0ULL;
-        if (watch->reserved != 0U) {
-            return -(long)BORING_SYSCALL_EINVAL;
-        }
+        if (watch->reserved != 0U) { return -(long)BORING_SYSCALL_EINVAL; }
         if (watch->kind == BORING_EVENT_IPC) {
             if (boring_ipc_poll(process, watch->handle, &watch->events,
                                 &watch->peer_pid) != BORING_IPC_RESULT_OK) {
@@ -110,32 +100,111 @@ static long poll_watches(struct process *process,
             }
             if (pty_state.readable) { watch->events |= BORING_EVENT_READ; }
             if (pty_state.hup) { watch->events |= BORING_EVENT_HUP; }
-        } else {
-            return -(long)BORING_SYSCALL_EINVAL;
-        }
-        if (watch->events != 0U) {
-            ++ready;
-        }
+        } else { return -(long)BORING_SYSCALL_EINVAL; }
+        if (watch->events != 0U) { ++ready; }
     }
     return ready;
 }
 
 #if defined(BORING_M54_USB_ONLY_DESKTOP)
+#define M61_TRACE_TRB_CYCLE (1U << 0U)
+
 static bool m54_is_input_owner(const struct process *process) {
     struct boring_input_stats input;
     return (process != NULL) && boring_input_get_stats(&input) &&
-           input.initialized && input.owned &&
-           (input.owner_pid == process->pid);
+           input.initialized && input.owned && (input.owner_pid == process->pid);
+}
+
+static uint64_t m61_semantic_consumed(const struct xhci_state *active) {
+    uint64_t total;
+    uint8_t index;
+    if (active == NULL) { return 0ULL; }
+    total = (uint64_t)active->command_completions +
+            (uint64_t)active->port_events_consumed;
+    for (index = 0U; index < active->addressed_count; ++index) {
+        total += (uint64_t)active->addressed[index].transfer_events;
+    }
+    return total;
+}
+
+static void m61_trace_keyboard_state(const char *prefix) {
+    struct boring_input_stats input;
+    const struct xhci_state *active = xhci_get_state();
+    uint8_t device_index;
+    if ((prefix == NULL) || !boring_input_get_stats(&input) || (active == NULL)) {
+        return;
+    }
+    serial_write_string(prefix);
+    serial_write_string(" queue/drop/mod=");
+    serial_write_u64((uint64_t)input.queued_events);
+    serial_write_string("/"); serial_write_u64(input.dropped_events);
+    serial_write_string("/"); serial_write_u64((uint64_t)input.modifiers);
+    serial_write_string(" consumed="); serial_write_u64(m61_semantic_consumed(active));
+    serial_write_string("\n");
+    for (device_index = 0U; device_index < active->addressed_count; ++device_index) {
+        const struct xhci_addressed_device *device = &active->addressed[device_index];
+        uint8_t endpoint_index;
+        for (endpoint_index = 0U; endpoint_index < device->hid_configuration.endpoint_count;
+             ++endpoint_index) {
+            const struct xhci_hid_endpoint_descriptor *descriptor =
+                &device->hid_configuration.endpoints[endpoint_index];
+            const struct xhci_hid_endpoint_runtime *runtime =
+                &device->hid_runtime[endpoint_index];
+            if (descriptor->protocol != 1U) { continue; }
+            serial_write_string("m61-hid-trace: kbd slot/ep decoded/press/release out exp=");
+            serial_write_u64((uint64_t)device->slot_id); serial_write_string("/");
+            serial_write_u64((uint64_t)descriptor->endpoint_id); serial_write_string(" ");
+            serial_write_u64((uint64_t)runtime->decoded_reports); serial_write_string("/");
+            serial_write_u64((uint64_t)runtime->key_presses); serial_write_string("/");
+            serial_write_u64((uint64_t)runtime->key_releases); serial_write_string(" ");
+            serial_write_u64(runtime->transfer_outstanding ? 1ULL : 0ULL); serial_write_string(" ");
+            serial_write_u64(runtime->expected_trb_physical);
+            serial_write_string("\n");
+        }
+    }
+}
+
+static void m61_trace_failed_hid_service(void) {
+    static uint64_t failures;
+    const struct xhci_state *active = xhci_get_state();
+    void *ring_virtual = NULL;
+    uint64_t consumed;
+    uint16_t index;
+    bool cycle;
+    volatile struct xhci_trb *ring;
+    uint32_t control;
+    bool entry_cycle;
+
+    ++failures;
+    if ((active == NULL) ||
+        !vmm_pmm_frame_to_hhdm(active->event_ring_physical, &ring_virtual)) {
+        return;
+    }
+    consumed = m61_semantic_consumed(active);
+    index = (uint16_t)(consumed % XHCI_EVENT_RING_TRBS);
+    cycle = (((consumed / XHCI_EVENT_RING_TRBS) & 1ULL) == 0ULL);
+    ring = (volatile struct xhci_trb *)ring_virtual;
+    control = ring[index].control;
+    entry_cycle = (control & M61_TRACE_TRB_CYCLE) != 0U;
+    if ((entry_cycle == cycle) || ((failures & 0x3ffULL) == 0ULL)) {
+        serial_write_string("m61-hid-stall: failures/consumed/index/cycle/entry/control/param/status=");
+        serial_write_u64(failures); serial_write_string("/");
+        serial_write_u64(consumed); serial_write_string("/");
+        serial_write_u64((uint64_t)index); serial_write_string("/");
+        serial_write_u64(cycle ? 1ULL : 0ULL); serial_write_string("/");
+        serial_write_u64(entry_cycle ? 1ULL : 0ULL); serial_write_string("/");
+        serial_write_u64((uint64_t)control); serial_write_string("/");
+        serial_write_u64(ring[index].parameter); serial_write_string("/");
+        serial_write_u64((uint64_t)ring[index].status); serial_write_string("\n");
+        m61_trace_keyboard_state("m61-hid-stall-state:");
+    }
 }
 #endif
 
 static bool arm_fd_watches(struct process *process,
-                           const struct boring_event_watch *watches,
-                           size_t count) {
+                           const struct boring_event_watch *watches, size_t count) {
     size_t index;
-    if ((process == NULL) || !process_is_alive(process)) {
-        return false;
-    }
+    if ((process == NULL) || !process_is_alive(process)) { return false; }
     for (index = 0U; index < count; ++index) {
         if ((watches[index].kind == BORING_EVENT_FD) &&
             (kernel_fd_arm_pty_waiter(&process->fd_table, watches[index].handle,
@@ -147,8 +216,7 @@ static bool arm_fd_watches(struct process *process,
 }
 
 static void cancel_fd_watches(struct process *process,
-                              const struct boring_event_watch *watches,
-                              size_t count) {
+                              const struct boring_event_watch *watches, size_t count) {
     size_t index;
     if (process == NULL) { return; }
     for (index = 0U; index < count; ++index) {
@@ -161,8 +229,7 @@ static void cancel_fd_watches(struct process *process,
 
 void boring_event_input_irq(void) {
     struct boring_input_stats input;
-    if (boring_input_get_stats(&input) && input.owned &&
-        (input.queued_events != 0U)) {
+    if (boring_input_get_stats(&input) && input.owned && (input.queued_events != 0U)) {
         (void)task_wake_pid(input.owner_pid);
     }
 }
@@ -173,11 +240,8 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
     size_t count;
     long result;
 
-    /* Retain all established trusted-stack/SYSRET checks and slots 0..40. */
     x86_64_syscall_dispatch_m34(frame);
-    if ((frame == NULL) || (frame->syscall_number != BORING_SYS_EVENT_WAIT)) {
-        return;
-    }
+    if ((frame == NULL) || (frame->syscall_number != BORING_SYS_EVENT_WAIT)) { return; }
     if ((frame->rsi == 0ULL) || (frame->rsi > BORING_EVENT_MAX) ||
         ((frame->rdx & ~(uint64_t)BORING_EVENT_QUERY) != 0ULL)) {
         frame->result = (uint64_t)(-(int64_t)BORING_SYSCALL_EINVAL);
@@ -192,53 +256,42 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
     for (;;) {
         x86_64_interrupts_disable();
         result = poll_watches(process, watches, count);
-        if ((result != 0L) || (frame->rdx == BORING_EVENT_QUERY)) {
-            break;
-        }
+        if ((result != 0L) || (frame->rdx == BORING_EVENT_QUERY)) { break; }
 #if defined(BORING_M54_USB_ONLY_DESKTOP)
         if (m54_is_input_owner(process)) {
             struct xhci_state usb_state = {0};
-            x86_64_interrupts_enable();
             const bool serviced = xhci_service_hid_reports(&usb_state);
-            static bool m54_initial_service_witness = false;
+            static bool m54_initial_service_witness;
             if (!m54_initial_service_witness) {
                 const struct xhci_state *active = xhci_get_state();
                 uint64_t submitted = 0ULL;
                 uint64_t outstanding = 0ULL;
                 uint8_t device_index;
                 if (active != NULL) {
-                    for (device_index = 0U; device_index < active->addressed_count;
-                         ++device_index) {
-                        const struct xhci_addressed_device *device =
-                            &active->addressed[device_index];
+                    for (device_index = 0U; device_index < active->addressed_count; ++device_index) {
+                        const struct xhci_addressed_device *device = &active->addressed[device_index];
                         uint8_t endpoint_index;
-                        for (endpoint_index = 0U;
-                             endpoint_index < device->hid_configuration.endpoint_count;
+                        for (endpoint_index = 0U; endpoint_index < device->hid_configuration.endpoint_count;
                              ++endpoint_index) {
                             submitted += device->hid_runtime[endpoint_index].submitted_transfers;
-                            if (device->hid_runtime[endpoint_index].transfer_outstanding) {
-                                ++outstanding;
-                            }
+                            if (device->hid_runtime[endpoint_index].transfer_outstanding) { ++outstanding; }
                         }
                     }
                 }
                 serial_write_string("m54-desktop: HID service submitted/outstanding=");
-                serial_write_u64(submitted);
-                serial_write_string("/");
-                serial_write_u64(outstanding);
+                serial_write_u64(submitted); serial_write_string("/"); serial_write_u64(outstanding);
                 serial_write_string("\n");
                 m54_initial_service_witness = true;
             }
             if (serviced) {
                 serial_write_string("m54-desktop: real xHCI HID completion serviced\n");
+                m61_trace_keyboard_state("m61-hid-trace:");
+            } else {
+                m61_trace_failed_hid_service();
             }
+            x86_64_interrupts_enable();
             task_yield();
             if (!serviced) {
-                /*
-                 * The controller/device model needs host time between bounded
-                 * observations. Sleep only until the already-established PIT
-                 * interrupt, then retry on the next cooperative pass.
-                 */
                 x86_64_enable_and_halt();
                 x86_64_interrupts_disable();
             }
@@ -250,7 +303,6 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
             break;
         }
         if (!task_block_current()) {
-            /* Last runnable task: sleep until hardware wakes any waiter. */
             x86_64_enable_and_halt();
             x86_64_interrupts_disable();
             task_yield();
