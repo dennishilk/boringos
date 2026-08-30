@@ -558,6 +558,7 @@ static bool m52_complete_event(struct xhci_state *active,
             uint16_t actual = 0U;
             bool short_packet = false;
             void *buffer_virtual = NULL;
+            bool buffer_mapped;
             bool validator_ok;
             if (!runtime->transfer_outstanding) { continue; }
             validator_ok = xhci_validate_interrupt_transfer_event(
@@ -692,12 +693,57 @@ static bool m52_complete_event(struct xhci_state *active,
                 }
                 continue;
             }
+            buffer_mapped = vmm_pmm_frame_to_hhdm(
+                runtime->report_buffer_physical, &buffer_virtual);
             if ((actual == 0U) ||
-                !vmm_pmm_frame_to_hhdm(runtime->report_buffer_physical,
-                                       &buffer_virtual) ||
+                !buffer_mapped ||
                 (runtime->completed_transfers == UINT32_MAX) ||
                 (UINT32_MAX - runtime->report_bytes < actual) ||
                 (device->transfer_events == UINT32_MAX)) {
+                static bool traced_post_validation_failure;
+                if (!traced_post_validation_failure) {
+                    const char *reason = "transfer-events-overflow";
+                    if (actual == 0U) { reason = "actual-zero"; }
+                    else if (!buffer_mapped) { reason = "report-map"; }
+                    else if (runtime->completed_transfers == UINT32_MAX) {
+                        reason = "completed-overflow";
+                    } else if (UINT32_MAX - runtime->report_bytes < actual) {
+                        reason = "report-bytes-overflow";
+                    }
+                    traced_post_validation_failure = true;
+                    serial_write_string("m52-complete-post-diag: reason=");
+                    serial_write_string(reason);
+                    serial_write_string(
+                        " dev/slot/index/ep/proto/max=");
+                    serial_write_u64((uint64_t)device_index);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)device->slot_id);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)endpoint_index);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)descriptor->endpoint_id);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)descriptor->protocol);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)descriptor->max_packet);
+                    serial_write_string("\n");
+                    serial_write_string(
+                        "m52-complete-post-diag: report/actual/short/map/completed/bytes/events=");
+                    serial_write_u64(runtime->report_buffer_physical);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)actual);
+                    serial_write_string("/");
+                    serial_write_u64(short_packet ? 1ULL : 0ULL);
+                    serial_write_string("/");
+                    serial_write_u64(buffer_mapped ? 1ULL : 0ULL);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)runtime->completed_transfers);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)runtime->report_bytes);
+                    serial_write_string("/");
+                    serial_write_u64((uint64_t)device->transfer_events);
+                    serial_write_string("\n");
+                }
                 return false;
             }
             m52_barrier();
