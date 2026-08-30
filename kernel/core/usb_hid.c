@@ -319,6 +319,17 @@ static bool m60_consume_hid_event_mapped(struct xhci_state *active,
            (*completed == before + 1U);
 }
 
+static void m60_trace_poll_precondition(const char *reason) {
+    static bool traced;
+
+    if (!traced) {
+        traced = true;
+        serial_write_string("m60-poll-precondition-diag: reason=");
+        serial_write_string(reason);
+        serial_write_string("\n");
+    }
+}
+
 bool xhci_consume_hid_transfer_event(struct xhci_state *state,
                                      const struct xhci_trb *event,
                                      bool rearm_after_completion) {
@@ -378,15 +389,27 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
         return false;
     }
     published = xhci_get_state();
-    if ((published == NULL) || !published->controller_running ||
-        (published->addressed_count == 0U) ||
-        !vmm_map_mmio_region(published->mmio_physical,
-                             M52_MMIO_WINDOW_SIZE, &mapping) ||
-        !vmm_pmm_frame_to_hhdm(published->event_ring_physical,
+    if (published == NULL) {
+        m60_trace_poll_precondition("state");
+        return false;
+    }
+    if (!published->controller_running) {
+        m60_trace_poll_precondition("controller");
+        return false;
+    }
+    if (published->addressed_count == 0U) {
+        m60_trace_poll_precondition("addressed-count");
+        return false;
+    }
+    if (!vmm_map_mmio_region(published->mmio_physical,
+                             M52_MMIO_WINDOW_SIZE, &mapping)) {
+        m60_trace_poll_precondition("mmio-map");
+        return false;
+    }
+    if (!vmm_pmm_frame_to_hhdm(published->event_ring_physical,
                                &event_virtual)) {
-        if (mapping != NULL) {
-            (void)vmm_unmap_mmio_region(mapping, M52_MMIO_WINDOW_SIZE);
-        }
+        m60_trace_poll_precondition("event-ring-map");
+        (void)vmm_unmap_mmio_region(mapping, M52_MMIO_WINDOW_SIZE);
         return false;
     }
 
