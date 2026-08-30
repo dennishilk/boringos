@@ -82,6 +82,40 @@ jobs:
             build/m61-bootable-persistent-usb/first-boot/qemu.log
           if-no-files-found: error
           retention-days: 7
+      - name: One-off diagnostic local-APIC timer comparison
+        if: ${{ failure() }}
+        run: |
+          test -x /tmp/qemu-m61
+          expected=$(awk '{print $1}' build/boringos-m61-usb.img.sha256)
+          before=$(sha256sum build/boringos-m61-usb.img | awk '{print $1}')
+          test "$before" = "$expected"
+          rm -rf build/m61-bootable-persistent-usb build/m61-apic-timer-comparison
+          set +e
+          QEMU_CPU=qemu64 QEMU=/tmp/qemu-m61 python3 tests/m61-bootable-persistent-usb-qemu.py
+          rc=$?
+          set -e
+          mkdir -p build/m61-apic-timer-comparison
+          cp -a build/m61-bootable-persistent-usb/. build/m61-apic-timer-comparison/
+          after=$(sha256sum build/boringos-m61-usb.img | awk '{print $1}')
+          {
+            echo "baseline_cpu=qemu64,apic=off"
+            echo "comparison_cpu=qemu64"
+            echo "sole_topology_difference=local APIC enabled"
+            echo "physical_image_sha256_before=$before"
+            echo "physical_image_sha256_after=$after"
+            echo "acceptance_exit_code=$rc"
+          } | tee build/m61-apic-timer-comparison/result.txt
+          test "$after" = "$expected"
+          exit "$rc"
+      - name: Publish local-APIC timer comparison diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: m61-apic-timer-comparison-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            build/m61-apic-timer-comparison/**
+          if-no-files-found: error
+          retention-days: 7
       - name: Verify restored fresh raw and compressed artifact hashes
         run: |
           (cd build && sha256sum -c boringos-m61-usb.img.sha256)
