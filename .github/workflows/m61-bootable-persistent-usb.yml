@@ -31,12 +31,14 @@ jobs:
         run: |
           cat > /tmp/qemu-m61 <<'EOF'
           #!/bin/sh
-          exec qemu-system-x86_64 "$@" -trace enable=usb_xhci_queue_event
+          exec qemu-system-x86_64 "$@" \
+            -trace enable=usb_xhci_queue_event \
+            -trace enable=usb_xhci_doorbell_write
           EOF
           chmod +x /tmp/qemu-m61
           if ! QEMU=/tmp/qemu-m61 python3 tests/m61-bootable-persistent-usb-qemu.py; then
             echo '--- M61 focused QEMU xHCI diagnostic tail ---'
-            tail -n 500 build/m61-bootable-persistent-usb/first-boot/qemu.log || true
+            tail -n 700 build/m61-bootable-persistent-usb/first-boot/qemu.log || true
             exit 1
           fi
       - name: Verify restored fresh raw and compressed artifact hashes
