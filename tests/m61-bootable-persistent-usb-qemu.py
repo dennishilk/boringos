@@ -86,7 +86,8 @@ def run_session(name, expect_existing):
     out.mkdir(parents=True)
     serial = out / "serial.log"
     serial.write_text("")
-    qemu_log = (out / "qemu.log").open("w")
+    qemu_log_path = out / "qemu.log"
+    qemu_log = qemu_log_path.open("w")
     code, variables = firmware_files()
     vars_copy = out / "OVMF_VARS.fd"
     shutil.copyfile(variables, vars_copy)
@@ -104,6 +105,9 @@ def run_session(name, expect_existing):
         "-boot", "menu=off,strict=on",
         "-vga", "std", "-display", "none",
         "-serial", f"file:{serial}", "-monitor", "none", "-qmp", "stdio",
+        "-trace", "enable=usb_xhci_slot_address",
+        "-trace", "enable=usb_xhci_xfer_start",
+        "-trace", "enable=usb_xhci_xfer_success",
         "-no-reboot", "-no-shutdown",
     ]
     (out / "qemu-command.json").write_text(json.dumps(command, indent=2) + "\n")
@@ -133,6 +137,9 @@ def run_session(name, expect_existing):
 
     def text():
         return serial.read_text(errors="replace")
+
+    def qemu_text():
+        return qemu_log_path.read_text(errors="replace")
 
     def wait(predicate, description, timeout=120):
         deadline = time.monotonic() + timeout
@@ -167,6 +174,52 @@ def run_session(name, expect_existing):
                                      "arguments": arguments,
                                      "result": result}) + "\n")
         return result
+
+    def keyboard_transfer_state():
+        trace = qemu_text()
+        addressed = re.findall(
+            r"usb_xhci_slot_address\s+slotid (\d+), port (\S+)", trace)
+        keyboard_slots = [int(slot) for slot, port in addressed
+                          if (port == "2") or port.endswith(".2")]
+        if not keyboard_slots:
+            return None
+        slot = keyboard_slots[-1]
+        starts = re.findall(
+            r"usb_xhci_xfer_start\s+(0x[0-9A-Fa-f]+): slotid (\d+), "
+            r"epid (\d+), streamid \d+", trace)
+        interrupt = [(pointer, int(epid)) for pointer, slot_text, epid in starts
+                     if int(slot_text) == slot and int(epid) != 1]
+        epids = {epid for _pointer, epid in interrupt}
+        if len(epids) != 1:
+            return None
+        endpoint = next(iter(epids))
+        pointers = [pointer for pointer, epid in interrupt if epid == endpoint]
+        if not pointers:
+            return None
+        return slot, endpoint, pointers
+
+    def release_key(code, description):
+        state = wait(lambda _current: keyboard_transfer_state(),
+                     "QEMU xHCI keyboard slot/endpoint trace")
+        slot, endpoint, pointers = state
+        before_starts = len(pointers)
+        outstanding = pointers[-1]
+        success_pattern = re.compile(
+            rf"usb_xhci_xfer_success\s+{re.escape(outstanding)}: len \d+")
+        success_before = len(success_pattern.findall(qemu_text()))
+        qmp("input-send-event", {"events": [QMP["key_event"](code, False)]})
+        wait(lambda _current: len(success_pattern.findall(qemu_text())) >=
+             success_before + 1,
+             f"keyboard release xHCI success {description}")
+        wait(lambda _current: (
+            (current_state := keyboard_transfer_state()) is not None and
+            current_state[0] == slot and current_state[1] == endpoint and
+            len(current_state[2]) >= before_starts + 1),
+            f"keyboard release guest rearm {description}")
+        with (out / "keyboard-release-proof.log").open("a") as record:
+            record.write(
+                f"{description}: slot={slot} endpoint={endpoint} "
+                f"completed={outstanding} rearm={before_starts + 1}\n")
 
     def key(code, super_key=False):
         events = []
@@ -207,7 +260,6 @@ def run_session(name, expect_existing):
 
     def type_text(value):
         codes = {" ": "spc", "-": "minus", ".": "dot", "/": "slash"}
-        service_marker = "m54-desktop: real xHCI HID completion serviced"
         for char in value:
             frame = frames()[-1]
             terminal_pid = next(tile["pid"] for tile in frame["tiles"]
@@ -217,9 +269,7 @@ def run_session(name, expect_existing):
             code = codes.get(char, char)
             qmp("input-send-event", {"events": [QMP["key_event"](code, True)]})
             witness(marker, before + 1)
-            before_release = text().count(service_marker)
-            qmp("input-send-event", {"events": [QMP["key_event"](code, False)]})
-            witness(service_marker, before_release + 1)
+            release_key(code, repr(char))
 
     def command_line(value):
         type_text(value)
@@ -233,7 +283,6 @@ def run_session(name, expect_existing):
             rf"fd-write: pid {shell_pid} fd 1 bytes \d+")
         terminal_read_pattern = re.compile(
             rf"fd-read: pid {terminal_pid} fd 3 bytes \d+")
-        service_marker = "m54-desktop: real xHCI HID completion serviced"
         current = text()
         stdin_before = current.count(stdin_marker)
         newline_before = current.count(newline_marker)
@@ -242,10 +291,7 @@ def run_session(name, expect_existing):
 
         qmp("input-send-event", {"events": [QMP["key_event"]("ret", True)]})
         witness(stdin_marker, stdin_before + 1)
-
-        release_before = text().count(service_marker)
-        qmp("input-send-event", {"events": [QMP["key_event"]("ret", False)]})
-        witness(service_marker, release_before + 1)
+        release_key("ret", "Return")
 
         witness(newline_marker, newline_before + 1)
         wait(lambda current_text: len(shell_write_pattern.findall(current_text)) >=
