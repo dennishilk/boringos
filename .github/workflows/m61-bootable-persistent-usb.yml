@@ -43,7 +43,7 @@ jobs:
           fi
       - name: Verify restored fresh raw and compressed artifact hashes
         run: |
-          sha256sum -c build/boringos-m61-usb.img.sha256
+          (cd build && sha256sum -c boringos-m61-usb.img.sha256)
           expected=$(awk '{print $1}' build/boringos-m61-usb.img.sha256)
           actual=$(xz -dc build/boringos-m61-usb.img.xz | sha256sum | awk '{print $1}')
           test "$actual" = "$expected"
