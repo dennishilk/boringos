@@ -127,6 +127,62 @@ static bool m54_is_input_owner(const struct process *process) {
            input.initialized && input.owned &&
            (input.owner_pid == process->pid);
 }
+
+static void m61_trace_serviced_keyboard_state(void) {
+    struct boring_input_stats input;
+    const struct xhci_state *active;
+    uint8_t device_index;
+
+    if (!boring_input_get_stats(&input)) { return; }
+    serial_write_string("m61-hid-trace: queue/drop/mod=");
+    serial_write_u64((uint64_t)input.queued_events);
+    serial_write_string("/");
+    serial_write_u64(input.dropped_events);
+    serial_write_string("/");
+    serial_write_u64((uint64_t)input.modifiers);
+    serial_write_string("\n");
+    active = xhci_get_state();
+    if (active == NULL) { return; }
+    for (device_index = 0U; device_index < active->addressed_count;
+         ++device_index) {
+        const struct xhci_addressed_device *device = &active->addressed[device_index];
+        uint8_t endpoint_index;
+        for (endpoint_index = 0U;
+             endpoint_index < device->hid_configuration.endpoint_count;
+             ++endpoint_index) {
+            const struct xhci_hid_endpoint_descriptor *descriptor =
+                &device->hid_configuration.endpoints[endpoint_index];
+            const struct xhci_hid_endpoint_runtime *runtime =
+                &device->hid_runtime[endpoint_index];
+            uint8_t key_index;
+            if (descriptor->protocol != 1U) { continue; }
+            serial_write_string("m61-hid-trace: keyboard slot/ep decoded/press/release last/down state-mod keys=");
+            serial_write_u64((uint64_t)device->slot_id);
+            serial_write_string("/");
+            serial_write_u64((uint64_t)descriptor->endpoint_id);
+            serial_write_string(" ");
+            serial_write_u64((uint64_t)runtime->decoded_reports);
+            serial_write_string("/");
+            serial_write_u64((uint64_t)runtime->key_presses);
+            serial_write_string("/");
+            serial_write_u64((uint64_t)runtime->key_releases);
+            serial_write_string(" ");
+            serial_write_u64((uint64_t)runtime->last_key_usage);
+            serial_write_string("/");
+            serial_write_u64(runtime->last_key_down ? 1ULL : 0ULL);
+            serial_write_string(" ");
+            serial_write_u64((uint64_t)runtime->keyboard_state.modifiers);
+            serial_write_string(" ");
+            for (key_index = 0U; key_index < USB_HID_BOOT_KEYS; ++key_index) {
+                serial_write_u64((uint64_t)runtime->keyboard_state.keys[key_index]);
+                if (key_index + 1U != USB_HID_BOOT_KEYS) {
+                    serial_write_string(",");
+                }
+            }
+            serial_write_string("\n");
+        }
+    }
+}
 #endif
 
 static bool arm_fd_watches(struct process *process,
@@ -230,6 +286,7 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
             }
             if (serviced) {
                 serial_write_string("m54-desktop: real xHCI HID completion serviced\n");
+                m61_trace_serviced_keyboard_state();
             }
             x86_64_interrupts_enable();
             task_yield();
