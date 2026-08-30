@@ -223,7 +223,37 @@ def run_session(name, expect_existing):
 
     def command_line(value):
         type_text(value)
-        key("ret")
+        frame = frames()[-1]
+        terminal_pid = next(tile["pid"] for tile in frame["tiles"]
+                            if tile["token"] == frame["focus"])
+        shell_pid = shell_for(terminal_pid)
+        stdin_marker = f"fd-read: pid {shell_pid} fd 0 bytes 1"
+        newline_marker = f"fd-write: pid {shell_pid} fd 1 bytes 2"
+        shell_write_pattern = re.compile(
+            rf"fd-write: pid {shell_pid} fd 1 bytes \d+")
+        terminal_read_pattern = re.compile(
+            rf"fd-read: pid {terminal_pid} fd 3 bytes \d+")
+        service_marker = "m54-desktop: real xHCI HID completion serviced"
+        current = text()
+        stdin_before = current.count(stdin_marker)
+        newline_before = current.count(newline_marker)
+        shell_writes_before = len(shell_write_pattern.findall(current))
+        terminal_reads_before = len(terminal_read_pattern.findall(current))
+
+        qmp("input-send-event", {"events": [QMP["key_event"]("ret", True)]})
+        witness(stdin_marker, stdin_before + 1)
+        witness(newline_marker, newline_before + 1)
+
+        release_before = text().count(service_marker)
+        qmp("input-send-event", {"events": [QMP["key_event"]("ret", False)]})
+        witness(service_marker, release_before + 1)
+
+        wait(lambda current_text: len(shell_write_pattern.findall(current_text)) >=
+             shell_writes_before + 2,
+             f"shell pid {shell_pid} regenerated prompt after command")
+        wait(lambda current_text: len(terminal_read_pattern.findall(current_text)) >=
+             terminal_reads_before + 1,
+             f"terminal pid {terminal_pid} consumed regenerated prompt")
         return frames()[-1]
 
     def cat_persisted():
