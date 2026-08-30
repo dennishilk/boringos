@@ -9,12 +9,14 @@ from pathlib import Path
 
 BOOT_MARKER = 'BdsDxe: starting Boot0001'
 KERNEL_PATTERN = re.compile(r'BoringKernel 0\.0\.\d+-dev')
+TEMP_KBD_SLOT_PATTERN = re.compile(
+    r'usb_xhci_slot_address\s+slotid \d+, port (?:4|\S*\.4)(?:\s|$)')
 CONNECT_TIMEOUT = 30.0
 BOOT_DRIVE_TIMEOUT = 12.0
 ENTER_INTERVAL = 0.4
 
 
-def serial_text(path):
+def read_text(path):
     try:
         return path.read_text(errors='replace')
     except FileNotFoundError:
@@ -67,10 +69,10 @@ def connect_qmp(path):
     raise RuntimeError('secondary QMP socket did not become ready')
 
 
-def wait_for_serial(path, predicate, timeout, description):
+def wait_for_text(path, predicate, timeout, description):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        current = serial_text(path)
+        current = read_text(path)
         if predicate(current):
             return current
         time.sleep(0.05)
@@ -87,25 +89,27 @@ def main():
         raise RuntimeError('usage: m61-limine-boot-drive.py <qmp-socket> <serial-log>')
     qmp_path = Path(sys.argv[1])
     serial_path = Path(sys.argv[2])
+    trace_path = serial_path.with_name('qemu.log')
     log_path = serial_path.with_name('limine-boot-drive.log')
 
     client = None
     stream = None
-    keyboard_attached = False
+    keyboard_attached = True
     attempts = 0
     try:
         client, stream = connect_qmp(qmp_path)
-        wait_for_serial(serial_path, lambda text: BOOT_MARKER in text,
-                        CONNECT_TIMEOUT, 'OVMF Boot0001 start')
-        execute(stream, 'device_add', {'driver': 'usb-kbd',
-                'id': 'm61liminekbd', 'bus': 'xhci.0', 'port': '4'})
-        keyboard_attached = True
+        wait_for_text(trace_path, lambda text: TEMP_KBD_SLOT_PATTERN.search(text) is not None,
+                      CONNECT_TIMEOUT, 'firmware-addressed temporary Limine USB keyboard')
+        wait_for_text(serial_path, lambda text: BOOT_MARKER in text,
+                      CONNECT_TIMEOUT, 'OVMF Boot0001 start')
         with log_path.open('w') as record:
-            record.write('OVMF Boot0001 reached; temporary Limine USB keyboard attached on xHCI port 4\n')
+            record.write('temporary Limine USB keyboard pre-attached on xHCI port 4\n')
+            record.write('firmware addressed temporary Limine USB keyboard before Boot0001 drive\n')
+            record.write('OVMF Boot0001 reached; driving selected Limine entry explicitly\n')
 
         deadline = time.monotonic() + BOOT_DRIVE_TIMEOUT
         while time.monotonic() < deadline:
-            current = serial_text(serial_path)
+            current = read_text(serial_path)
             if KERNEL_PATTERN.search(current):
                 break
             execute(stream, 'input-send-event', {'events': [
@@ -119,6 +123,7 @@ def main():
 
         execute(stream, 'device_del', {'id': 'm61liminekbd'})
         keyboard_attached = False
+        time.sleep(0.1)
         with log_path.open('a') as record:
             record.write(f'BoringKernel serial witness reached after {attempts} Return attempt(s)\n')
             record.write('temporary Limine USB keyboard removed before runtime HID acceptance\n')

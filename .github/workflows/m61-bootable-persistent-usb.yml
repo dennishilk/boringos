@@ -49,6 +49,7 @@ jobs:
           rm -f "$boot_qmp"
           python3 tests/m61-limine-boot-drive.py "$boot_qmp" "$serial_path" >/dev/null 2>&1 &
           exec qemu-system-x86_64 "$@" \
+            -device "usb-kbd,id=m61liminekbd,bus=xhci.0,port=4" \
             -chardev "socket,id=m61bootqmp,path=$boot_qmp,server=on,wait=off" \
             -mon "chardev=m61bootqmp,mode=control,pretty=off" \
             -trace enable=usb_xhci_queue_event \
