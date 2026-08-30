@@ -238,43 +238,16 @@ static bool m60_consume_hid_event_mapped(struct xhci_state *active,
            (*completed == before + 1U);
 }
 
-bool xhci_rearm_hid_reports(struct xhci_state *state) {
-    const struct xhci_state *published;
-    struct xhci_state *active;
-    volatile void *mapping = NULL;
-    bool success = false;
-
-    if (state == NULL) { return false; }
-    published = xhci_get_state();
-    if ((published == NULL) || !published->controller_running ||
-        !state->controller_running ||
-        (state->mmio_physical != published->mmio_physical) ||
-        (state->event_ring_physical != published->event_ring_physical) ||
-        (state->addressed_count != published->addressed_count) ||
-        !vmm_map_mmio_region(published->mmio_physical,
-                             M52_MMIO_WINDOW_SIZE, &mapping)) {
-        if (mapping != NULL) {
-            (void)vmm_unmap_mmio_region(mapping, M52_MMIO_WINDOW_SIZE);
-        }
-        return false;
-    }
-    active = (struct xhci_state *)(uintptr_t)published;
-    success = m60_rearm_hid_endpoints(active, (volatile uint8_t *)mapping);
-    *state = *active;
-    (void)vmm_unmap_mmio_region(mapping, M52_MMIO_WINDOW_SIZE);
-    return success;
-}
-
 bool xhci_consume_hid_transfer_event(struct xhci_state *state,
                                      const struct xhci_trb *event,
                                      bool rearm_after_completion) {
     const struct xhci_state *published;
     struct xhci_state *active;
     volatile void *mapping = NULL;
+    volatile uint8_t *mmio;
     uint32_t completed = 0U;
     bool success = false;
 
-    (void)rearm_after_completion;
     if ((state == NULL) || (event == NULL)) { return false; }
     published = xhci_get_state();
     if ((published == NULL) || !published->controller_running ||
@@ -291,8 +264,12 @@ bool xhci_consume_hid_transfer_event(struct xhci_state *state,
     }
 
     active = (struct xhci_state *)(uintptr_t)published;
+    mmio = (volatile uint8_t *)mapping;
     success = m60_consume_hid_event_mapped(active, event, &completed) &&
               (completed == 1U);
+    if (success && rearm_after_completion) {
+        (void)m60_rearm_hid_endpoints(active, mmio);
+    }
     *state = *active;
     (void)vmm_unmap_mmio_region(mapping, M52_MMIO_WINDOW_SIZE);
     return success;
