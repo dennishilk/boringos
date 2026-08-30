@@ -41,6 +41,11 @@ if build/boringfsck --cat /persist/m61.txt "$OUT/boringos-root.img" \
 fi
 printf '%s\n' 'M61 fresh BoringFS image: /persist/m61.txt absent: PASS'
 
+cc -Ikernel/include $HOST_CFLAGS -DBORING_SERIAL_TEST=1 \
+   tests/m61-serial-failopen-host-test.c kernel/arch/x86_64/serial.c \
+   -o build/m61-serial-failopen-host-test
+build/m61-serial-failopen-host-test | tee "$OUT/serial-failopen-host.txt"
+
 cc -Ikernel/include $HOST_CFLAGS tests/m61-block-slice-host-test.c \
    kernel/core/block_device.c kernel/core/block_slice.c \
    -o build/m61-block-slice-host-test

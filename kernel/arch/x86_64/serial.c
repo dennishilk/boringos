@@ -13,23 +13,85 @@ enum {
     COM1_MODEM_CONTROL = 0x3fc,
     COM1_LINE_STATUS = 0x3fd,
     COM1_LINE_STATUS_DATA_READY = 0x01,
-    SERIAL_RX_BUFFER_CAPACITY = 8192
+    COM1_LINE_STATUS_TX_READY = 0x20,
+    SERIAL_RX_BUFFER_CAPACITY = 8192,
+    SERIAL_TX_READY_POLL_LIMIT = 4096,
+    SERIAL_PROBE_BYTE = 0xae,
+    SERIAL_MODEM_NORMAL = 0x0b,
+    SERIAL_MODEM_LOOPBACK = 0x1e
 };
 
 static char serial_rx_buffer[SERIAL_RX_BUFFER_CAPACITY];
 static size_t serial_rx_head;
 static size_t serial_rx_tail;
 static size_t serial_rx_count;
+static bool serial_available;
 
-static void serial_write_char(char value) {
-    while ((x86_64_in8((uint16_t)COM1_LINE_STATUS) & 0x20u) == 0u) {
+#ifdef BORING_SERIAL_TEST
+uint8_t boring_serial_test_in8(uint16_t port);
+void boring_serial_test_out8(uint16_t port, uint8_t value);
+
+static uint8_t serial_in8(uint16_t port) {
+    return boring_serial_test_in8(port);
+}
+
+static void serial_out8(uint16_t port, uint8_t value) {
+    boring_serial_test_out8(port, value);
+}
+#else
+static uint8_t serial_in8(uint16_t port) {
+    return x86_64_in8(port);
+}
+
+static void serial_out8(uint16_t port, uint8_t value) {
+    x86_64_out8(port, value);
+}
+#endif
+
+static bool serial_probe_available(void) {
+    uint8_t echoed;
+
+    serial_out8((uint16_t)COM1_MODEM_CONTROL,
+                (uint8_t)SERIAL_MODEM_LOOPBACK);
+    serial_out8((uint16_t)COM1_DATA, (uint8_t)SERIAL_PROBE_BYTE);
+    echoed = serial_in8((uint16_t)COM1_DATA);
+    serial_out8((uint16_t)COM1_MODEM_CONTROL,
+                (uint8_t)SERIAL_MODEM_NORMAL);
+    return echoed == (uint8_t)SERIAL_PROBE_BYTE;
+}
+
+static bool serial_tx_ready(void) {
+    size_t poll;
+
+    if (!serial_available) {
+        return false;
     }
 
-    x86_64_out8((uint16_t)COM1_DATA, (uint8_t)value);
+    for (poll = 0U; poll < (size_t)SERIAL_TX_READY_POLL_LIMIT; ++poll) {
+        if ((serial_in8((uint16_t)COM1_LINE_STATUS) &
+             (uint8_t)COM1_LINE_STATUS_TX_READY) != 0U) {
+            return true;
+        }
+    }
+
+    serial_available = false;
+    return false;
+}
+
+static void serial_write_char(char value) {
+    if (!serial_tx_ready()) {
+        return;
+    }
+
+    serial_out8((uint16_t)COM1_DATA, (uint8_t)value);
 }
 
 static bool serial_rx_data_ready(void) {
-    return (x86_64_in8((uint16_t)COM1_LINE_STATUS) &
+    if (!serial_available) {
+        return false;
+    }
+
+    return (serial_in8((uint16_t)COM1_LINE_STATUS) &
             (uint8_t)COM1_LINE_STATUS_DATA_READY) != 0U;
 }
 
@@ -37,7 +99,7 @@ static void serial_rx_drain_available(void) {
     while ((serial_rx_count < (size_t)SERIAL_RX_BUFFER_CAPACITY) &&
            serial_rx_data_ready()) {
         serial_rx_buffer[serial_rx_tail] =
-            (char)x86_64_in8((uint16_t)COM1_DATA);
+            (char)serial_in8((uint16_t)COM1_DATA);
         serial_rx_tail =
             (serial_rx_tail + 1U) % (size_t)SERIAL_RX_BUFFER_CAPACITY;
         ++serial_rx_count;
@@ -45,16 +107,19 @@ static void serial_rx_drain_available(void) {
 }
 
 void serial_init(void) {
-    x86_64_out8((uint16_t)COM1_INTERRUPT_ENABLE, 0x00u);
-    x86_64_out8((uint16_t)COM1_LINE_CONTROL, 0x80u);
-    x86_64_out8((uint16_t)COM1_DATA, 0x01u);
-    x86_64_out8((uint16_t)COM1_INTERRUPT_ENABLE, 0x00u);
-    x86_64_out8((uint16_t)COM1_LINE_CONTROL, 0x03u);
-    x86_64_out8((uint16_t)COM1_FIFO_CONTROL, 0xc7u);
-    x86_64_out8((uint16_t)COM1_MODEM_CONTROL, 0x0bu);
+    serial_available = false;
+    serial_out8((uint16_t)COM1_INTERRUPT_ENABLE, 0x00u);
+    serial_out8((uint16_t)COM1_LINE_CONTROL, 0x80u);
+    serial_out8((uint16_t)COM1_DATA, 0x01u);
+    serial_out8((uint16_t)COM1_INTERRUPT_ENABLE, 0x00u);
+    serial_out8((uint16_t)COM1_LINE_CONTROL, 0x03u);
+    serial_out8((uint16_t)COM1_FIFO_CONTROL, 0xc7u);
+    serial_out8((uint16_t)COM1_MODEM_CONTROL,
+                (uint8_t)SERIAL_MODEM_NORMAL);
     serial_rx_head = 0U;
     serial_rx_tail = 0U;
     serial_rx_count = 0U;
+    serial_available = serial_probe_available();
 }
 
 void serial_write_bytes(const char *data, size_t length) {
@@ -78,6 +143,10 @@ void serial_write_string(const char *text) {
 
 char serial_read_char_blocking(void) {
     char value;
+
+    if (!serial_available) {
+        return '\0';
+    }
 
     while (serial_rx_count == 0U) {
         while (!serial_rx_data_ready()) {
