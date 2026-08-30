@@ -199,7 +199,6 @@ static enum m60_hid_classification m60_classify_hid_device(
 
 static bool m60_rearm_hid_endpoints(struct xhci_state *active,
                                      volatile uint8_t *mmio) {
-    static bool traced_failure;
     uint8_t device_index;
     if ((active == NULL) || (mmio == NULL)) { return false; }
     for (device_index = 0U; device_index < active->addressed_count;
@@ -209,49 +208,10 @@ static bool m60_rearm_hid_endpoints(struct xhci_state *active,
             m60_classify_hid_device(device);
         uint8_t endpoint_index;
 
-        if (classification == M60_HID_INVALID) {
-            if (!traced_failure) {
-                traced_failure = true;
-                serial_write_string(
-                    "m60-rearm-diag: reason=classification dev/addressed/descriptors/configured/ready/descbuf/configlen/endpoints=");
-                serial_write_u64((uint64_t)device_index);
-                serial_write_string("/");
-                serial_write_u64(device->addressed ? 1ULL : 0ULL);
-                serial_write_string("/");
-                serial_write_u64(device->descriptors_ready ? 1ULL : 0ULL);
-                serial_write_string("/");
-                serial_write_u64(device->device_configured ? 1ULL : 0ULL);
-                serial_write_string("/");
-                serial_write_u64(device->hid_endpoint_ready ? 1ULL : 0ULL);
-                serial_write_string("/");
-                serial_write_u64(device->descriptor_buffer_physical);
-                serial_write_string("/");
-                serial_write_u64(
-                    (uint64_t)device->descriptors.configuration_length);
-                serial_write_string("/");
-                serial_write_u64(
-                    (uint64_t)device->hid_configuration.endpoint_count);
-                serial_write_string("\n");
-            }
-            return false;
-        }
+        if (classification == M60_HID_INVALID) { return false; }
         if (classification == M60_HID_NOT_HID) { continue; }
         if (!device->device_configured || !device->hid_endpoint_ready ||
             (device->hid_configuration.endpoint_count > XHCI_MAX_HID_ENDPOINTS)) {
-            if (!traced_failure) {
-                traced_failure = true;
-                serial_write_string(
-                    "m60-rearm-diag: reason=configuration dev/configured/ready/endpoints=");
-                serial_write_u64((uint64_t)device_index);
-                serial_write_string("/");
-                serial_write_u64(device->device_configured ? 1ULL : 0ULL);
-                serial_write_string("/");
-                serial_write_u64(device->hid_endpoint_ready ? 1ULL : 0ULL);
-                serial_write_string("/");
-                serial_write_u64(
-                    (uint64_t)device->hid_configuration.endpoint_count);
-                serial_write_string("\n");
-            }
             return false;
         }
         for (endpoint_index = 0U;
@@ -259,47 +219,6 @@ static bool m60_rearm_hid_endpoints(struct xhci_state *active,
              ++endpoint_index) {
             if (!device->hid_runtime[endpoint_index].transfer_outstanding &&
                 !m52_submit_endpoint(mmio, device, endpoint_index)) {
-                if (!traced_failure) {
-                    const struct xhci_hid_endpoint_runtime *runtime =
-                        &device->hid_runtime[endpoint_index];
-                    const struct xhci_hid_endpoint_descriptor *descriptor =
-                        &device->hid_configuration.endpoints[endpoint_index];
-                    traced_failure = true;
-                    serial_write_string(
-                        "m60-rearm-diag: reason=submit dev/slot/index/ep/proto/max=");
-                    serial_write_u64((uint64_t)device_index);
-                    serial_write_string("/");
-                    serial_write_u64((uint64_t)device->slot_id);
-                    serial_write_string("/");
-                    serial_write_u64((uint64_t)endpoint_index);
-                    serial_write_string("/");
-                    serial_write_u64((uint64_t)descriptor->endpoint_id);
-                    serial_write_string("/");
-                    serial_write_u64((uint64_t)descriptor->protocol);
-                    serial_write_string("/");
-                    serial_write_u64((uint64_t)descriptor->max_packet);
-                    serial_write_string("\n");
-                    serial_write_string(
-                        "m60-rearm-diag: ring/report/out/expected/producer/cycle/submitted/completed=");
-                    serial_write_u64(
-                        device->hid_ring_physical[endpoint_index]);
-                    serial_write_string("/");
-                    serial_write_u64(runtime->report_buffer_physical);
-                    serial_write_string("/");
-                    serial_write_u64(runtime->transfer_outstanding ?
-                                     1ULL : 0ULL);
-                    serial_write_string("/");
-                    serial_write_u64(runtime->expected_trb_physical);
-                    serial_write_string("/");
-                    serial_write_u64((uint64_t)runtime->producer_index);
-                    serial_write_string("/");
-                    serial_write_u64(runtime->producer_cycle ? 1ULL : 0ULL);
-                    serial_write_string("/");
-                    serial_write_u64((uint64_t)runtime->submitted_transfers);
-                    serial_write_string("/");
-                    serial_write_u64((uint64_t)runtime->completed_transfers);
-                    serial_write_string("\n");
-                }
                 return false;
             }
         }
@@ -317,17 +236,6 @@ static bool m60_consume_hid_event_mapped(struct xhci_state *active,
     before = *completed;
     return m52_complete_event(active, event, completed) &&
            (*completed == before + 1U);
-}
-
-static void m60_trace_poll_precondition(const char *reason) {
-    static bool traced;
-
-    if (!traced) {
-        traced = true;
-        serial_write_string("m60-poll-precondition-diag: reason=");
-        serial_write_string(reason);
-        serial_write_string("\n");
-    }
 }
 
 bool xhci_consume_hid_transfer_event(struct xhci_state *state,
@@ -383,48 +291,32 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
     uint32_t completed = 0U;
     uint32_t attempt;
     bool success = false;
-    const char *failure_stage = "wait";
 
     if ((state == NULL) || (completion_goal == 0U) || (wait_limit == 0U)) {
         return false;
     }
     published = xhci_get_state();
-    if (published == NULL) {
-        m60_trace_poll_precondition("state");
-        return false;
-    }
-    if (!published->controller_running) {
-        m60_trace_poll_precondition("controller");
-        return false;
-    }
-    if (published->addressed_count == 0U) {
-        m60_trace_poll_precondition("addressed-count");
-        return false;
-    }
-    if (!vmm_map_mmio_region(published->mmio_physical,
-                             M52_MMIO_WINDOW_SIZE, &mapping)) {
-        m60_trace_poll_precondition("mmio-map");
-        return false;
-    }
-    if (!vmm_pmm_frame_to_hhdm(published->event_ring_physical,
+    if ((published == NULL) || !published->controller_running ||
+        (published->addressed_count == 0U) ||
+        !vmm_map_mmio_region(published->mmio_physical,
+                             M52_MMIO_WINDOW_SIZE, &mapping) ||
+        !vmm_pmm_frame_to_hhdm(published->event_ring_physical,
                                &event_virtual)) {
-        m60_trace_poll_precondition("event-ring-map");
-        (void)vmm_unmap_mmio_region(mapping, M52_MMIO_WINDOW_SIZE);
+        if (mapping != NULL) {
+            (void)vmm_unmap_mmio_region(mapping, M52_MMIO_WINDOW_SIZE);
+        }
         return false;
     }
 
     active = (struct xhci_state *)(uintptr_t)published;
     mmio = (volatile uint8_t *)mapping;
     event_ring = (volatile struct xhci_trb *)event_virtual;
+
+    if (!m60_rearm_hid_endpoints(active, mmio)) { goto out; }
+
     consumed = m52_consumed_events(active);
     event_index = (uint16_t)(consumed % XHCI_EVENT_RING_TRBS);
     event_cycle = (((consumed / XHCI_EVENT_RING_TRBS) & 1ULL) == 0ULL);
-
-    if (!m60_rearm_hid_endpoints(active, mmio)) {
-        failure_stage = "rearm";
-        goto out;
-    }
-
     for (attempt = 0U;
          (attempt < wait_limit) && (completed < completion_goal);
          ++attempt) {
@@ -446,12 +338,8 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
         event.control = control;
         type = (uint8_t)((event.control >> M52_TRB_TYPE_SHIFT) &
                          M52_TRB_TYPE_MASK);
-        if (type != XHCI_TRB_TYPE_TRANSFER_EVENT) {
-            failure_stage = "event-type";
-            goto out;
-        }
-        if (!m60_consume_hid_event_mapped(active, &event, &completed)) {
-            failure_stage = "consume";
+        if ((type != XHCI_TRB_TYPE_TRANSFER_EVENT) ||
+            !m60_consume_hid_event_mapped(active, &event, &completed)) {
             goto out;
         }
         next_index = (uint16_t)(event_index + 1U);
@@ -461,10 +349,7 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
             next_cycle = !next_cycle;
         }
         m52_barrier();
-        if (interrupter > M52_MMIO_WINDOW_SIZE - 0x20U) {
-            failure_stage = "interrupter";
-            goto out;
-        }
+        if (interrupter > M52_MMIO_WINDOW_SIZE - 0x20U) { goto out; }
         m52_mmio_write64(mmio, interrupter + 0x18U,
             (active->event_ring_physical +
              ((uint64_t)next_index * XHCI_TRB_SIZE)) | (1ULL << 3U));
@@ -478,72 +363,6 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
 
     success = completed >= completion_goal;
 out:
-    if (!success && (event_virtual != NULL)) {
-        static uint64_t poll_failures;
-        static uint64_t matching_failures;
-        const uint32_t control = event_ring[event_index].control;
-        const bool entry_cycle = (control & M52_TRB_CYCLE) != 0U;
-        const uint8_t type = (uint8_t)(
-            (control >> M52_TRB_TYPE_SHIFT) & M52_TRB_TYPE_MASK);
-        const uint8_t endpoint = (uint8_t)(
-            (control >> M52_EVENT_ENDPOINT_SHIFT) &
-            M52_EVENT_ENDPOINT_MASK);
-        const uint8_t slot =
-            (uint8_t)(control >> M52_EVENT_SLOT_SHIFT);
-        ++poll_failures;
-        if ((poll_failures == 1ULL) ||
-            ((poll_failures & 0x3ffULL) == 0ULL)) {
-            serial_write_string("m60-poll-return-diag: failures/stage=");
-            serial_write_u64(poll_failures);
-            serial_write_string("/");
-            serial_write_string(failure_stage);
-            serial_write_string(
-                " consumed/index/cycle/entry/control/param/status=");
-            serial_write_u64(m52_consumed_events(active));
-            serial_write_string("/");
-            serial_write_u64((uint64_t)event_index);
-            serial_write_string("/");
-            serial_write_u64(event_cycle ? 1ULL : 0ULL);
-            serial_write_string("/");
-            serial_write_u64(entry_cycle ? 1ULL : 0ULL);
-            serial_write_string("/");
-            serial_write_u64((uint64_t)control);
-            serial_write_string("/");
-            serial_write_u64(event_ring[event_index].parameter);
-            serial_write_string("/");
-            serial_write_u64((uint64_t)event_ring[event_index].status);
-            serial_write_string("\n");
-        }
-        if ((entry_cycle == event_cycle) &&
-            (type == XHCI_TRB_TYPE_TRANSFER_EVENT)) {
-            ++matching_failures;
-            if ((matching_failures == 1ULL) ||
-                ((matching_failures & 0x3ffULL) == 0ULL)) {
-                serial_write_string("m60-poll-diag: failures/stage=");
-                serial_write_u64(matching_failures);
-                serial_write_string("/");
-                serial_write_string(failure_stage);
-                serial_write_string(
-                    " consumed/index/cycle/control/param/status=");
-                serial_write_u64(m52_consumed_events(active));
-                serial_write_string("/");
-                serial_write_u64((uint64_t)event_index);
-                serial_write_string("/");
-                serial_write_u64(event_cycle ? 1ULL : 0ULL);
-                serial_write_string("/");
-                serial_write_u64((uint64_t)control);
-                serial_write_string("/");
-                serial_write_u64(event_ring[event_index].parameter);
-                serial_write_string("/");
-                serial_write_u64((uint64_t)event_ring[event_index].status);
-                serial_write_string(" event-slot/ep=");
-                serial_write_u64((uint64_t)slot);
-                serial_write_string("/");
-                serial_write_u64((uint64_t)endpoint);
-                serial_write_string("\n");
-            }
-        }
-    }
     *state = *active;
     if (mapping != NULL) {
         (void)vmm_unmap_mmio_region(mapping, M52_MMIO_WINDOW_SIZE);

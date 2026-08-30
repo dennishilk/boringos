@@ -266,5 +266,13 @@ bool vmm_unmap_mmio_region(volatile void *virtual_address, size_t length) {
         }
     }
 
+    /* Reclaim only the top span so lower live mappings cannot be overlapped. */
+    if (ok && (pages <= vmm_mmio_next_page) &&
+        (first_page == VMM_MMIO_WINDOW_BASE +
+         (uintptr_t)((vmm_mmio_next_page - pages) *
+                     (size_t)VMM_PAGE_SIZE))) {
+        vmm_mmio_next_page -= pages;
+    }
+
     return ok;
 }
