@@ -198,7 +198,6 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
 #if defined(BORING_M54_USB_ONLY_DESKTOP)
         if (m54_is_input_owner(process)) {
             struct xhci_state usb_state = {0};
-            x86_64_interrupts_enable();
             const bool serviced = xhci_service_hid_reports(&usb_state);
             static bool m54_initial_service_witness = false;
             if (!m54_initial_service_witness) {
@@ -232,6 +231,7 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
             if (serviced) {
                 serial_write_string("m54-desktop: real xHCI HID completion serviced\n");
             }
+            x86_64_interrupts_enable();
             task_yield();
             if (!serviced) {
                 /*
