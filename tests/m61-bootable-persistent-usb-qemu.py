@@ -100,6 +100,8 @@ def run_session(name, expect_existing):
         "-drive", f"if=none,id=m61usb,format=raw,file={IMAGE},cache=writeback",
         "-device", "qemu-xhci,id=xhci,p3=0",
         "-device", "usb-storage,bus=xhci.0,port=1,drive=m61usb,removable=on,bootindex=1",
+        "-device", "usb-kbd,bus=xhci.0,port=2,id=m61kbd",
+        "-device", "usb-tablet,bus=xhci.0,port=3,id=m61tablet",
         "-boot", "menu=off,strict=on",
         "-vga", "std", "-display", "none",
         "-serial", f"file:{serial}", "-monitor", "none", "-qmp", "stdio",
@@ -172,14 +174,6 @@ def run_session(name, expect_existing):
                                      "arguments": arguments,
                                      "result": result}) + "\n")
         return result
-
-    def attach_runtime_hid():
-        qmp("device_add", {"driver": "usb-kbd", "id": "m61kbd",
-                           "bus": "xhci.0", "port": "2"})
-        qmp("device_add", {"driver": "usb-tablet", "id": "m61tablet",
-                           "bus": "xhci.0", "port": "3"})
-        (out / "runtime-hid-attach.txt").write_text(
-            "USB keyboard/tablet attached after kernel serial witness and before xHCI init\n")
 
     def keyboard_transfer_state():
         trace = qemu_text()
@@ -356,7 +350,6 @@ def run_session(name, expect_existing):
 
     try:
         witness(kernel_version())
-        attach_runtime_hid()
         witness("m54-desktop: q35 i8042-free xHCI USB keyboard/tablet path online")
         witness("m61-root: Mass Storage 08/06/50 usb0 registered through M21")
         witness("m61-root: descriptor-derived Bulk OUT=")
