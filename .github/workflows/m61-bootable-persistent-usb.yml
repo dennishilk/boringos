@@ -49,7 +49,6 @@ jobs:
           rm -f "$boot_qmp"
           python3 tests/m61-limine-boot-drive.py "$boot_qmp" "$serial_path" >/dev/null 2>&1 &
           exec qemu-system-x86_64 "$@" \
-            -device "usb-kbd,id=m61liminekbd,bus=xhci.0,port=4" \
             -chardev "socket,id=m61bootqmp,path=$boot_qmp,server=on,wait=off" \
             -mon "chardev=m61bootqmp,mode=control,pretty=off" \
             -trace enable=usb_xhci_queue_event \
@@ -57,11 +56,13 @@ jobs:
           EOF
           chmod +x /tmp/qemu-m61
           if ! QEMU=/tmp/qemu-m61 python3 tests/m61-bootable-persistent-usb-qemu.py; then
-            echo '--- M61 focused QEMU Limine boot-drive evidence ---'
+            echo '--- M61 focused QEMU Limine no-input temporal evidence ---'
             cat build/m61-bootable-persistent-usb/first-boot/limine-boot-drive.log || true
-            echo '--- M61 focused QEMU pre/post-send-key framebuffer hashes ---'
-            sha256sum build/m61-bootable-persistent-usb/first-boot/limine-before-send-key.ppm \
-                      build/m61-bootable-persistent-usb/first-boot/limine-after-send-key.ppm || true
+            echo '--- M61 focused QEMU no-input framebuffer hashes ---'
+            sha256sum build/m61-bootable-persistent-usb/first-boot/limine-noinput-t0.ppm \
+                      build/m61-bootable-persistent-usb/first-boot/limine-noinput-t2.ppm \
+                      build/m61-bootable-persistent-usb/first-boot/limine-noinput-t4.ppm \
+                      build/m61-bootable-persistent-usb/first-boot/limine-noinput-t7.ppm || true
             echo '--- M61 focused QEMU xHCI diagnostic tail ---'
             tail -n 700 build/m61-bootable-persistent-usb/first-boot/qemu.log || true
             exit 1
@@ -70,11 +71,13 @@ jobs:
         if: ${{ failure() }}
         uses: actions/upload-artifact@v4
         with:
-          name: m61-prekernel-limine-diagnostic-${{ github.event.pull_request.head.sha || github.sha }}
+          name: m61-prekernel-limine-noinput-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             build/m61-bootable-persistent-usb/first-boot/limine-boot-drive.log
-            build/m61-bootable-persistent-usb/first-boot/limine-before-send-key.ppm
-            build/m61-bootable-persistent-usb/first-boot/limine-after-send-key.ppm
+            build/m61-bootable-persistent-usb/first-boot/limine-noinput-t0.ppm
+            build/m61-bootable-persistent-usb/first-boot/limine-noinput-t2.ppm
+            build/m61-bootable-persistent-usb/first-boot/limine-noinput-t4.ppm
+            build/m61-bootable-persistent-usb/first-boot/limine-noinput-t7.ppm
             build/m61-bootable-persistent-usb/first-boot/serial.log
             build/m61-bootable-persistent-usb/first-boot/qemu.log
           if-no-files-found: error

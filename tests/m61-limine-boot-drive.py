@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Drive and diagnose the selected Limine entry in headless M61 QEMU acceptance."""
+"""Capture a no-input temporal proof of the selected Limine M61 entry."""
+import hashlib
 import json
 import re
 import socket
@@ -10,12 +11,10 @@ from pathlib import Path
 
 BOOT_MARKER = 'BdsDxe: starting Boot0001'
 KERNEL_PATTERN = re.compile(r'BoringKernel 0\.0\.\d+-dev')
-TEMP_KBD_SLOT_PATTERN = re.compile(
-    r'usb_xhci_slot_address\s+slotid \d+, port (?:4|\S*\.4)(?:\s|$)')
 CONNECT_TIMEOUT = 30.0
 BOOT_DRIVE_TIMEOUT = 12.0
-KEY_HOLD_MILLISECONDS = 120
-SCREENSHOT_SETTLE_SECONDS = 0.75
+MENU_FIRST_VISIBLE_DELAY_SECONDS = 0.75
+CAPTURE_OFFSETS_SECONDS = (0.0, 2.0, 4.0, 7.0)
 
 
 def read_text(path):
@@ -27,6 +26,14 @@ def read_text(path):
 
 def timestamp():
     return datetime.now(timezone.utc).isoformat(timespec='milliseconds')
+
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def receive_message(stream):
@@ -95,65 +102,62 @@ def main():
         raise RuntimeError('usage: m61-limine-boot-drive.py <qmp-socket> <serial-log>')
     qmp_path = Path(sys.argv[1])
     serial_path = Path(sys.argv[2])
-    trace_path = serial_path.with_name('qemu.log')
     log_path = serial_path.with_name('limine-boot-drive.log')
-    before_path = serial_path.with_name('limine-before-send-key.ppm').resolve()
-    after_path = serial_path.with_name('limine-after-send-key.ppm').resolve()
 
     client = None
     stream = None
-    keyboard_attached = True
     try:
         client, stream = connect_qmp(qmp_path)
-        wait_for_text(trace_path, lambda text: TEMP_KBD_SLOT_PATTERN.search(text) is not None,
-                      CONNECT_TIMEOUT, 'firmware-addressed temporary Limine USB keyboard')
         wait_for_text(serial_path, lambda text: BOOT_MARKER in text,
                       CONNECT_TIMEOUT, 'OVMF Boot0001 start')
         log_path.write_text('')
-        record_line(log_path, 'temporary Limine USB keyboard pre-attached on xHCI port 4')
-        record_line(log_path, 'firmware addressed temporary Limine USB keyboard before Boot0001 drive')
         record_line(log_path, 'Boot0001 observed')
+        record_line(log_path, 'no-input temporal proof: no keyboard, mouse, input-send-event, or send-key')
 
-        time.sleep(SCREENSHOT_SETTLE_SECONDS)
-        before_result = execute(stream, 'screendump', {'filename': str(before_path)})
-        record_line(log_path, 'pre-send-key screendump captured: '
-                    f'{before_path.name}; QMP result={json.dumps(before_result, sort_keys=True)}')
+        time.sleep(MENU_FIRST_VISIBLE_DELAY_SECONDS)
+        t0 = time.monotonic()
+        first_kernel_seen = False
+        for index, target_offset in enumerate(CAPTURE_OFFSETS_SECONDS):
+            while True:
+                elapsed = time.monotonic() - t0
+                if elapsed >= target_offset:
+                    break
+                if not first_kernel_seen and KERNEL_PATTERN.search(read_text(serial_path)) is not None:
+                    first_kernel_seen = True
+                    record_line(log_path, f'first kernel witness: YES at T+{elapsed:.3f}s')
+                time.sleep(min(0.02, target_offset - elapsed))
 
-        send_result = execute(stream, 'send-key', {
-            'keys': [{'type': 'qcode', 'data': 'ret'}],
-            'hold-time': KEY_HOLD_MILLISECONDS,
-        })
-        record_line(log_path, 'send-key issued: qcode=ret; '
-                    f'hold-time={KEY_HOLD_MILLISECONDS}ms; '
-                    f'QMP result={json.dumps(send_result, sort_keys=True)}')
+            elapsed = time.monotonic() - t0
+            capture_path = serial_path.with_name(
+                f'limine-noinput-t{int(target_offset)}.ppm').resolve()
+            result = execute(stream, 'screendump', {'filename': str(capture_path)})
+            digest = sha256(capture_path)
+            record_line(log_path,
+                        f'capture {index}: target=T+{target_offset:.0f}s actual=T+{elapsed:.3f}s '
+                        f'file={capture_path.name} sha256={digest} '
+                        f'QMP result={json.dumps(result, sort_keys=True)}')
+            if not first_kernel_seen and KERNEL_PATTERN.search(read_text(serial_path)) is not None:
+                first_kernel_seen = True
+                record_line(log_path, f'first kernel witness: YES at T+{time.monotonic() - t0:.3f}s')
 
-        time.sleep(SCREENSHOT_SETTLE_SECONDS)
-        after_result = execute(stream, 'screendump', {'filename': str(after_path)})
-        record_line(log_path, 'post-send-key screendump captured: '
-                    f'{after_path.name}; QMP result={json.dumps(after_result, sort_keys=True)}')
+        if not first_kernel_seen:
+            deadline = t0 + BOOT_DRIVE_TIMEOUT
+            while time.monotonic() < deadline:
+                if KERNEL_PATTERN.search(read_text(serial_path)) is not None:
+                    first_kernel_seen = True
+                    record_line(log_path, f'first kernel witness: YES at T+{time.monotonic() - t0:.3f}s')
+                    break
+                time.sleep(0.05)
 
-        try:
-            wait_for_text(serial_path, lambda text: KERNEL_PATTERN.search(text) is not None,
-                          BOOT_DRIVE_TIMEOUT, 'BoringKernel serial witness after one send-key')
-        except RuntimeError:
-            record_line(log_path, 'first kernel witness: NO')
-            raise RuntimeError('one accepted QMP send-key did not reach BoringKernel serial witness')
+        if not first_kernel_seen:
+            record_line(log_path, f'first kernel witness: NO through T+{BOOT_DRIVE_TIMEOUT:.0f}s')
+            raise RuntimeError('no-input timeout:5 did not reach BoringKernel serial witness')
 
-        record_line(log_path, 'first kernel witness: YES')
-        execute(stream, 'device_del', {'id': 'm61liminekbd'})
-        keyboard_attached = False
-        time.sleep(0.1)
-        record_line(log_path, 'temporary Limine USB keyboard removed before runtime HID acceptance')
-        record_line(log_path, 'M61 Limine explicit-entry QEMU boot drive: PASS')
+        record_line(log_path, 'M61 Limine no-input temporal proof reached BoringKernel: PASS')
     except Exception as exc:
         record_line(log_path, f'FAIL: {exc}')
         raise
     finally:
-        if keyboard_attached and stream is not None:
-            try:
-                execute(stream, 'device_del', {'id': 'm61liminekbd'})
-            except Exception:
-                pass
         if stream is not None:
             stream.close()
         if client is not None:
