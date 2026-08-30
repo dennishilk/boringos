@@ -13,6 +13,7 @@ TEMP_KBD_SLOT_PATTERN = re.compile(
     r'usb_xhci_slot_address\s+slotid \d+, port (?:4|\S*\.4)(?:\s|$)')
 CONNECT_TIMEOUT = 30.0
 BOOT_DRIVE_TIMEOUT = 12.0
+KEY_HOLD_SECONDS = 0.12
 ENTER_INTERVAL = 0.4
 
 
@@ -112,11 +113,13 @@ def main():
             current = read_text(serial_path)
             if KERNEL_PATTERN.search(current):
                 break
-            execute(stream, 'input-send-event', {'events': [
-                key_event('ret', True), key_event('ret', False)]})
+            execute(stream, 'input-send-event', {'events': [key_event('ret', True)]})
+            time.sleep(KEY_HOLD_SECONDS)
+            execute(stream, 'input-send-event', {'events': [key_event('ret', False)]})
             attempts += 1
             with log_path.open('a') as record:
-                record.write(f'explicit Limine Return attempt {attempts}\n')
+                record.write(
+                    f'explicit Limine Return attempt {attempts}: held {KEY_HOLD_SECONDS:.2f}s\n')
             time.sleep(ENTER_INTERVAL)
         else:
             raise RuntimeError('explicit Limine Return did not reach BoringKernel serial witness')
