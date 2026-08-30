@@ -166,6 +166,7 @@ static void m61_trace_keyboard_state(const char *prefix) {
 
 static void m61_trace_failed_hid_service(void) {
     static uint64_t failures;
+    static bool traced_matching_head;
     const struct xhci_state *active = xhci_get_state();
     void *ring_virtual = NULL;
     uint64_t consumed;
@@ -186,7 +187,9 @@ static void m61_trace_failed_hid_service(void) {
     ring = (volatile struct xhci_trb *)ring_virtual;
     control = ring[index].control;
     entry_cycle = (control & M61_TRACE_TRB_CYCLE) != 0U;
-    if ((entry_cycle == cycle) || ((failures & 0x3ffULL) == 0ULL)) {
+    if ((!traced_matching_head && (entry_cycle == cycle)) ||
+        ((failures & 0x3ffULL) == 0ULL)) {
+        if (entry_cycle == cycle) { traced_matching_head = true; }
         serial_write_string("m61-hid-stall: failures/consumed/index/cycle/entry/control/param/status=");
         serial_write_u64(failures); serial_write_string("/");
         serial_write_u64(consumed); serial_write_string("/");
