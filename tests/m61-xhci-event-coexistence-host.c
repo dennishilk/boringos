@@ -16,12 +16,25 @@
 #define TEST_HID_TRB 0x4010ULL
 #define TEST_HID_REQUESTED 8U
 
+struct event_cursor {
+    uint16_t index;
+    bool cycle;
+};
+
 static int failures;
 
 static void expect(bool condition, const char *name) {
     if (!condition) {
         fprintf(stderr, "M61 event coexistence host FAILED: %s\n", name);
         ++failures;
+    }
+}
+
+static void commit_cursor(struct event_cursor *cursor) {
+    ++cursor->index;
+    if (cursor->index == XHCI_EVENT_RING_TRBS) {
+        cursor->index = 0U;
+        cursor->cycle = !cursor->cycle;
     }
 }
 
@@ -58,6 +71,9 @@ int main(void) {
     enum xhci_shared_transfer_owner owner;
     uint32_t actual = 0U;
     bool short_packet = false;
+    struct event_cursor cursor;
+    uint32_t hid_events;
+    uint32_t storage_events;
 
     state.addressed_count = 1U;
     hid->slot_id = TEST_HID_SLOT;
@@ -70,6 +86,7 @@ int main(void) {
     hid->hid_runtime[0].transfer_outstanding = true;
     hid->hid_runtime[0].expected_trb_physical = TEST_HID_TRB;
 
+    /* Existing inverse ordering: HID first, then expected Storage. */
     event = transfer_event(TEST_HID_SLOT, TEST_HID_ENDPOINT, TEST_HID_TRB,
                            XHCI_COMPLETION_SUCCESS, 0U);
     owner = classify(&state, &event, &actual, &short_packet);
@@ -85,6 +102,71 @@ int main(void) {
            "expected Storage completion accepted after HID");
     expect(actual == TEST_STORAGE_REQUESTED && !short_packet,
            "Storage completion length preserved");
+
+    /* Missing regression: Storage is at the shared ring head, HID runs first. */
+    cursor.index = 255U;
+    cursor.cycle = true;
+    hid_events = 17U;
+    storage_events = 23U;
+    event = transfer_event(TEST_STORAGE_SLOT, TEST_STORAGE_ENDPOINT,
+                           TEST_STORAGE_TRB, XHCI_COMPLETION_SUCCESS, 0U);
+    owner = classify(&state, &event, &actual, &short_packet);
+    expect(owner == XHCI_SHARED_TRANSFER_STORAGE,
+           "Storage-first ring head is uniquely Storage-owned");
+
+    /* HID service must yield without physical dequeue or logical accounting. */
+    if (owner == XHCI_SHARED_TRANSFER_HID) {
+        ++hid_events;
+        commit_cursor(&cursor);
+    }
+    expect(cursor.index == 255U && cursor.cycle,
+           "HID does not dequeue Storage-owned ring head");
+    expect(hid_events == 17U,
+           "HID transfer_events unchanged for Storage-owned ring head");
+    expect(storage_events == 23U,
+           "Storage transfer_events unchanged while HID yields");
+
+    /* Storage consumes that exact event once, then physical dequeue commits. */
+    owner = classify(&state, &event, &actual, &short_packet);
+    if (owner == XHCI_SHARED_TRANSFER_STORAGE) {
+        ++storage_events;
+        commit_cursor(&cursor);
+    }
+    expect(storage_events == 24U,
+           "Storage transfer_events increments exactly once");
+    expect(hid_events == 17U,
+           "Storage consume does not forge HID accounting");
+    expect(cursor.index == 0U && !cursor.cycle,
+           "successful Storage consume commits 255-to-0 wrap exactly once");
+
+    /* Also model HID-first plus Storage-second across the same wrap boundary. */
+    cursor.index = 254U;
+    cursor.cycle = true;
+    hid_events = 31U;
+    storage_events = 47U;
+    event = transfer_event(TEST_HID_SLOT, TEST_HID_ENDPOINT, TEST_HID_TRB,
+                           XHCI_COMPLETION_SUCCESS, 0U);
+    owner = classify(&state, &event, &actual, &short_packet);
+    if (owner == XHCI_SHARED_TRANSFER_HID) {
+        ++hid_events;
+        commit_cursor(&cursor);
+    }
+    expect(hid_events == 32U && storage_events == 47U,
+           "Storage wait consumes/rearms HID exactly once");
+    expect(cursor.index == 255U && cursor.cycle,
+           "HID-first consume advances to index 255");
+
+    event = transfer_event(TEST_STORAGE_SLOT, TEST_STORAGE_ENDPOINT,
+                           TEST_STORAGE_TRB, XHCI_COMPLETION_SUCCESS, 0U);
+    owner = classify(&state, &event, &actual, &short_packet);
+    if (owner == XHCI_SHARED_TRANSFER_STORAGE) {
+        ++storage_events;
+        commit_cursor(&cursor);
+    }
+    expect(storage_events == 48U && hid_events == 32U,
+           "expected Storage completion consumed exactly once after HID");
+    expect(cursor.index == 0U && !cursor.cycle,
+           "HID-then-Storage ordering wraps 255-to-0 coherently");
 
     event = transfer_event(TEST_HID_SLOT, TEST_HID_ENDPOINT,
                            TEST_HID_TRB + XHCI_TRB_SIZE,
@@ -114,7 +196,9 @@ int main(void) {
            "malformed Storage residual rejected");
 
     if (failures != 0) { return 1; }
+    puts("M61 Storage-first HID-yield Event Ring accounting: PASS");
     puts("M61 HID-before-Storage shared Event Ring ordering: PASS");
+    puts("M61 Event Ring index 255-to-0 accounting wrap: PASS");
     puts("M61 unknown/malformed shared Transfer Events: REJECTED");
     return 0;
 }
