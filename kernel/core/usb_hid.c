@@ -459,7 +459,40 @@ out:
         static bool traced_poll_failure;
         const uint32_t control = event_ring[event_index].control;
         const bool entry_cycle = (control & M52_TRB_CYCLE) != 0U;
-        if (!traced_poll_failure && (entry_cycle == event_cycle)) {
+        const uint8_t type = (uint8_t)(
+            (control >> M52_TRB_TYPE_SHIFT) & M52_TRB_TYPE_MASK);
+        const uint8_t endpoint = (uint8_t)(
+            (control >> M52_EVENT_ENDPOINT_SHIFT) &
+            M52_EVENT_ENDPOINT_MASK);
+        const uint8_t slot =
+            (uint8_t)(control >> M52_EVENT_SLOT_SHIFT);
+        bool published_match = false;
+        uint8_t device_index;
+        for (device_index = 0U;
+             !published_match && (device_index < active->addressed_count);
+             ++device_index) {
+            const struct xhci_addressed_device *device =
+                &active->addressed[device_index];
+            uint8_t endpoint_index;
+            for (endpoint_index = 0U;
+                 endpoint_index < device->hid_configuration.endpoint_count;
+                 ++endpoint_index) {
+                const struct xhci_hid_endpoint_runtime *runtime =
+                    &device->hid_runtime[endpoint_index];
+                const struct xhci_hid_endpoint_descriptor *descriptor =
+                    &device->hid_configuration.endpoints[endpoint_index];
+                if (runtime->transfer_outstanding &&
+                    (slot == device->slot_id) &&
+                    (endpoint == descriptor->endpoint_id) &&
+                    (event_ring[event_index].parameter ==
+                     runtime->expected_trb_physical)) {
+                    published_match = true;
+                    break;
+                }
+            }
+        }
+        if (!traced_poll_failure && (entry_cycle == event_cycle) &&
+            (type == XHCI_TRB_TYPE_TRANSFER_EVENT) && published_match) {
             traced_poll_failure = true;
             serial_write_string("m60-poll-diag: stage=");
             serial_write_string(failure_stage);
