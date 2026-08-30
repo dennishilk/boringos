@@ -227,24 +227,42 @@ static bool m60_rearm_hid_endpoints(struct xhci_state *active,
 }
 
 static bool m60_consume_hid_event_mapped(struct xhci_state *active,
-                                          volatile uint8_t *mmio,
                                           const struct xhci_trb *event,
-                                          bool rearm_after_completion,
                                           uint32_t *completed) {
     uint32_t before;
-    if ((active == NULL) || (mmio == NULL) || (event == NULL) ||
-        (completed == NULL)) {
+    if ((active == NULL) || (event == NULL) || (completed == NULL)) {
         return false;
     }
     before = *completed;
-    if (!m52_complete_event(active, event, completed) ||
-        (*completed != before + 1U)) {
+    return m52_complete_event(active, event, completed) &&
+           (*completed == before + 1U);
+}
+
+bool xhci_rearm_hid_reports(struct xhci_state *state) {
+    const struct xhci_state *published;
+    struct xhci_state *active;
+    volatile void *mapping = NULL;
+    bool success = false;
+
+    if (state == NULL) { return false; }
+    published = xhci_get_state();
+    if ((published == NULL) || !published->controller_running ||
+        !state->controller_running ||
+        (state->mmio_physical != published->mmio_physical) ||
+        (state->event_ring_physical != published->event_ring_physical) ||
+        (state->addressed_count != published->addressed_count) ||
+        !vmm_map_mmio_region(published->mmio_physical,
+                             M52_MMIO_WINDOW_SIZE, &mapping)) {
+        if (mapping != NULL) {
+            (void)vmm_unmap_mmio_region(mapping, M52_MMIO_WINDOW_SIZE);
+        }
         return false;
     }
-    if (rearm_after_completion && !m60_rearm_hid_endpoints(active, mmio)) {
-        return false;
-    }
-    return true;
+    active = (struct xhci_state *)(uintptr_t)published;
+    success = m60_rearm_hid_endpoints(active, (volatile uint8_t *)mapping);
+    *state = *active;
+    (void)vmm_unmap_mmio_region(mapping, M52_MMIO_WINDOW_SIZE);
+    return success;
 }
 
 bool xhci_consume_hid_transfer_event(struct xhci_state *state,
@@ -256,6 +274,7 @@ bool xhci_consume_hid_transfer_event(struct xhci_state *state,
     uint32_t completed = 0U;
     bool success = false;
 
+    (void)rearm_after_completion;
     if ((state == NULL) || (event == NULL)) { return false; }
     published = xhci_get_state();
     if ((published == NULL) || !published->controller_running ||
@@ -272,9 +291,8 @@ bool xhci_consume_hid_transfer_event(struct xhci_state *state,
     }
 
     active = (struct xhci_state *)(uintptr_t)published;
-    success = m60_consume_hid_event_mapped(
-        active, (volatile uint8_t *)mapping, event,
-        rearm_after_completion, &completed) && (completed == 1U);
+    success = m60_consume_hid_event_mapped(active, event, &completed) &&
+              (completed == 1U);
     *state = *active;
     (void)vmm_unmap_mmio_region(mapping, M52_MMIO_WINDOW_SIZE);
     return success;
@@ -330,6 +348,7 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
         uint8_t type;
         uint16_t next_index;
         bool next_cycle;
+        bool should_rearm;
         const uint32_t interrupter = active->capabilities.runtime_offset +
                                      M52_RUNTIME_INTERRUPTER0;
 
@@ -343,11 +362,7 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
         type = (uint8_t)((event.control >> M52_TRB_TYPE_SHIFT) &
                          M52_TRB_TYPE_MASK);
         if ((type != XHCI_TRB_TYPE_TRANSFER_EVENT) ||
-            !m60_consume_hid_event_mapped(
-                active, mmio, &event,
-                (completed + 1U < completion_goal) ||
-                    rearm_after_completion,
-                &completed)) {
+            !m60_consume_hid_event_mapped(active, &event, &completed)) {
             goto out;
         }
         next_index = (uint16_t)(event_index + 1U);
@@ -363,6 +378,10 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
              ((uint64_t)next_index * XHCI_TRB_SIZE)) | (1ULL << 3U));
         event_index = next_index;
         event_cycle = next_cycle;
+        should_rearm = (completed < completion_goal) || rearm_after_completion;
+        if (should_rearm) {
+            (void)m60_rearm_hid_endpoints(active, mmio);
+        }
     }
 
     success = completed >= completion_goal;
