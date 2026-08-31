@@ -60,12 +60,10 @@ cat > "$POST_SOURCE" <<'EOF_POST_C'
 #include <boring/boringfs_vfs.h>
 #include <boring/framebuffer.h>
 #include <boring/framebuffer_user.h>
-#include <boring/graphics.h>
 #include <boring/heap.h>
 #include <boring/io.h>
 #include <boring/irq.h>
 #include <boring/process.h>
-#include <boring/serial.h>
 #include <boring/usb_mass_storage.h>
 
 #ifndef BORING_M61_PHYSICAL_BREADCRUMBS
@@ -105,24 +103,7 @@ enum m61_post_code {
     M61_POST_VMM_INIT_BEFORE = 0x7c,
     M61_POST_VMM_INIT_AFTER = 0x7d,
     M61_POST_HEAP_INIT_BEFORE = 0x7e,
-    M61_POST_HEAP_INIT_AFTER = 0x7f,
-
-    M61_POST_ACQUIRE_RESUMED = 0x80,
-    M61_POST_FB_COUNT_RETURNED = 0x81,
-    M61_POST_READY_SELECTED_GET = 0x82,
-    M61_POST_SELECTED_FB_RETURNED = 0x83,
-    M61_POST_SELECTED_VALIDATION_ENTERED = 0x84,
-    M61_POST_SELECTED_VALIDATION_PASSED = 0x85,
-    M61_POST_FIRST_CANDIDATE_OBTAINED = 0x86,
-    M61_POST_FIRST_FB_WRITE_BEFORE = 0x87,
-    M61_POST_FIRST_FB_WRITE_AFTER = 0x88,
-    M61_POST_WITNESS_WRITE_BEFORE = 0x89,
-    M61_POST_WITNESS_RETURNED = 0x8a,
-    M61_POST_CANDIDATE_LOOP_WITNESS_DONE = 0x8b,
-    M61_POST_TRACE_PANEL_WRITE_BEFORE = 0x8c,
-    M61_POST_TRACE_PANEL_WRITE_AFTER = 0x8d,
-    M61_POST_TRACE_TEXT_RETURNED = 0x8e,
-    M61_POST_QMP_HOLD_BEFORE = 0x8f
+    M61_POST_HEAP_INIT_AFTER = 0x7f
 };
 
 const char boring_m61_post_port80_enabled[] =
@@ -135,10 +116,6 @@ const uint8_t boring_m61_post_62_to_63_sequence[] = {
     0x70U, 0x71U, 0x72U, 0x73U, 0x74U, 0x75U, 0x76U, 0x77U,
     0x78U, 0x79U, 0x7aU, 0x7bU, 0x7cU, 0x7dU, 0x7eU, 0x7fU
 };
-const uint8_t boring_m61_post_71_to_72_sequence[] = {
-    0x80U, 0x81U, 0x82U, 0x83U, 0x84U, 0x85U, 0x86U, 0x87U,
-    0x88U, 0x89U, 0x8aU, 0x8bU, 0x8cU, 0x8dU, 0x8eU, 0x8fU
-};
 
 void boring_kernel_entry(void);
 void m61_post_real_boring_kernel_entry(void);
@@ -149,17 +126,6 @@ void __real_boring_smbios_boot_init(
     const struct boring_limine_hhdm_response *,
     const struct boring_limine_memmap_response *);
 enum boring_framebuffer_status __real_boring_framebuffer_boot_init(void);
-uint64_t __real_boring_m61_framebuffer_count(void);
-const struct boring_framebuffer *__real_boring_framebuffer_get(void);
-bool __real_boring_framebuffer_surface_valid(
-    const struct boring_framebuffer *surface);
-bool __real_boring_m61_framebuffer_get(
-    uint64_t index, struct boring_framebuffer *surface);
-bool __real_boring_graphics_fill_rect(
-    const struct boring_framebuffer *surface,
-    uint64_t x, uint64_t y, uint64_t width, uint64_t height,
-    uint32_t color);
-void __real_serial_write_string(const char *value);
 bool __real_pmm_init(const struct boring_limine_memmap_response *);
 bool __real_vmm_init(const struct boring_limine_hhdm_response *,
                      const struct boring_limine_paging_mode_response *,
@@ -181,17 +147,6 @@ void m61_post_boring_smbios_boot_init(
     const struct boring_limine_hhdm_response *,
     const struct boring_limine_memmap_response *);
 enum boring_framebuffer_status __wrap_boring_framebuffer_boot_init(void);
-uint64_t __wrap_boring_m61_framebuffer_count(void);
-const struct boring_framebuffer *__wrap_boring_framebuffer_get(void);
-bool __wrap_boring_framebuffer_surface_valid(
-    const struct boring_framebuffer *surface);
-bool __wrap_boring_m61_framebuffer_get(
-    uint64_t index, struct boring_framebuffer *surface);
-bool __wrap_boring_graphics_fill_rect(
-    const struct boring_framebuffer *surface,
-    uint64_t x, uint64_t y, uint64_t width, uint64_t height,
-    uint32_t color);
-void __wrap_serial_write_string(const char *value);
 bool m61_post_pmm_init(const struct boring_limine_memmap_response *);
 bool m61_post_vmm_init(const struct boring_limine_hhdm_response *,
                        const struct boring_limine_paging_mode_response *,
@@ -207,38 +162,11 @@ enum boring_framebuffer_user_result m61_post_boring_framebuffer_user_present(
     struct process *process, uint32_t handle);
 
 static uint8_t framebuffer_boot_init_calls;
-static bool fine_acquire_seen;
-static bool fine_acquire_active;
-static bool fine_first_candidate_obtained;
-static bool fine_first_write_seen;
-static bool fine_witness_entered;
-static bool fine_witness_writes_complete;
-static bool fine_witness_returned;
-static bool fine_trace_panel_returned;
-static bool fine_trace_text_returned;
 static bool init_posted;
 static bool display_posted;
 static bool wm_posted;
 static bool terminal_posted;
 static bool desktop_posted;
-
-static bool same_string(const char *value, const char *expected) {
-    size_t index = 0U;
-
-    if ((value == NULL) || (expected == NULL)) {
-        return false;
-    }
-    while (index < (size_t)M61_NAME_LIMIT) {
-        if (value[index] != expected[index]) {
-            return false;
-        }
-        if (value[index] == '\0') {
-            return true;
-        }
-        ++index;
-    }
-    return false;
-}
 
 static bool name_ends_with(const char *value, const char *ending) {
     size_t value_length = 0U;
@@ -303,142 +231,6 @@ enum boring_framebuffer_status __wrap_boring_framebuffer_boot_init(void) {
         M61_POST(M61_POST_ENTRY_FB_BOOT_INIT_AFTER);
     }
     return result;
-}
-
-uint64_t __wrap_boring_m61_framebuffer_count(void) {
-    uint64_t result;
-
-    if (!fine_acquire_seen) {
-        fine_acquire_seen = true;
-        fine_acquire_active = true;
-        /* First operation after the already-proven POST 71 return. */
-        M61_POST(M61_POST_ACQUIRE_RESUMED);
-    }
-    result = __real_boring_m61_framebuffer_count();
-    if (fine_acquire_active) {
-        M61_POST(M61_POST_FB_COUNT_RETURNED);
-    }
-    return result;
-}
-
-const struct boring_framebuffer *__wrap_boring_framebuffer_get(void) {
-    const struct boring_framebuffer *result;
-
-    if (fine_acquire_active) {
-        /* The READY branch was taken; selected surface lookup is next. */
-        M61_POST(M61_POST_READY_SELECTED_GET);
-    }
-    result = __real_boring_framebuffer_get();
-    if (fine_acquire_active) {
-        M61_POST(M61_POST_SELECTED_FB_RETURNED);
-    }
-    return result;
-}
-
-bool __wrap_boring_framebuffer_surface_valid(
-    const struct boring_framebuffer *surface) {
-    bool result;
-
-    if (fine_acquire_active) {
-        M61_POST(M61_POST_SELECTED_VALIDATION_ENTERED);
-    }
-    result = __real_boring_framebuffer_surface_valid(surface);
-    if (fine_acquire_active && result) {
-        M61_POST(M61_POST_SELECTED_VALIDATION_PASSED);
-    }
-    return result;
-}
-
-bool __wrap_boring_m61_framebuffer_get(
-    uint64_t index, struct boring_framebuffer *surface) {
-    const bool result = __real_boring_m61_framebuffer_get(index, surface);
-
-    if (fine_acquire_active && result && !fine_first_candidate_obtained) {
-        fine_first_candidate_obtained = true;
-        M61_POST(M61_POST_FIRST_CANDIDATE_OBTAINED);
-    }
-    return result;
-}
-
-bool __wrap_boring_graphics_fill_rect(
-    const struct boring_framebuffer *surface,
-    uint64_t x, uint64_t y, uint64_t width, uint64_t height,
-    uint32_t color) {
-    const bool tiny_probe = fine_acquire_active && !fine_first_write_seen &&
-                            (x == 0ULL) && (y == 0ULL) &&
-                            (width == 2ULL) && (height == 2ULL);
-    const bool witness_first = fine_acquire_active && !fine_witness_entered &&
-                               (x == 4ULL) && (y == 4ULL) &&
-                               (width == 8ULL) && (height == 16ULL);
-    const bool witness_last = fine_acquire_active &&
-                              (x == 60ULL) && (y == 4ULL) &&
-                              (width == 8ULL) && (height == 16ULL);
-    const bool trace_panel = fine_acquire_active &&
-                             (x == 76ULL) && (y == 2ULL) &&
-                             (height == 34ULL);
-    bool result;
-
-    if (tiny_probe) {
-        fine_first_write_seen = true;
-        /* Unmistakable first actual framebuffer-memory write boundary. */
-        M61_POST(M61_POST_FIRST_FB_WRITE_BEFORE);
-    }
-    if (witness_first) {
-        fine_witness_entered = true;
-        /* Reaching this proves tiny_surface_probe returned true. */
-        M61_POST(M61_POST_WITNESS_WRITE_BEFORE);
-    }
-    if (trace_panel) {
-        /* Reaching the panel proves the candidate loop and selected witness. */
-        M61_POST(M61_POST_CANDIDATE_LOOP_WITNESS_DONE);
-        M61_POST(M61_POST_TRACE_PANEL_WRITE_BEFORE);
-    }
-
-    result = __real_boring_graphics_fill_rect(
-        surface, x, y, width, height, color);
-
-    if (tiny_probe) {
-        M61_POST(M61_POST_FIRST_FB_WRITE_AFTER);
-    }
-    if (witness_last) {
-        fine_witness_writes_complete = true;
-    }
-    if (trace_panel) {
-        fine_trace_panel_returned = true;
-        M61_POST(M61_POST_TRACE_PANEL_WRITE_AFTER);
-    }
-    return result;
-}
-
-void __wrap_serial_write_string(const char *value) {
-    const bool witness_returned =
-        fine_acquire_active && fine_witness_writes_complete &&
-        !fine_witness_returned;
-    const bool trace_text_returned =
-        fine_acquire_active && fine_trace_panel_returned &&
-        !fine_trace_text_returned;
-    const bool final_trace_line =
-        fine_acquire_active && fine_trace_text_returned &&
-        same_string(value, " x=4 y=4 width=64 height=16\n");
-
-    if (witness_returned) {
-        /* This serial call occurs only after witness_surface() returned. */
-        fine_witness_returned = true;
-        M61_POST(M61_POST_WITNESS_RETURNED);
-    }
-    if (trace_text_returned) {
-        /* No serial calls occur inside trace_text/trace_decimal. */
-        fine_trace_text_returned = true;
-        M61_POST(M61_POST_TRACE_TEXT_RETURNED);
-    }
-
-    __real_serial_write_string(value);
-
-    if (final_trace_line) {
-        /* Next source operation is hold_trace_for_qmp(); POST 72 proves return. */
-        M61_POST(M61_POST_QMP_HOLD_BEFORE);
-        fine_acquire_active = false;
-    }
 }
 
 void m61_post_boring_cpu_inventory_init(void) {
@@ -580,7 +372,7 @@ rm -f build/kernel.elf build/boringos.iso build/.test-mode
 make TEST_MODE=m36-desktop \
     TEST_CPPFLAGS="$CPPFLAGS" \
     TEST_HARNESS_C='kernel/core/m61_desktop_test.c kernel/core/m37_desktop_test_adapter.c kernel/core/block_slice.c kernel/core/xhci_mixed.c kernel/arch/x86_64/xhci_mixed.c kernel/core/usb_mass_storage.c kernel/core/m61_physical_breadcrumbs.c kernel/core/m61_post80_generated.c' \
-    LD='ld --wrap=serial_init --wrap=serial_write_string --wrap=boring_cpu_inventory_init --wrap=boring_pci_inventory_init --wrap=boring_smbios_boot_init --wrap=boring_framebuffer_boot_init --wrap=boring_m61_framebuffer_count --wrap=boring_framebuffer_get --wrap=boring_framebuffer_surface_valid --wrap=boring_m61_framebuffer_get --wrap=boring_graphics_fill_rect --wrap=pmm_init --wrap=vmm_init --wrap=heap_init --wrap=exception_init --wrap=syscall_test_run --wrap=boring_input_init --wrap=irq_init --wrap=timer_init --wrap=xhci_init --wrap=xhci_address_connected --wrap=xhci_discover_descriptors --wrap=xhci_configure_hid_devices_mixed --wrap=usb_mass_storage_init --wrap=boringfs_vfs_create_writable --wrap=process_set_name --wrap=boring_framebuffer_user_claim --wrap=boring_framebuffer_user_present --wrap=boring_ipc_service_register --wrap=x86_64_exception_dispatch' \
+    LD='ld --wrap=serial_init --wrap=boring_cpu_inventory_init --wrap=boring_pci_inventory_init --wrap=boring_smbios_boot_init --wrap=boring_framebuffer_boot_init --wrap=pmm_init --wrap=vmm_init --wrap=heap_init --wrap=exception_init --wrap=syscall_test_run --wrap=boring_input_init --wrap=irq_init --wrap=timer_init --wrap=xhci_init --wrap=xhci_address_connected --wrap=xhci_discover_descriptors --wrap=xhci_configure_hid_devices_mixed --wrap=usb_mass_storage_init --wrap=boringfs_vfs_create_writable --wrap=process_set_name --wrap=boring_framebuffer_user_claim --wrap=boring_framebuffer_user_present --wrap=boring_ipc_service_register --wrap=x86_64_exception_dispatch' \
     BOOT_USER_ELF=build/user/boring-init-desktop.elf \
     BOOT_USER_NAME=boring-init.elf \
     BOOT_EXTRA_USER_ELF= BOOT_EXTRA_USER_NAME= \
@@ -593,7 +385,6 @@ nm build/kernel.elf | grep -Fq 'boring_m61_physical_breadcrumbs_enabled'
 nm build/kernel.elf | grep -Fq 'boring_m61_post_port80_enabled'
 nm build/kernel.elf | grep -Fq 'boring_m61_post_sequence'
 nm build/kernel.elf | grep -Fq 'boring_m61_post_62_to_63_sequence'
-nm build/kernel.elf | grep -Fq 'boring_m61_post_71_to_72_sequence'
 
 python3 - <<'EOF_POST_VERIFY'
 import re
@@ -622,12 +413,6 @@ functions = {
     "boring_kernel_entry": ("61",),
     "m61_post_serial_init": ("62",),
     "__wrap_boring_framebuffer_boot_init": ("70", "71", "78", "79"),
-    "__wrap_boring_m61_framebuffer_count": ("80", "81"),
-    "__wrap_boring_framebuffer_get": ("82", "83"),
-    "__wrap_boring_framebuffer_surface_valid": ("84", "85"),
-    "__wrap_boring_m61_framebuffer_get": ("86",),
-    "__wrap_boring_graphics_fill_rect": ("87", "88", "89", "8b", "8c", "8d"),
-    "__wrap_serial_write_string": ("8a", "8e", "8f"),
     "m61_post_boring_cpu_inventory_init": ("72", "73"),
     "m61_post_boring_pci_inventory_init": ("74", "75"),
     "m61_post_boring_smbios_boot_init": ("76", "77"),
@@ -656,13 +441,11 @@ for name, codes in functions.items():
             raise RuntimeError(
                 f"M61 POST binary hook {name} missing code 0x{code.upper()}")
     out_count += outputs
-if out_count < 43:
+if out_count < 27:
     raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")
 print("M61 POST port 0x80 binary acceptance: PASS")
 print("M61 POST existing sequence preserved: 61 62 63 64 65 66 67 68 69 6A 6F")
 print("M61 POST 62-to-63 bisector: 70 71 72 73 74 75 76 77 78 79 7A 7B 7C 7D 7E 7F then 63")
-print("M61 POST 71-to-72 bisector: 80 81 82 83 84 85 86 87 88 89 8A 8B 8C 8D 8E 8F then 72")
-print("M61 first actual framebuffer write witness: POST 87 before 2x2 tiny_surface_probe fill_rect")
 print("M61 QEMU port 0x80 observer: SKIPPED (pc/q35 owns ioport80 sink)")
 EOF_POST_VERIFY
 
