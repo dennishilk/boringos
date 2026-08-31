@@ -296,6 +296,11 @@ replace_once(
     "binary verifier wrappers")
 
 replace_once(
+    '        if re.search(rf"\\$0x0*{code}\\b", body, re.IGNORECASE) is None:\n',
+    '        if re.search(rf"\\$0x(?:0*|f+){code}\\b", body, re.IGNORECASE) is None:\n',
+    "accept sign-extended POST immediates")
+
+replace_once(
     "if out_count < 27:\n",
     "if out_count < 44:\n",
     "binary verifier minimum")
