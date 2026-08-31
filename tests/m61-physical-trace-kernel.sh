@@ -234,7 +234,7 @@ enum boring_framebuffer_status __wrap_boring_framebuffer_boot_init(void) {
 }
 
 void m61_post_boring_cpu_inventory_init(void) {
-    /* Reaching this proves the immediate M61 framebuffer probe/witness returned. */
+    /* Reaching this proves metadata-only framebuffer acquisition returned. */
     M61_POST(M61_POST_CPU_INVENTORY_BEFORE);
     __real_boring_cpu_inventory_init();
     M61_POST(M61_POST_CPU_INVENTORY_AFTER);
@@ -453,6 +453,6 @@ if [ "${M61_EARLY_FAULT_TEST:-0}" = 1 ]; then
     nm build/kernel.elf | grep -Fq 'boring_m61_early_fault_test_enabled'
     printf '%s\n' 'M61 controlled early-fault test kernel: ENABLED'
 else
-    printf '%s\n' 'M61 safe direct framebuffer boot trace: ENABLED'
+    printf '%s\n' 'M61 safe native boot console: ENABLED'
 fi
 printf '%s\n' 'M61 diagnostic POST port 0x80 witness: ENABLED'

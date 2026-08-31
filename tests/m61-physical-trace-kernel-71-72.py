@@ -40,117 +40,14 @@ trace_replace_once(
     "    x86_64_out8((uint16_t)0x80U, (uint8_t)0x83U);\n",
     "direct 82/83 getter boundary")
 
-# The physical 87 result proved that the diagnostic framebuffer writes are
-# themselves perturbing boot. Remove every acquire_framebuffers write from the
-# generated physical candidate instead of replacing it with a different write.
-trace_replace_once(
-    '''static bool tiny_surface_probe(const struct boring_framebuffer *surface) {
-    bool wrote;
-
-    framebuffer_write_active = true;
-    wrote = boring_graphics_fill_rect(
-        surface, 0ULL, 0ULL, 2ULL, 2ULL,
-        boring_color_pack(surface, 255U, 255U, 255U));
-    framebuffer_write_active = false;
-    return wrote;
-}
-
-''',
-    "",
-    "remove tiny framebuffer write helper")
-trace_replace_once(
-    '''static uint64_t read_tsc(void) {
-    uint32_t low;
-    uint32_t high;
-
-    __asm__ volatile("rdtsc" : "=a"(low), "=d"(high));
-    return ((uint64_t)high << 32U) | (uint64_t)low;
-}
-
-static void hold_trace_for_qmp(void) {
-    const uint64_t start = read_tsc();
-
-    while ((read_tsc() - start) < TRACE_TSC_HOLD_CYCLES) {
-        x86_64_pause();
-    }
-}
-
-''',
-    "",
-    "remove obsolete diagnostic trace hold")
-trace_replace_once(
-    "    bool selected_witness = false;\n",
-    "",
-    "remove selected witness state")
-trace_replace_once(
-    '''        serial_surface(index, &candidate, selected);
-        if (!tiny_surface_probe(&candidate)) {
-            serial_write_string("M61 FRAMEBUFFER TINY PROBE FAILED index=");
-            serial_write_u64(index);
-            serial_write_string("\\n");
-            continue;
-        }
-        witness = witness_surface(&candidate);
-        serial_write_string("M61 FRAMEBUFFER WITNESS index=");
-        serial_write_u64(index);
-        serial_write_string(" selected=");
-        serial_write_string(selected ? "yes" : "no");
-        serial_write_string(" x=4 y=4 width=64 height=16 result=");
-        serial_write_string(witness ? "pass\\n" : "fail\\n");
-        if (selected) {
-            selected_witness = witness;
-        }
-''',
-    '''        serial_surface(index, &candidate, selected);
-''',
-    "remove candidate tiny/witness writes")
-trace_replace_once(
-    "        bool witness;\n",
-    "",
-    "remove candidate witness local")
-trace_replace_once(
-    '''    if (!selected_witness) {
-        serial_write_string("M61 FRAMEBUFFER TRACE SELECTED WITNESS FAILED\\n");
-        return;
-    }
-
-    framebuffer_writes_proven = true;
-    framebuffer_write_active = true;
-    (void)boring_graphics_fill_rect(
-        fb, 76ULL, 2ULL,
-        fb->width > 80ULL ?
-            ((fb->width - 80ULL < 320ULL) ? fb->width - 80ULL : 320ULL) :
-            0ULL,
-        34ULL, trace_color(12U, 12U, 16U));
-    trace_text(TRACE_TEXT_X, 8ULL, "BORINGOS PHYSICAL BOOT TRACE",
-               trace_color(96U, 224U, 255U), TRACE_SCALE);
-    trace_text(TRACE_TEXT_X, 22ULL, "FB", trace_color(180U, 180U, 190U), 1U);
-    (void)trace_decimal(TRACE_TEXT_X + 12ULL, 22ULL, fb->width,
-                        trace_color(180U, 180U, 190U), 1U);
-    framebuffer_write_active = false;
-
-    serial_write_string("M61 FRAMEBUFFER TRACE READY index=");
-    serial_write_u64(selected_index);
-    serial_write_string(" x=4 y=4 width=64 height=16\\n");
-    hold_trace_for_qmp();
-''',
-    '''    serial_write_string("M61 FRAMEBUFFER DIAGNOSTIC WRITES BYPASSED count=");
-    serial_write_u64(count);
-    serial_write_string(" selected_index=");
-    serial_write_u64(selected_index);
-    serial_write_string("\\n");
-''',
-    "remove final diagnostic framebuffer writes")
-
 acquire_start = trace_src.find("static void acquire_framebuffers(void) {")
 acquire_end = trace_src.find("\nstatic bool ends_with", acquire_start)
 if (acquire_start < 0) or (acquire_end < 0):
     raise RuntimeError("cannot isolate generated acquire_framebuffers")
 acquire_body = trace_src[acquire_start:acquire_end]
 for forbidden in (
-        "tiny_surface_probe", "witness_surface", "boring_graphics_fill_rect",
-        "boring_graphics_put_pixel", "trace_text", "hold_trace_for_qmp",
-        "framebuffer_writes_proven = true"):
+        "boring_graphics_", "boring_pixel_font_", "trace_text",
+        "framebuffer_write", "hold_trace_for_qmp"):
     if forbidden in acquire_body:
         raise RuntimeError(
             f"generated acquire_framebuffers still contains diagnostic framebuffer write path: {forbidden}")
@@ -189,11 +86,11 @@ replace_once(
 
 old_cpu = (
     "void m61_post_boring_cpu_inventory_init(void) {\n"
-    "    /* Reaching this proves the immediate M61 framebuffer probe/witness returned. */\n"
+    "    /* Reaching this proves metadata-only framebuffer acquisition returned. */\n"
     "    M61_POST(M61_POST_CPU_INVENTORY_BEFORE);")
 new_cpu = (
     "void m61_post_boring_cpu_inventory_init(void) {\n"
-    "    /* Reaching this proves the metadata-only M61 framebuffer acquire returned. */\n"
+    "    /* Reaching this proves metadata-only framebuffer acquisition returned. */\n"
     "    acquire_71_72_active = false;\n"
     "    M61_POST(M61_POST_CPU_INVENTORY_BEFORE);")
 replace_once(old_cpu, new_cpu, "CPU boundary resets acquire tracing")

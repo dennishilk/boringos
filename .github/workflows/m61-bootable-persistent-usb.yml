@@ -90,7 +90,7 @@ jobs:
             tail -n 500 build/m61-bootable-persistent-usb/first-boot/qemu.log || true
           fi
           exit "$rc"
-      - name: Verify serial, diagnostic-write bypass, and runtime framebuffer proofs
+      - name: Verify serial, safe boot console, and runtime framebuffer proofs
         run: |
           log=build/m61-bootable-persistent-usb/first-boot/serial.log
           grep -Fq 'M61 TRACE [08+] EXCEPTIONS' "$log"
@@ -104,13 +104,31 @@ jobs:
           proof=build/m61-bootable-persistent-usb/first-boot/physical-trace-proof.txt
           grep -Fqx 'DIAGNOSTIC_FRAMEBUFFER_WRITES_BYPASSED=YES' "$proof"
           grep -Fqx 'EARLY_DIAGNOSTIC_FRAMEBUFFER_WRITE_COUNT=0' "$proof"
+          safety=build/m61-bundle/boot-console-safety.txt
+          grep -Fqx 'EARLY_FRAMEBUFFER_WRITE_ADDED=NO' "$safety"
+          grep -Fqx 'ACQUIRE_FRAMEBUFFERS_WRITES_PIXELS=NO' "$safety"
+          grep -Fqx 'PRE_SAFE_POINT_BOOT_CONSOLE_FRAMEBUFFER_WRITES=0' "$safety"
+          grep -Fqx 'GENERIC_X86_64_OUT8_MODIFIED=NO' "$safety"
+          grep -Fqx 'POST_FALLBACK_INDEPENDENT=YES' "$safety"
+          grep -Fq 'BOOT-CONSOLE framebuffer activated at safe normal present' "$log"
+          grep -Fq 'BOOT-CONSOLE history replay complete events=' "$log"
+          grep -Fq 'BOOT-CONSOLE framebuffer handoff complete; redraw disabled' "$log"
+          boot_console=build/m61-bootable-persistent-usb/first-boot/boot-console-witness.txt
+          grep -Fqx 'BOOT_CONSOLE_VISIBLE_DURING_BOOT=YES' "$boot_console"
+          grep -Fqx 'GRAPHICAL_BOOT_STAGE_TEXT_PROVEN=YES' "$boot_console"
+          grep -Fqx 'REPLAY_STAGE_ORDER_PROVEN=YES' "$boot_console"
+          grep -Fqx 'REAL_SUCCESS_ONLY_PROVEN=YES' "$boot_console"
+          grep -Fqx 'EARLY_FRAMEBUFFER_WRITE_ADDED=NO' "$boot_console"
+          grep -Fqx 'PRE_SAFE_POINT_BOOT_CONSOLE_FRAMEBUFFER_WRITES=0' "$boot_console"
           desktop=build/m61-bootable-persistent-usb/first-boot/physical-desktop-witness.txt
           grep -Fqx 'AUTO_TERMINAL_PROVEN=YES' "$desktop"
           grep -Fqx 'WALLPAPER_PROVEN=YES' "$desktop"
           grep -Fqx 'NORMAL_FRAMEBUFFER_RUNTIME_PROVEN=YES' "$desktop"
+          grep -Fqx 'BOOT_CONSOLE_OVERLAY_ABSENT=YES' "$desktop"
           grep -Fqx 'EXTRA_EARLY_PRESENT_ADDED=NO' "$desktop"
           printf '%s\n' 'SERIAL_TRACE_PROVEN=YES'
           printf '%s\n' 'DIAGNOSTIC_FRAMEBUFFER_WRITES_BYPASSED=YES'
+          printf '%s\n' 'SAFE_GRAPHICAL_BOOT_CONSOLE_PROVEN=YES'
           printf '%s\n' 'NORMAL_FRAMEBUFFER_RUNTIME_PROVEN=YES'
           printf '%s\n' 'PHYSICAL_DESKTOP_WITNESS_PROVEN=YES'
       - name: Verify restored physical raw and compressed artifact hashes
@@ -142,6 +160,9 @@ jobs:
             build/m61-qemu-twin-proof.txt
             build/m61-bundle/geometry.txt
             build/m61-bundle/boringfsck-before.txt
+            build/m61-bundle/serial-failopen-host.txt
+            build/m61-bundle/boot-console-safety.txt
+            build/m61-bundle/boot-console-host.txt
             build/m61-early-fault/**
             build/m61-bootable-persistent-usb/**
           if-no-files-found: error

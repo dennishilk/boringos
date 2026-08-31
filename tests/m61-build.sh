@@ -62,6 +62,18 @@ cc -Ikernel/include $HOST_CFLAGS -DBORING_SERIAL_TEST=1 \
    -o build/m61-serial-failopen-host-test
 build/m61-serial-failopen-host-test | tee "$OUT/serial-failopen-host.txt"
 
+python3 tests/m61-boot-console-safety.py | \
+    tee "$OUT/boot-console-safety.txt"
+make boot-console-host-test | tee "$OUT/boot-console-host.txt"
+cc -Ikernel/include $HOST_CFLAGS -DBORING_BOOT_CONSOLE_TEST=1 \
+   -c kernel/core/boot_console.c -o "$OUT/boot-console-dependency-audit.o"
+if nm -u "$OUT/boot-console-dependency-audit.o" | \
+   grep -Eq '[[:space:]](malloc|calloc|realloc|free|heap_[A-Za-z0-9_]*)$'; then
+    echo 'M61 boot console FAILED: early history has a heap dependency' >&2
+    exit 1
+fi
+printf '%s\n' 'M61 boot console bounded static history/no-heap audit: PASS'
+
 cc -Ikernel/include $HOST_CFLAGS tests/m61-block-slice-host-test.c \
    kernel/core/block_device.c kernel/core/block_slice.c \
    -o build/m61-block-slice-host-test

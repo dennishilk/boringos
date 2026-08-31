@@ -37,6 +37,156 @@ def run():
             "EARLY_DIAGNOSTIC_FRAMEBUFFER_WRITE_COUNT=0\n"
             "capture=none; metadata-only acquire_framebuffers\n")
 
+    def boot_console_glyphs():
+        source = (ROOT / "kernel/core/pixel_font.c").read_text()
+        glyphs = {}
+        for character, values in re.findall(
+                r"case '(.)': GLYPH\(([^)]*)\); break;", source):
+            glyphs[character] = tuple(
+                int(value.strip()) for value in values.split(","))
+        return glyphs
+
+    def boot_console_text_matches(pixels, width, height, x, y,
+                                  value, color, scale=1):
+        glyphs = boot_console_glyphs()
+        foreground = bytes(color)
+        cursor_x = x
+        for character in value:
+            rows = glyphs.get(character)
+            if rows is None:
+                raise ValueError(f"missing boot-console glyph {character!r}")
+            for glyph_y, bits in enumerate(rows):
+                for glyph_x in range(5):
+                    expected = (bits & (1 << (4 - glyph_x))) != 0
+                    for scale_y in range(scale):
+                        for scale_x in range(scale):
+                            pixel_x = cursor_x + glyph_x * scale + scale_x
+                            pixel_y = y + glyph_y * scale + scale_y
+                            if pixel_x >= width or pixel_y >= height:
+                                return False
+                            offset = (pixel_y * width + pixel_x) * 3
+                            actual = pixels[offset:offset + 3] == foreground
+                            if actual != expected:
+                                return False
+            cursor_x += 6 * scale
+        return True
+
+    def capture_boot_console():
+        marker = "BOOT-CONSOLE framebuffer activated at safe normal present"
+        deadline = time.monotonic() + 120
+        while marker not in text():
+            current = text()
+            if "BOOT-CONSOLE framebuffer activation rejected" in current:
+                raise RuntimeError("boot-console framebuffer activation rejected")
+            if "BOOT-CONSOLE framebuffer handoff complete" in current:
+                raise RuntimeError("boot-console capture missed the desktop handoff")
+            if vm.poll() is not None:
+                raise RuntimeError(
+                    f"QEMU exited ({vm.returncode}) before boot-console capture")
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"first missing witness: {marker}\n{current[-16000:]}")
+            time.sleep(0.001)
+
+        qmp("stop")
+        try:
+            current = text()
+            if "BOOT-CONSOLE framebuffer handoff complete" in current:
+                raise RuntimeError("boot-console was replaced before QMP capture")
+            geometry = re.search(
+                r"boring-framebuffer: (\d+)x(\d+)x(?:24|32)", current)
+            if geometry is None:
+                raise RuntimeError("missing framebuffer geometry for boot console")
+            width, height = map(int, geometry.groups())
+            if (width, height) != (800, 600):
+                raise RuntimeError(
+                    "M61 boot-console witness requires exact 800x600 QEMU scanout")
+
+            ppm = out / "boot-console-during-boot.ppm"
+            qmp("screendump", {"filename": str(ppm)})
+            actual_width, actual_height, pixels = WM["parse_ppm"](ppm)
+            if (actual_width, actual_height) != (width, height):
+                raise ValueError("boot-console screenshot geometry mismatch")
+
+            text_color = (0xe8, 0xef, 0xf2)
+            cyan = (0x3a, 0xcd, 0xdc)
+            status_colors = {
+                "[ OK ]": (0x72, 0xd6, 0x8a),
+                "[ .. ]": (0xe4, 0xb8, 0x68),
+                "[FAIL]": (0xff, 0x60, 0x60),
+            }
+            labels = (
+                "CPU inventory", "PCI inventory", "SMBIOS",
+                "Physical memory manager", "Virtual memory manager",
+                "Kernel heap", "Exceptions", "Input", "IRQ", "PIT",
+                "xHCI controller", "USB addressing", "USB descriptors",
+                "USB HID", "USB mass storage",
+                "BoringFS persistent root", "boring-init", "boring-display",
+                "BoringWM", "automatic terminal", "desktop present",
+            )
+            if not boot_console_text_matches(
+                    pixels, width, height, 44, 34,
+                    "BoringOS booting...", text_color, 2):
+                raise ValueError("graphical boot-console header pixels absent")
+            if not boot_console_text_matches(
+                    pixels, width, height, 44, 58,
+                    "BoringKernel 0.0.62-dev", cyan):
+                raise ValueError("graphical boot-console version pixels absent")
+
+            status_summary = []
+            stage_stride = (height - 92 - 44) // len(labels)
+            for index, label in enumerate(labels):
+                matches = re.findall(
+                    rf"^BOOT-CONSOLE (\[ OK \]|\[ \.\. \]|\[FAIL\]) "
+                    rf"{re.escape(label)}(?:\: [^\n]+)?$",
+                    current, re.MULTILINE)
+                status = matches[-1] if matches else "[ .. ]"
+                if status == "[FAIL]" and not re.search(
+                        rf"^BOOT-CONSOLE \[FAIL\] {re.escape(label)}: .+$",
+                        current, re.MULTILINE):
+                    raise ValueError(f"FAIL stage lacks a real reason: {label}")
+                y = 92 + index * stage_stride
+                if not boot_console_text_matches(
+                        pixels, width, height, 44, y, status,
+                        status_colors[status]):
+                    raise ValueError(
+                        f"graphical boot-console status mismatch: {status} {label}")
+                if not boot_console_text_matches(
+                        pixels, width, height, 92, y, label, text_color):
+                    raise ValueError(
+                        f"graphical boot-console stage text absent: {label}")
+                status_summary.append(f"{status} {label}")
+
+            early_success = [
+                f"BOOT-CONSOLE [ OK ] {label}" for label in labels[:18]
+            ]
+            positions = [current.find(line) for line in early_success]
+            if any(position < 0 for position in positions):
+                missing = [line for line, position in zip(early_success, positions)
+                           if position < 0]
+                raise RuntimeError(
+                    f"missing real boot-console successes: {missing!r}")
+            if positions != sorted(positions):
+                raise RuntimeError("boot-console success replay order changed")
+            if any(summary.startswith("[FAIL]") for summary in status_summary):
+                raise RuntimeError(
+                    f"successful M61 boot reported a failed stage: {status_summary!r}")
+
+            (out / "boot-console-witness.txt").write_text(
+                "BOOT_CONSOLE_VISIBLE_DURING_BOOT=YES\n"
+                "GRAPHICAL_BOOT_STAGE_TEXT_PROVEN=YES\n"
+                "REPLAY_STAGE_ORDER_PROVEN=YES\n"
+                "REAL_SUCCESS_ONLY_PROVEN=YES\n"
+                "EARLY_FRAMEBUFFER_WRITE_ADDED=NO\n"
+                "PRE_SAFE_POINT_BOOT_CONSOLE_FRAMEBUFFER_WRITES=0\n"
+                f"framebuffer_geometry={width}x{height}\n"
+                f"screenshot_sha256={hashlib.sha256(ppm.read_bytes()).hexdigest()}\n"
+                + "\n".join(f"stage_{index + 1:02d}={summary}"
+                             for index, summary in enumerate(status_summary))
+                + "\n")
+        finally:
+            qmp("cont")
+
     def capture_auto_terminal_wallpaper(frame, terminal_pid):
         geometry = re.search(r"boring-framebuffer: (\d+)x(\d+)x(?:24|32)", text())
         if geometry is None:
@@ -106,6 +256,10 @@ def run():
             if sampled == 0 or different < 1000:
                 raise ValueError(
                     f"automatic terminal is not visually distinct from wallpaper: {different}/{sampled}")
+            if boot_console_text_matches(
+                    actual, width, height, 44, 34,
+                    "BoringOS booting...", (0xe8, 0xef, 0xf2), 2):
+                raise ValueError("boot-console text remains over final desktop")
             (out / "physical-desktop-witness.txt").write_text(
                 "AUTO_TERMINAL_PROVEN=YES\n"
                 f"automatic_spawn_pid={terminal_pid}\n"
@@ -119,6 +273,7 @@ def run():
                 f"exact_wallpaper_margin={clean_margin}\n"
                 f"wallpaper_margin_sha256={clean_hash}\n"
                 f"terminal_pixels_distinct={different}/{sampled}\n"
+                "BOOT_CONSOLE_OVERLAY_ABSENT=YES\n"
                 "EXTRA_EARLY_PRESENT_ADDED=NO\n")
         finally:
             qmp("cont")
@@ -130,7 +285,9 @@ def run():
     text = replace_once(
         text,
         "        trace_meta = capture_physical_trace()\n",
-        "        prove_diagnostic_write_bypass()\n",
+        "        qmp(\"query-status\")\n"
+        "        prove_diagnostic_write_bypass()\n"
+        "        capture_boot_console()\n",
         "replace artificial framebuffer trace capture")
 
     after_retained = '''        capture_retained_trace(trace_meta)\n        current = text()\n'''

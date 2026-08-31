@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include <boring/boot_protocol.h>
+#include <boring/boot_console.h>
 #include <boring/boringfs_vfs.h>
 #include <boring/cpu.h>
 #include <boring/cpu_inventory.h>
@@ -10,7 +11,6 @@
 #include <boring/exception.h>
 #include <boring/framebuffer.h>
 #include <boring/framebuffer_user.h>
-#include <boring/graphics.h>
 #include <boring/heap.h>
 #include <boring/input.h>
 #include <boring/ipc.h>
@@ -31,18 +31,7 @@
 #error "M61 physical trace must stay candidate-build gated"
 #endif
 
-#define TRACE_TEXT_X 80ULL
-#define TRACE_STAGE_Y 42ULL
-#define TRACE_STAGE_HEIGHT 12ULL
-#define TRACE_SCALE 2U
 #define TRACE_LAST_STAGE 27U
-#define TRACE_PANEL_MAX_WIDTH 632ULL
-#define TRACE_WITNESS_X 4ULL
-#define TRACE_WITNESS_Y 4ULL
-#define TRACE_WITNESS_WIDTH 64ULL
-#define TRACE_WITNESS_HEIGHT 16ULL
-#define TRACE_WITNESS_STRIPES 8U
-#define TRACE_TSC_HOLD_CYCLES 500000000ULL
 #define EARLY_IDT_GATE_INTERRUPT 0x8eU
 #define EARLY_IDT_IST_NONE 0U
 #define EARLY_IDT_IST1 1U
@@ -62,11 +51,6 @@ struct m61_early_idtr {
     uint64_t base;
 } __attribute__((packed));
 
-struct glyph {
-    char character;
-    uint16_t bits;
-};
-
 _Static_assert(sizeof(struct m61_early_idt_entry) == 16U,
                "M61 emergency IDT entry must be 16 bytes");
 _Static_assert(sizeof(struct m61_early_idtr) == 10U,
@@ -79,7 +63,7 @@ void x86_64_store_idt(struct m61_early_idtr *idtr);
 uint16_t x86_64_read_cs(void);
 
 const char boring_m61_physical_breadcrumbs_enabled[] =
-    "M61 safe direct framebuffer boot trace enabled";
+    "M61 metadata-only framebuffer acquisition and safe boot console enabled";
 #ifdef BORING_M61_EARLY_FAULT_TEST
 const char boring_m61_early_fault_test_enabled[] =
     "M61 controlled pre-exception-init fault test enabled";
@@ -89,27 +73,11 @@ static struct m61_early_idt_entry
     early_idt[X86_64_EXCEPTION_VECTOR_COUNT] __attribute__((aligned(16)));
 static const struct boring_framebuffer *fb;
 static volatile bool early_containment_active;
-static volatile bool framebuffer_write_active;
-static bool framebuffer_writes_proven;
 static bool serial_ready;
 static bool wm_ready;
+static bool terminal_ready;
+static bool display_initial_presented;
 static bool desktop_presented;
-
-static const struct glyph glyphs[] = {
-    {'A', 0x2bedU}, {'B', 0x6baeU}, {'C', 0x3923U}, {'D', 0x6b6eU},
-    {'E', 0x79a7U}, {'F', 0x79a4U}, {'G', 0x396bU}, {'H', 0x5bedU},
-    {'I', 0x7497U}, {'J', 0x126aU}, {'K', 0x5badU}, {'L', 0x4927U},
-    {'M', 0x5fedU}, {'N', 0x5ffdU}, {'O', 0x2b6aU}, {'P', 0x6ba4U},
-    {'Q', 0x2b7bU}, {'R', 0x6badU}, {'S', 0x388eU}, {'T', 0x7492U},
-    {'U', 0x5b6fU}, {'V', 0x5b6aU}, {'W', 0x5bfdU}, {'X', 0x5aadU},
-    {'Y', 0x5a92U}, {'Z', 0x72a7U},
-    {'0', 0x7b6fU}, {'1', 0x2c97U}, {'2', 0x62a7U}, {'3', 0x628eU},
-    {'4', 0x5bc9U}, {'5', 0x798eU}, {'6', 0x39aaU}, {'7', 0x7292U},
-    {'8', 0x2aaaU}, {'9', 0x2aceU},
-    {'[', 0x6926U}, {']', 0x324bU}, {'>', 0x4454U}, {'+', 0x05d0U},
-    {'!', 0x2482U}, {'=', 0x0e38U}, {':', 0x0410U}, {'/', 0x12a4U},
-    {'-', 0x01c0U}, {'.', 0x0002U}, {'_', 0x0007U}, {' ', 0U}
-};
 
 static void emergency_halt(void) __attribute__((noreturn));
 static void emergency_halt(void) {
@@ -179,107 +147,6 @@ static bool early_containment_install(void) {
     return early_idt_load(selector, (uint8_t)EARLY_IDT_IST1);
 }
 
-static uint16_t glyph_bits(char character) {
-    size_t index;
-
-    if ((character >= 'a') && (character <= 'z')) {
-        character = (char)(character - ('a' - 'A'));
-    }
-    for (index = 0U; index < sizeof(glyphs) / sizeof(glyphs[0]); ++index) {
-        if (glyphs[index].character == character) {
-            return glyphs[index].bits;
-        }
-    }
-    return 0U;
-}
-
-static uint32_t trace_color(uint8_t red, uint8_t green, uint8_t blue) {
-    return (fb == NULL) ? 0U : boring_color_pack(fb, red, green, blue);
-}
-
-static void trace_character(uint64_t x, uint64_t y, char character,
-                            uint32_t packed, uint32_t scale) {
-    const uint16_t glyph = glyph_bits(character);
-    uint32_t row;
-
-    if ((fb == NULL) || (scale == 0U)) {
-        return;
-    }
-    for (row = 0U; row < 5U; ++row) {
-        uint32_t column;
-        for (column = 0U; column < 3U; ++column) {
-            const uint32_t bit = ((4U - row) * 3U) + (2U - column);
-            if ((glyph & (uint16_t)(1U << bit)) != 0U) {
-                uint32_t yy;
-                for (yy = 0U; yy < scale; ++yy) {
-                    uint32_t xx;
-                    for (xx = 0U; xx < scale; ++xx) {
-                        (void)boring_graphics_put_pixel(
-                            fb,
-                            x + (uint64_t)(column * scale + xx),
-                            y + (uint64_t)(row * scale + yy),
-                            packed);
-                    }
-                }
-            }
-        }
-    }
-}
-
-static void trace_text(uint64_t x, uint64_t y, const char *value,
-                       uint32_t packed, uint32_t scale) {
-    size_t index = 0U;
-    const uint64_t step = (uint64_t)(4U * scale);
-
-    if ((fb == NULL) || (value == NULL)) {
-        return;
-    }
-    while ((value[index] != '\0') && (index < 96U)) {
-        trace_character(x, y, value[index], packed, scale);
-        x += step;
-        ++index;
-    }
-}
-
-static uint64_t trace_decimal(uint64_t x, uint64_t y, uint64_t value,
-                              uint32_t packed, uint32_t scale) {
-    char digits[21];
-    size_t count = 0U;
-
-    do {
-        digits[count] = (char)('0' + (char)(value % 10ULL));
-        ++count;
-        value /= 10ULL;
-    } while ((value != 0ULL) && (count < sizeof(digits)));
-
-    while (count != 0U) {
-        --count;
-        trace_character(x, y, digits[count], packed, scale);
-        x += (uint64_t)(4U * scale);
-    }
-    return x;
-}
-
-static void trace_hex64(uint64_t x, uint64_t y, uint64_t value,
-                        uint32_t packed, uint32_t scale) {
-    static const char hex[] = "0123456789ABCDEF";
-    int shift;
-
-    trace_text(x, y, "0X", packed, scale);
-    x += (uint64_t)(8U * scale);
-    for (shift = 60; shift >= 0; shift -= 4) {
-        trace_character(
-            x, y, hex[(value >> (uint32_t)shift) & 0x0fULL],
-            packed, scale);
-        x += (uint64_t)(4U * scale);
-    }
-}
-
-static uint64_t trace_stage_y(uint32_t stage_number) {
-    return TRACE_STAGE_Y +
-           ((uint64_t)(stage_number - 1U) * TRACE_STAGE_HEIGHT);
-}
-
 static void serial_stage(uint32_t stage_number, char mark,
                          const char *label) {
     if (!serial_ready) {
@@ -296,54 +163,109 @@ static void serial_stage(uint32_t stage_number, char mark,
     serial_write_string("\n");
 }
 
-static uint64_t trace_panel_width(void) {
-    uint64_t available;
-
-    if ((fb == NULL) || (fb->width <= 8ULL)) {
-        return 0ULL;
+static const char *trace_failure_reason(uint32_t stage_number) {
+    switch (stage_number) {
+        case 2U: return "CPU inventory did not complete";
+        case 3U: return "PCI inventory did not complete";
+        case 4U: return "SMBIOS discovery did not complete";
+        case 5U: return "pmm_init returned false";
+        case 6U: return "vmm_init returned false";
+        case 7U: return "heap_init returned false";
+        case 8U: return "exception_init returned false";
+        case 10U: return "input initialization returned false";
+        case 11U: return "irq_init returned false";
+        case 12U: return "timer_init returned false";
+        case 13U: return "xhci_init returned false";
+        case 14U: return "USB addressing returned false";
+        case 15U: return "USB descriptor discovery returned false";
+        case 16U: return "USB HID configuration returned false";
+        case 17U: return "USB mass storage returned false";
+        case 18U: return "BoringFS root mount returned failure";
+        case 19U: return "boring-init process naming failed";
+        case 20U: return "boring-display process naming failed";
+        case 21U: return "boring-display framebuffer claim failed";
+        case 22U: return "boring.display service registration failed";
+        case 23U: return "boring-display initial present failed";
+        case 24U: return "BoringWM process naming failed";
+        case 25U: return "boring.wm service registration failed";
+        case 26U: return "desktop framebuffer present failed";
+        case 27U: return "automatic terminal process naming failed";
+        default: return "stage returned failure";
     }
-    available = fb->width - 8ULL;
-    return (available < TRACE_PANEL_MAX_WIDTH) ?
-           available : TRACE_PANEL_MAX_WIDTH;
+}
+
+static bool trace_boot_stage(uint32_t stage_number,
+                             enum boring_boot_console_stage *stage) {
+    if (stage == NULL) {
+        return false;
+    }
+    switch (stage_number) {
+        case 2U: *stage = BORING_BOOT_STAGE_CPU_INVENTORY; return true;
+        case 3U: *stage = BORING_BOOT_STAGE_PCI_INVENTORY; return true;
+        case 4U: *stage = BORING_BOOT_STAGE_SMBIOS; return true;
+        case 5U: *stage = BORING_BOOT_STAGE_PMM; return true;
+        case 6U: *stage = BORING_BOOT_STAGE_VMM; return true;
+        case 7U: *stage = BORING_BOOT_STAGE_HEAP; return true;
+        case 8U: *stage = BORING_BOOT_STAGE_EXCEPTIONS; return true;
+        case 10U: *stage = BORING_BOOT_STAGE_INPUT; return true;
+        case 11U: *stage = BORING_BOOT_STAGE_IRQ; return true;
+        case 12U: *stage = BORING_BOOT_STAGE_PIT; return true;
+        case 13U: *stage = BORING_BOOT_STAGE_XHCI; return true;
+        case 14U: *stage = BORING_BOOT_STAGE_USB_ADDRESSING; return true;
+        case 15U: *stage = BORING_BOOT_STAGE_USB_DESCRIPTORS; return true;
+        case 16U: *stage = BORING_BOOT_STAGE_USB_HID; return true;
+        case 17U: *stage = BORING_BOOT_STAGE_USB_MASS_STORAGE; return true;
+        case 18U: *stage = BORING_BOOT_STAGE_BORINGFS_ROOT; return true;
+        case 19U: *stage = BORING_BOOT_STAGE_BORING_INIT; return true;
+        case 20U:
+        case 21U:
+        case 22U:
+        case 23U:
+            *stage = BORING_BOOT_STAGE_BORING_DISPLAY;
+            return true;
+        case 24U:
+        case 25U:
+            *stage = BORING_BOOT_STAGE_BORING_WM;
+            return true;
+        case 26U: *stage = BORING_BOOT_STAGE_DESKTOP_PRESENT; return true;
+        case 27U: *stage = BORING_BOOT_STAGE_AUTOMATIC_TERMINAL; return true;
+        default: return false;
+    }
 }
 
 static void trace_stage(uint32_t stage_number, char mark,
                         const char *label) {
-    uint64_t x;
-    const uint64_t y = trace_stage_y(stage_number);
-    uint32_t packed;
+    enum boring_boot_console_stage boot_stage;
+    bool apply = true;
 
     if ((stage_number == 0U) || (stage_number > TRACE_LAST_STAGE) ||
         (label == NULL)) {
         return;
     }
     serial_stage(stage_number, mark, label);
-    if ((fb == NULL) || !framebuffer_writes_proven) {
+    if (!trace_boot_stage(stage_number, &boot_stage)) {
         return;
     }
 
-    framebuffer_write_active = true;
-    (void)boring_graphics_fill_rect(
-        fb, 4ULL, y - 1ULL, trace_panel_width(), 11ULL,
-        trace_color(12U, 12U, 16U));
-    packed = mark == '>' ? trace_color(255U, 190U, 64U) :
-             mark == '+' ? trace_color(96U, 255U, 128U) :
-                           trace_color(255U, 80U, 80U);
-    x = 8ULL;
-    trace_character(x, y, '[', packed, TRACE_SCALE);
-    x += 8ULL;
-    if (stage_number < 10U) {
-        trace_character(x, y, '0', packed, TRACE_SCALE);
-        x += 8ULL;
+    /* Naming/claim/service success is not display or WM readiness. */
+    if (((stage_number >= 20U) && (stage_number <= 24U)) && (mark == '+')) {
+        apply = false;
     }
-    x = trace_decimal(x, y, (uint64_t)stage_number,
-                      packed, TRACE_SCALE);
-    trace_character(x, y, mark, packed, TRACE_SCALE);
-    x += 8ULL;
-    trace_character(x, y, ']', packed, TRACE_SCALE);
-    x += 16ULL;
-    trace_text(x, y, label, packed, TRACE_SCALE);
-    framebuffer_write_active = false;
+    if ((stage_number >= 21U) && (stage_number <= 23U) && (mark == '>')) {
+        apply = false;
+    }
+    if (!apply) {
+        return;
+    }
+
+    if (mark == '>') {
+        (void)boring_boot_console_pending(boot_stage);
+    } else if (mark == '+') {
+        (void)boring_boot_console_ok(boot_stage);
+    } else {
+        (void)boring_boot_console_fail(
+            boot_stage, trace_failure_reason(stage_number));
+    }
 }
 
 static void serial_surface(uint64_t index,
@@ -394,77 +316,12 @@ static bool same_surface(const struct boring_framebuffer *first,
            (first->memory_model == second->memory_model);
 }
 
-static bool tiny_surface_probe(const struct boring_framebuffer *surface) {
-    bool wrote;
-
-    framebuffer_write_active = true;
-    wrote = boring_graphics_fill_rect(
-        surface, 0ULL, 0ULL, 2ULL, 2ULL,
-        boring_color_pack(surface, 255U, 255U, 255U));
-    framebuffer_write_active = false;
-    return wrote;
-}
-
-static bool witness_surface(const struct boring_framebuffer *surface) {
-    static const uint8_t colors[TRACE_WITNESS_STRIPES][3] = {
-        {255U, 0U, 0U},
-        {0U, 255U, 0U},
-        {0U, 0U, 255U},
-        {0U, 255U, 255U},
-        {255U, 0U, 255U},
-        {255U, 255U, 0U},
-        {255U, 255U, 255U},
-        {0U, 0U, 0U}
-    };
-    uint32_t stripe;
-    bool wrote = true;
-
-    if ((surface == NULL) ||
-        (surface->width < TRACE_WITNESS_X + TRACE_WITNESS_WIDTH) ||
-        (surface->height < TRACE_WITNESS_Y + TRACE_WITNESS_HEIGHT)) {
-        return false;
-    }
-
-    framebuffer_write_active = true;
-    for (stripe = 0U; stripe < TRACE_WITNESS_STRIPES; ++stripe) {
-        wrote = boring_graphics_fill_rect(
-                    surface,
-                    TRACE_WITNESS_X + (uint64_t)(stripe * 8U),
-                    TRACE_WITNESS_Y,
-                    8ULL,
-                    TRACE_WITNESS_HEIGHT,
-                    boring_color_pack(surface,
-                                      colors[stripe][0],
-                                      colors[stripe][1],
-                                      colors[stripe][2])) && wrote;
-    }
-    framebuffer_write_active = false;
-    return wrote;
-}
-
-static uint64_t read_tsc(void) {
-    uint32_t low;
-    uint32_t high;
-
-    __asm__ volatile("rdtsc" : "=a"(low), "=d"(high));
-    return ((uint64_t)high << 32U) | (uint64_t)low;
-}
-
-static void hold_trace_for_qmp(void) {
-    const uint64_t start = read_tsc();
-
-    while ((read_tsc() - start) < TRACE_TSC_HOLD_CYCLES) {
-        x86_64_pause();
-    }
-}
-
 static void acquire_framebuffers(void) {
     const enum boring_framebuffer_status status =
         boring_framebuffer_boot_init();
     const uint64_t count = boring_m61_framebuffer_count();
     uint64_t selected_index = UINT64_MAX;
     uint64_t index;
-    bool selected_witness = false;
 
     serial_write_string("M61 FRAMEBUFFER COUNT=");
     serial_write_u64(count);
@@ -485,7 +342,6 @@ static void acquire_framebuffers(void) {
     for (index = 0ULL; index < count; ++index) {
         struct boring_framebuffer candidate;
         bool selected;
-        bool witness;
 
         if (!boring_m61_framebuffer_get(index, &candidate)) {
             serial_write_string("M61 FRAMEBUFFER CANDIDATE index=");
@@ -499,48 +355,13 @@ static void acquire_framebuffers(void) {
             selected_index = index;
         }
         serial_surface(index, &candidate, selected);
-        if (!tiny_surface_probe(&candidate)) {
-            serial_write_string("M61 FRAMEBUFFER TINY PROBE FAILED index=");
-            serial_write_u64(index);
-            serial_write_string("\n");
-            continue;
-        }
-        witness = witness_surface(&candidate);
-        serial_write_string("M61 FRAMEBUFFER WITNESS index=");
-        serial_write_u64(index);
-        serial_write_string(" selected=");
-        serial_write_string(selected ? "yes" : "no");
-        serial_write_string(" x=4 y=4 width=64 height=16 result=");
-        serial_write_string(witness ? "pass\n" : "fail\n");
-        if (selected) {
-            selected_witness = witness;
-        }
     }
 
-    if (!selected_witness) {
-        serial_write_string("M61 FRAMEBUFFER TRACE SELECTED WITNESS FAILED\n");
-        return;
-    }
-
-    framebuffer_writes_proven = true;
-    framebuffer_write_active = true;
-    (void)boring_graphics_fill_rect(
-        fb, 76ULL, 2ULL,
-        fb->width > 80ULL ?
-            ((fb->width - 80ULL < 320ULL) ? fb->width - 80ULL : 320ULL) :
-            0ULL,
-        34ULL, trace_color(12U, 12U, 16U));
-    trace_text(TRACE_TEXT_X, 8ULL, "BORINGOS PHYSICAL BOOT TRACE",
-               trace_color(96U, 224U, 255U), TRACE_SCALE);
-    trace_text(TRACE_TEXT_X, 22ULL, "FB", trace_color(180U, 180U, 190U), 1U);
-    (void)trace_decimal(TRACE_TEXT_X + 12ULL, 22ULL, fb->width,
-                        trace_color(180U, 180U, 190U), 1U);
-    framebuffer_write_active = false;
-
-    serial_write_string("M61 FRAMEBUFFER TRACE READY index=");
+    serial_write_string("M61 FRAMEBUFFER DIAGNOSTIC WRITES BYPASSED count=");
+    serial_write_u64(count);
+    serial_write_string(" selected_index=");
     serial_write_u64(selected_index);
-    serial_write_string(" x=4 y=4 width=64 height=16\n");
-    hold_trace_for_qmp();
+    serial_write_string("\n");
 }
 
 static bool ends_with(const char *value, const char *ending) {
@@ -583,50 +404,6 @@ static bool same_bytes(const char *value, size_t value_length,
         }
     }
     return true;
-}
-
-static void present_guard(uint32_t stage_number, const char *label) {
-    trace_stage(stage_number, '>', label);
-    if ((fb != NULL) && framebuffer_writes_proven &&
-        (fb->height >= 14ULL)) {
-        framebuffer_write_active = true;
-        trace_text(8ULL, fb->height - 12ULL, "PRESENT IN PROGRESS",
-                   trace_color(255U, 190U, 64U), TRACE_SCALE);
-        framebuffer_write_active = false;
-    }
-}
-
-static void fatal_screen(const struct x86_64_trap_frame *frame) {
-    uint32_t packed;
-    uint64_t panel_width;
-
-    if ((fb == NULL) || !framebuffer_writes_proven ||
-        framebuffer_write_active) {
-        return;
-    }
-    panel_width = fb->width < 480ULL ? fb->width : 480ULL;
-    framebuffer_write_active = true;
-    (void)boring_graphics_fill_rect(
-        fb, 0ULL, 0ULL, panel_width,
-        fb->height < 96ULL ? fb->height : 96ULL,
-        trace_color(96U, 0U, 0U));
-    packed = trace_color(255U, 240U, 240U);
-    trace_text(8ULL, 8ULL, "FATAL", packed, TRACE_SCALE);
-    if (frame == NULL) {
-        trace_text(8ULL, 32ULL, "TRAP FRAME UNAVAILABLE",
-                   packed, TRACE_SCALE);
-    } else {
-        trace_text(8ULL, 32ULL, "VECTOR=", packed, TRACE_SCALE);
-        (void)trace_decimal(64ULL, 32ULL, frame->vector,
-                            packed, TRACE_SCALE);
-        trace_text(8ULL, 46ULL, "ERROR=", packed, TRACE_SCALE);
-        trace_hex64(56ULL, 46ULL, frame->error_code,
-                    packed, TRACE_SCALE);
-        trace_text(8ULL, 60ULL, "RIP=", packed, TRACE_SCALE);
-        trace_hex64(40ULL, 60ULL, frame->rip,
-                    packed, TRACE_SCALE);
-    }
-    framebuffer_write_active = false;
 }
 
 void __real_serial_init(void);
@@ -712,23 +489,40 @@ void __wrap_serial_init(void) {
 }
 
 void __wrap_boring_cpu_inventory_init(void) {
+    const struct boring_cpu_inventory *inventory;
+
     trace_stage(2U, '>', "CPU INVENTORY");
     __real_boring_cpu_inventory_init();
-    trace_stage(2U, '+', "CPU INVENTORY");
+    inventory = boring_cpu_inventory_get();
+    trace_stage(2U,
+                ((inventory != NULL) && (inventory->vendor[0] != '\0')) ?
+                    '+' : '!',
+                "CPU INVENTORY");
 }
 
 void __wrap_boring_pci_inventory_init(void) {
+    const struct boring_pci_inventory *inventory;
+
     trace_stage(3U, '>', "PCI INVENTORY");
     __real_boring_pci_inventory_init();
-    trace_stage(3U, '+', "PCI INVENTORY");
+    inventory = boring_pci_inventory_get();
+    trace_stage(3U,
+                ((inventory != NULL) && inventory->complete) ? '+' : '!',
+                "PCI INVENTORY");
 }
 
 void __wrap_boring_smbios_boot_init(
     const struct boring_limine_hhdm_response *hhdm,
     const struct boring_limine_memmap_response *memmap) {
+    const struct boring_platform_identity *identity;
+
     trace_stage(4U, '>', "SMBIOS");
     __real_boring_smbios_boot_init(hhdm, memmap);
-    trace_stage(4U, '+', "SMBIOS");
+    identity = boring_platform_identity_get();
+    trace_stage(4U,
+                ((identity != NULL) && identity->available &&
+                 identity->complete) ? '+' : '!',
+                "SMBIOS");
 }
 
 bool __wrap_pmm_init(const struct boring_limine_memmap_response *memmap) {
@@ -889,6 +683,9 @@ bool __wrap_process_set_name(struct process *process, const char *name) {
     if (stage_number != 0U) {
         trace_stage(stage_number, result ? '+' : '!', label);
     }
+    if ((stage_number == 27U) && result) {
+        terminal_ready = true;
+    }
     return result;
 }
 
@@ -937,49 +734,51 @@ enum boring_ipc_result __wrap_boring_ipc_service_register(
 enum boring_framebuffer_user_result __wrap_boring_framebuffer_user_present(
     struct process *process, uint32_t handle) {
     enum boring_framebuffer_user_result result;
-    uint32_t stage_number;
-    const char *label;
+    const bool final_present = wm_ready && terminal_ready;
+    const uint32_t stage_number = final_present ? 26U : 23U;
+    const char *const label = final_present ?
+        "DESKTOP PRESENT" : "DISPLAY INITIAL PRESENT";
 
     if (desktop_presented) {
         return __real_boring_framebuffer_user_present(process, handle);
     }
-    stage_number = wm_ready ? 26U : 23U;
-    label = wm_ready ? "DESKTOP PRESENT" : "DISPLAY INITIAL PRESENT";
-    present_guard(stage_number, label);
+    trace_stage(stage_number, '>', label);
     result = __real_boring_framebuffer_user_present(process, handle);
     if (result != BORING_FRAMEBUFFER_USER_OK) {
         trace_stage(stage_number, '!', label);
         return result;
     }
-    if (framebuffer_writes_proven && !witness_surface(fb)) {
-        if (serial_ready) {
-            serial_write_string(
-                "M61 RETAINED FRAMEBUFFER WITNESS FAILED\n");
-        }
-        emergency_halt();
-    }
-    if (wm_ready) {
+
+    if (final_present) {
         desktop_presented = true;
+        serial_stage(stage_number, '+', label);
+        boring_boot_console_desktop_handoff();
+        return result;
     }
-    /* Keep the final diagnostic line visible over an otherwise black idle WM. */
+
+    (void)boring_boot_console_ok(BORING_BOOT_STAGE_BORING_DISPLAY);
+    if (!display_initial_presented) {
+        display_initial_presented = true;
+        if (!boring_boot_console_activate(fb) && serial_ready) {
+            serial_write_string(
+                "BOOT-CONSOLE framebuffer unavailable; serial/POST fallback active\n");
+        }
+    } else {
+        (void)boring_boot_console_refresh();
+    }
     trace_stage(stage_number, '+', label);
     return result;
 }
 
 void __wrap_x86_64_exception_dispatch(
     const struct x86_64_trap_frame *frame) {
-    if (early_containment_active || framebuffer_write_active) {
+    if (early_containment_active) {
         if (serial_ready) {
-            serial_write_string(
-                early_containment_active ?
-                    "M61 EARLY FAULT CONTAINED vector=" :
-                    "M61 FRAMEBUFFER WRITE FAULT CONTAINED vector=");
+            serial_write_string("M61 EARLY FAULT CONTAINED vector=");
             serial_write_u64(frame == NULL ? UINT64_MAX : frame->vector);
-            serial_write_string(" framebuffer_write_active=");
-            serial_write_string(framebuffer_write_active ? "yes\n" : "no\n");
+            serial_write_string(" framebuffer_write_active=no\n");
         }
         emergency_halt();
     }
-    fatal_screen(frame);
     __real_x86_64_exception_dispatch(frame);
 }
