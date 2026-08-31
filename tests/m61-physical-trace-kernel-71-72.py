@@ -316,40 +316,142 @@ old_binary_tail = (
 new_binary_tail = r'''if out_count < 42:
     raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")
 
-nm_output = subprocess.check_output(["nm", "build/kernel.elf"], text=True)
+nm_output = subprocess.check_output(["nm", "-n", "build/kernel.elf"], text=True)
+symbols = {}
+for line in nm_output.splitlines():
+    fields = line.split()
+    if len(fields) < 3:
+        continue
+    try:
+        address = int(fields[0], 16)
+    except ValueError:
+        continue
+    symbols.setdefault(fields[-1], []).append((address, fields[1]))
+
 for forbidden in ("__wrap_boring_framebuffer_get", "__real_boring_framebuffer_get"):
-    if forbidden in nm_output:
+    if forbidden in symbols:
         raise RuntimeError(f"M61 linked kernel still contains forbidden getter wrapper symbol {forbidden}")
 
-acquire = subprocess.check_output(
-    ["objdump", "-d", "--disassemble=acquire_framebuffers", "build/kernel.elf"],
+getter_rows = symbols.get("boring_framebuffer_get", [])
+if len(getter_rows) != 1:
+    raise RuntimeError(
+        f"M61 linked kernel expected one boring_framebuffer_get symbol, found {len(getter_rows)}")
+getter_address, getter_kind = getter_rows[0]
+if getter_kind.lower() != "t":
+    raise RuntimeError(
+        f"M61 boring_framebuffer_get is not linked text code (nm type {getter_kind})")
+
+disasm = subprocess.check_output(["objdump", "-d", "build/kernel.elf"], text=True)
+disasm_reloc = subprocess.check_output(["objdump", "-dr", "build/kernel.elf"], text=True)
+for forbidden in ("__wrap_boring_framebuffer_get", "__real_boring_framebuffer_get"):
+    if forbidden in disasm_reloc:
+        raise RuntimeError(
+            f"M61 objdump -dr still exposes forbidden getter wrapper reference {forbidden}")
+
+getter_window = subprocess.check_output(
+    ["objdump", "-d", f"--start-address=0x{getter_address:x}",
+     f"--stop-address=0x{getter_address + 32:x}", "build/kernel.elf"],
     text=True)
-if "<__wrap_boring_framebuffer_get>" in acquire:
-    raise RuntimeError("M61 acquire_framebuffers still calls wrapped framebuffer getter")
-call = re.search(r"\bcall\w*\b[^\n]*<boring_framebuffer_get>", acquire)
-if call is None:
-    raise RuntimeError("M61 acquire_framebuffers does not call real boring_framebuffer_get")
-code82 = [
-    match for match in re.finditer(r"\$0x(?:0*|f+)82\b", acquire, re.IGNORECASE)
-    if match.start() < call.start()
-]
-code83 = [
-    match for match in re.finditer(r"\$0x(?:0*|f+)83\b", acquire, re.IGNORECASE)
-    if match.start() > call.end()
-]
-outs = list(re.finditer(r"\bout\w*\b[^\n]*\$0x80\b", acquire, re.IGNORECASE))
-if not code82 or not code83:
-    raise RuntimeError("M61 acquire_framebuffers missing direct POST 82/83 immediates")
-post82 = code82[-1]
-post83 = code83[0]
-out82 = next(
-    (match for match in outs if post82.end() < match.start() < call.start()), None)
-out83 = next((match for match in outs if match.start() > post83.end()), None)
-if out82 is None or out83 is None:
-    raise RuntimeError("M61 acquire_framebuffers missing direct POST 82/83 out instructions")
-if not (post82.start() < out82.start() < call.start() <
-        post83.start() < out83.start()):
+if re.search(
+        rf"^\s*{getter_address:x}:\s+[0-9a-f]{{2}}",
+        getter_window, re.IGNORECASE | re.MULTILINE) is None:
+    raise RuntimeError("M61 boring_framebuffer_get symbol has no linked instruction code")
+
+header_re = re.compile(r"^\s*([0-9a-f]+)\s+<([^>]+)>:$", re.IGNORECASE)
+instruction_re = re.compile(
+    r"^\s*([0-9a-f]+):\s+((?:[0-9a-f]{2}\s+)+)\s*(.*)$",
+    re.IGNORECASE)
+instructions = []
+owner = None
+for line in disasm.splitlines():
+    header = header_re.match(line)
+    if header is not None:
+        owner = header.group(2)
+        continue
+    match = instruction_re.match(line)
+    if match is None:
+        continue
+    raw = bytes.fromhex(match.group(2))
+    instructions.append((int(match.group(1), 16), raw, match.group(3), owner))
+
+call_rows = []
+for index, (address, raw, asm, call_owner) in enumerate(instructions):
+    if (len(raw) == 5) and (raw[0] == 0xe8):
+        displacement = int.from_bytes(raw[1:5], "little", signed=True)
+        target = (address + 5 + displacement) & 0xffffffffffffffff
+        if target == getter_address:
+            call_rows.append((index, address, asm, call_owner))
+if not call_rows:
+    raise RuntimeError(
+        "M61 linked kernel has no direct E8 rel32 call targeting boring_framebuffer_get")
+
+
+def loads_al_code(raw: bytes, code: int) -> bool:
+    if (len(raw) >= 2) and (raw[0] == 0xb0) and (raw[1] == code):
+        return True
+    if (len(raw) == 5) and (raw[0] == 0xb8) and (raw[1] == code):
+        return True
+    if (len(raw) == 3) and (raw[0] == 0xc6) and (raw[1] == 0xc0) and (raw[2] == code):
+        return True
+    if (len(raw) == 6) and (raw[0] == 0xc7) and (raw[1] == 0xc0) and (raw[2] == code):
+        return True
+    if ((len(raw) == 7) and (raw[0] == 0x48) and
+        (raw[1] == 0xc7) and (raw[2] == 0xc0) and (raw[3] == code)):
+        return True
+    return False
+
+
+def is_port80_out(raw: bytes) -> bool:
+    return (len(raw) == 2) and (raw[0] == 0xe6) and (raw[1] == 0x80)
+
+
+def post_before(call_index: int, code: int):
+    lower = max(0, call_index - 12)
+    for out_index in range(call_index - 1, lower - 1, -1):
+        if not is_port80_out(instructions[out_index][1]):
+            continue
+        for load_index in range(out_index - 1, max(lower - 1, out_index - 5), -1):
+            if loads_al_code(instructions[load_index][1], code):
+                return load_index, out_index
+    return None
+
+
+def post_after(call_index: int, code: int):
+    upper = min(len(instructions), call_index + 13)
+    for out_index in range(call_index + 1, upper):
+        if not is_port80_out(instructions[out_index][1]):
+            continue
+        for load_index in range(max(call_index + 1, out_index - 4), out_index):
+            if loads_al_code(instructions[load_index][1], code):
+                return load_index, out_index
+    return None
+
+boundary = None
+for call_index, call_address, call_asm, call_owner in call_rows:
+    before = post_before(call_index, 0x82)
+    after = post_after(call_index, 0x83)
+    if (before is not None) and (after is not None):
+        boundary = (call_index, call_address, call_asm, call_owner, before, after)
+        break
+if boundary is None:
+    raise RuntimeError(
+        "M61 real getter E8 call is not bracketed by direct POST 82/out and POST 83/out")
+
+call_index, call_address, call_asm, call_owner, before, after = boundary
+before_load, before_out = before
+after_load, after_out = after
+if not (instructions[before_load][0] < instructions[before_out][0] < call_address <
+        instructions[after_load][0] < instructions[after_out][0]):
     raise RuntimeError("M61 direct 82/getter/83 machine-code order is not preserved")
+
+acquire_symbols = sorted(
+    name for name in symbols
+    if (name == "acquire_framebuffers") or name.startswith("acquire_framebuffers."))
+acquire_symbol_state = ",".join(acquire_symbols) if acquire_symbols else "optimized-into-caller"
+print(f"M61 linked acquire_framebuffers symbol state: {acquire_symbol_state}")
+print(f"M61 linked real getter E8 caller: {call_owner or 'unknown'}")
+print(f"M61 linked real getter address: 0x{getter_address:x}")
+print(f"M61 linked real getter call address: 0x{call_address:x}")
 '''
 replace_once(old_binary_tail, new_binary_tail, "linked real getter verifier")
 
@@ -359,7 +461,7 @@ replace_once(
     'print("M61 POST 71-to-72 bisector: 80 81 82 83 84 85 86 87 88 89 8A 8B 8C 8D 8E 8F then 72")\n'
     'print("M61 getter linker wrap removed: YES")\n'
     'print("M61 direct source 82/83 boundary: YES")\n'
-    'print("M61 linked acquire_framebuffers real getter call: YES")\n'
+    'print("M61 linked real getter E8 boundary: YES")\n'
     'print("M61 first actual framebuffer memory write witness: 87 before / 88 after")\n',
     "verifier report")
 
