@@ -5,8 +5,17 @@
 
 #ifdef BORING_M61_PHYSICAL_BREADCRUMBS
 #include <boring/io.h>
-#define M61_PMM_FALSE_POST(code) \
-    x86_64_out8((uint16_t)0x80U, (uint8_t)(code))
+
+static uint8_t m61_pmm_false_reason;
+
+uint8_t boring_m61_pmm_false_reason(void) {
+    return m61_pmm_false_reason;
+}
+
+#define M61_PMM_FALSE_POST(code) do { \
+    m61_pmm_false_reason = (uint8_t)(code); \
+    x86_64_out8((uint16_t)0x80U, (uint8_t)(code)); \
+} while (0)
 #endif
 
 #define PMM_MAX_MEMORY_MAP_ENTRIES 256ULL
@@ -205,6 +214,9 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
     uint64_t entry_index;
 
     pmm_reset_state();
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    m61_pmm_false_reason = 0U;
+#endif
 
 #ifdef BORING_M61_PHYSICAL_BREADCRUMBS
     if (memory_map == NULL) {
