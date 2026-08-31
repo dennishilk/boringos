@@ -4,7 +4,10 @@ import subprocess
 root = Path(__file__).resolve().parent.parent
 base = root / "tests/m61-physical-trace-kernel.sh"
 tmp = root / "tests/.m61-physical-trace-kernel-71-72.generated.sh"
+trace_base = root / "kernel/core/m61_physical_breadcrumbs.c"
+trace_tmp = root / "kernel/core/.m61_physical_breadcrumbs_71_72.generated.c"
 src = base.read_text()
+trace_src = trace_base.read_text()
 
 
 def replace_once(old: str, new: str, label: str) -> None:
@@ -13,6 +16,26 @@ def replace_once(old: str, new: str, label: str) -> None:
     if count != 1:
         raise RuntimeError(f"{label}: expected one anchor, found {count}")
     src = src.replace(old, new, 1)
+
+
+def trace_replace_once(old: str, new: str, label: str) -> None:
+    global trace_src
+    count = trace_src.count(old)
+    if count != 1:
+        raise RuntimeError(f"{label}: expected one anchor, found {count}")
+    trace_src = trace_src.replace(old, new, 1)
+
+
+trace_replace_once(
+    "#include <boring/input.h>\n",
+    "#include <boring/input.h>\n#include <boring/io.h>\n",
+    "direct getter POST include")
+trace_replace_once(
+    "    fb = boring_framebuffer_get();\n",
+    "    x86_64_out8((uint16_t)0x80U, (uint8_t)0x82U);\n"
+    "    fb = boring_framebuffer_get();\n"
+    "    x86_64_out8((uint16_t)0x80U, (uint8_t)0x83U);\n",
+    "direct 82/83 getter boundary")
 
 replace_once(
     "    M61_POST_HEAP_INIT_AFTER = 0x7f\n};",
@@ -71,7 +94,6 @@ extra = r'''
 #include <boring/serial.h>
 
 uint64_t __real_boring_m61_framebuffer_count(void);
-const struct boring_framebuffer *__real_boring_framebuffer_get(void);
 bool __real_boring_framebuffer_surface_valid(
     const struct boring_framebuffer *surface);
 bool __real_boring_m61_framebuffer_get(
@@ -83,7 +105,6 @@ bool __real_boring_graphics_fill_rect(
 void __real_serial_write_string(const char *value);
 
 uint64_t __wrap_boring_m61_framebuffer_count(void);
-const struct boring_framebuffer *__wrap_boring_framebuffer_get(void);
 bool __wrap_boring_framebuffer_surface_valid(
     const struct boring_framebuffer *surface);
 bool __wrap_boring_m61_framebuffer_get(
@@ -139,26 +160,11 @@ uint64_t __wrap_boring_m61_framebuffer_count(void) {
     return result;
 }
 
-const struct boring_framebuffer *__wrap_boring_framebuffer_get(void) {
-    const struct boring_framebuffer *result;
-
-    if (acquire_71_72_active && (acquire_71_72_phase == 2U)) {
-        /* framebuffer_get() is only reached after the READY branch is taken. */
-        M61_POST(M61_POST_FRAMEBUFFER_READY_CONFIRMED);
-    }
-    result = __real_boring_framebuffer_get();
-    if (acquire_71_72_active && (acquire_71_72_phase == 2U)) {
-        M61_POST(M61_POST_SELECTED_FRAMEBUFFER_RETURNED);
-        acquire_71_72_phase = 3U;
-    }
-    return result;
-}
-
 bool __wrap_boring_framebuffer_surface_valid(
     const struct boring_framebuffer *surface) {
     const bool result = __real_boring_framebuffer_surface_valid(surface);
 
-    if (acquire_71_72_active && (acquire_71_72_phase == 3U) && result) {
+    if (acquire_71_72_active && (acquire_71_72_phase == 2U) && result) {
         M61_POST(M61_POST_SELECTED_FRAMEBUFFER_VALID);
         acquire_71_72_phase = 4U;
     }
@@ -273,10 +279,15 @@ replace_once(
 replace_once(
     "--wrap=boring_framebuffer_boot_init --wrap=pmm_init",
     "--wrap=boring_framebuffer_boot_init --wrap=boring_m61_framebuffer_count "
-    "--wrap=boring_framebuffer_get --wrap=boring_framebuffer_surface_valid "
-    "--wrap=boring_m61_framebuffer_get --wrap=boring_graphics_fill_rect "
-    "--wrap=serial_write_string --wrap=pmm_init",
+    "--wrap=boring_framebuffer_surface_valid --wrap=boring_m61_framebuffer_get "
+    "--wrap=boring_graphics_fill_rect --wrap=serial_write_string --wrap=pmm_init",
     "linker wrappers")
+
+replace_once(
+    "kernel/core/m61_physical_breadcrumbs.c kernel/core/m61_post80_generated.c",
+    "kernel/core/.m61_physical_breadcrumbs_71_72.generated.c "
+    "kernel/core/m61_post80_generated.c",
+    "candidate direct 82/83 source")
 
 replace_once(
     "nm build/kernel.elf | grep -Fq 'boring_m61_post_62_to_63_sequence'",
@@ -288,32 +299,77 @@ replace_once(
     '    "__wrap_boring_framebuffer_boot_init": ("70", "71", "78", "79"),\n',
     '    "__wrap_boring_framebuffer_boot_init": ("70", "71", "78", "79"),\n'
     '    "__wrap_boring_m61_framebuffer_count": ("80", "81"),\n'
-    '    "__wrap_boring_framebuffer_get": ("82", "83"),\n'
+    '    "acquire_framebuffers": ("82", "83"),\n'
     '    "__wrap_boring_framebuffer_surface_valid": ("84",),\n'
     '    "__wrap_boring_m61_framebuffer_get": ("85", "86"),\n'
     '    "__wrap_boring_graphics_fill_rect": ("87", "88", "89", "8a", "8b", "8c", "8d"),\n'
     '    "__wrap_serial_write_string": ("8b", "8e", "8f"),\n',
-    "binary verifier wrappers")
+    "binary verifier boundaries")
 
 replace_once(
     '        if re.search(rf"\\$0x0*{code}\\b", body, re.IGNORECASE) is None:\n',
     '        if re.search(rf"\\$0x(?:0*|f+){code}\\b", body, re.IGNORECASE) is None:\n',
     "accept sign-extended POST immediates")
 
-replace_once(
-    "if out_count < 27:\n",
-    "if out_count < 44:\n",
-    "binary verifier minimum")
+old_binary_tail = (
+    'if out_count < 27:\n'
+    '    raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")\n')
+new_binary_tail = r'''if out_count < 44:
+    raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")
+
+nm_output = subprocess.check_output(["nm", "build/kernel.elf"], text=True)
+for forbidden in ("__wrap_boring_framebuffer_get", "__real_boring_framebuffer_get"):
+    if forbidden in nm_output:
+        raise RuntimeError(f"M61 linked kernel still contains forbidden getter wrapper symbol {forbidden}")
+
+acquire = subprocess.check_output(
+    ["objdump", "-d", "--disassemble=acquire_framebuffers", "build/kernel.elf"],
+    text=True)
+if "<__wrap_boring_framebuffer_get>" in acquire:
+    raise RuntimeError("M61 acquire_framebuffers still calls wrapped framebuffer getter")
+call = re.search(r"\bcall\w*\b[^\n]*<boring_framebuffer_get>", acquire)
+if call is None:
+    raise RuntimeError("M61 acquire_framebuffers does not call real boring_framebuffer_get")
+code82 = [
+    match for match in re.finditer(r"\$0x(?:0*|f+)82\b", acquire, re.IGNORECASE)
+    if match.start() < call.start()
+]
+code83 = [
+    match for match in re.finditer(r"\$0x(?:0*|f+)83\b", acquire, re.IGNORECASE)
+    if match.start() > call.end()
+]
+outs = list(re.finditer(r"\bout\w*\b[^\n]*\$0x80\b", acquire, re.IGNORECASE))
+if not code82 or not code83:
+    raise RuntimeError("M61 acquire_framebuffers missing direct POST 82/83 immediates")
+post82 = code82[-1]
+post83 = code83[0]
+out82 = next(
+    (match for match in outs if post82.end() < match.start() < call.start()), None)
+out83 = next((match for match in outs if match.start() > post83.end()), None)
+if out82 is None or out83 is None:
+    raise RuntimeError("M61 acquire_framebuffers missing direct POST 82/83 out instructions")
+if not (post82.start() < out82.start() < call.start() <
+        post83.start() < out83.start()):
+    raise RuntimeError("M61 direct 82/getter/83 machine-code order is not preserved")
+'''
+replace_once(old_binary_tail, new_binary_tail, "linked real getter verifier")
 
 replace_once(
     'print("M61 POST 62-to-63 bisector: 70 71 72 73 74 75 76 77 78 79 7A 7B 7C 7D 7E 7F then 63")\n',
     'print("M61 POST 62-to-63 bisector: 70 71 72 73 74 75 76 77 78 79 7A 7B 7C 7D 7E 7F then 63")\n'
     'print("M61 POST 71-to-72 bisector: 80 81 82 83 84 85 86 87 88 89 8A 8B 8C 8D 8E 8F then 72")\n'
+    'print("M61 getter linker wrap removed: YES")\n'
+    'print("M61 direct source 82/83 boundary: YES")\n'
+    'print("M61 linked acquire_framebuffers real getter call: YES")\n'
     'print("M61 first actual framebuffer memory write witness: 87 before / 88 after")\n',
     "verifier report")
 
+if "--wrap=boring_framebuffer_get" in src:
+    raise RuntimeError("M61 getter linker wrap unexpectedly remains in generated link")
 tmp.write_text(src)
+trace_tmp.write_text(trace_src)
 try:
     subprocess.run(["sh", str(tmp)], cwd=root, check=True)
 finally:
     tmp.unlink(missing_ok=True)
+    trace_tmp.unlink(missing_ok=True)
