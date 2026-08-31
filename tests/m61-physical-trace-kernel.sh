@@ -276,7 +276,7 @@ bool m61_post_vmm_init(
 }
 
 bool m61_post_heap_init(void) {
-    const bool result;
+    bool result;
 
     M61_POST(M61_POST_HEAP_INIT_BEFORE);
     result = __real_heap_init();
