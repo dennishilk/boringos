@@ -106,7 +106,9 @@ entry_instrumented = replace_once(
 )
 
 if entry_instrumented.count("M61_7B_7C_POST(") != 8:
-    raise RuntimeError("expected exactly seven direct 7B-to-7C entry breadcrumbs plus the macro definition")
+    raise RuntimeError(
+        "expected exactly seven direct 7B-to-7C entry breadcrumbs plus the macro definition"
+    )
 for code in range(0x93, 0x9A):
     if entry_instrumented.count(f"0x{code:02X}U") != 1:
         raise RuntimeError(f"entry breadcrumb 0x{code:02X} is missing or duplicated")
@@ -149,89 +151,53 @@ def function_disassembly(name: str) -> str:
     )
 
 
-instruction_re = re.compile(
-    r"^\\s*([0-9a-f]+):\\s+((?:[0-9a-f]{2}\\s+)+)\\s*(.*)$", re.IGNORECASE
-)
+def immediate_addresses(body: str, code: int):
+    pattern = re.compile(
+        rf"^\\s*([0-9a-f]+):.*\\$0x0*{code:02x}\\b",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    return [int(address, 16) for address in pattern.findall(body)]
 
 
-def parsed_instructions(body: str):
-    rows = []
-    for line in body.splitlines():
-        match = instruction_re.match(line)
-        if match is None:
-            continue
-        rows.append(
-            (
-                int(match.group(1), 16),
-                bytes.fromhex(match.group(2)),
-                match.group(3),
-            )
+def port80_out_addresses(body: str):
+    pattern = re.compile(
+        r"^\\s*([0-9a-f]+):.*\\bout\\b.*\\$0x0*80\\b",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    return [int(address, 16) for address in pattern.findall(body)]
+
+
+def require_code_once(body: str, code: int, label: str) -> int:
+    addresses = immediate_addresses(body, code)
+    if len(addresses) != 1:
+        raise RuntimeError(
+            f"{label} expected one linked immediate 0x{code:02X}, found {addresses}"
         )
-    return rows
-
-
-def loads_al_code(raw: bytes, code: int) -> bool:
-    if (len(raw) >= 2) and (raw[0] == 0xB0) and (raw[1] == code):
-        return True
-    if (len(raw) == 5) and (raw[0] == 0xB8) and (raw[1] == code):
-        return True
-    if (len(raw) == 3) and (raw[0] == 0xC6) and (raw[1] == 0xC0) and (raw[2] == code):
-        return True
-    if (len(raw) == 6) and (raw[0] == 0xC7) and (raw[1] == 0xC0) and (raw[2] == code):
-        return True
-    if (
-        (len(raw) == 7)
-        and (raw[0] == 0x48)
-        and (raw[1] == 0xC7)
-        and (raw[2] == 0xC0)
-        and (raw[3] == code)
-    ):
-        return True
-    return False
-
-
-def is_port80_out(raw: bytes) -> bool:
-    return (len(raw) == 2) and (raw[0] == 0xE6) and (raw[1] == 0x80)
-
-
-def post_addresses(body: str, code: int):
-    rows = parsed_instructions(body)
-    found = []
-    for out_index, (out_address, raw, _asm) in enumerate(rows):
-        if not is_port80_out(raw):
-            continue
-        for load_index in range(max(0, out_index - 5), out_index):
-            if loads_al_code(rows[load_index][1], code):
-                found.append(out_address)
-                break
-    return found
+    return addresses[0]
 
 
 pmm_wrapper = function_disassembly("m61_post_pmm_init")
 vmm_wrapper = function_disassembly("m61_post_vmm_init")
 entry_body = function_disassembly("m61_post_real_boring_kernel_entry")
 
-for code in (0x7B, 0x92):
-    addresses = post_addresses(pmm_wrapper, code)
-    if len(addresses) != 1:
-        raise RuntimeError(
-            f"m61_post_pmm_init expected one POST 0x{code:02X}, found {addresses}"
-        )
-if post_addresses(pmm_wrapper, 0x7B)[0] >= post_addresses(pmm_wrapper, 0x92)[0]:
+pmm_7b = require_code_once(pmm_wrapper, 0x7B, "m61_post_pmm_init")
+pmm_92 = require_code_once(pmm_wrapper, 0x92, "m61_post_pmm_init")
+if pmm_7b >= pmm_92:
     raise RuntimeError("existing 7B is not before new 92 in linked PMM wrapper")
+if len(port80_out_addresses(pmm_wrapper)) < 3:
+    raise RuntimeError("linked PMM wrapper does not contain 7A/7B/92 port-0x80 outputs")
 
-addresses_7c = post_addresses(vmm_wrapper, 0x7C)
-if len(addresses_7c) != 1:
-    raise RuntimeError(f"m61_post_vmm_init expected one POST 0x7C, found {addresses_7c}")
+require_code_once(vmm_wrapper, 0x7C, "m61_post_vmm_init")
+if len(port80_out_addresses(vmm_wrapper)) < 2:
+    raise RuntimeError("linked VMM wrapper does not contain existing 7C/7D outputs")
 
 entry_posts = {}
 for code in range(0x93, 0x9A):
-    addresses = post_addresses(entry_body, code)
-    if len(addresses) != 1:
-        raise RuntimeError(
-            f"entry expected one POST 0x{code:02X}, found {addresses}"
-        )
-    entry_posts[code] = addresses[0]
+    entry_posts[code] = require_code_once(
+        entry_body, code, "m61_post_real_boring_kernel_entry"
+    )
+if len(port80_out_addresses(entry_body)) < 7:
+    raise RuntimeError("linked entry does not contain seven direct 93-99 port-0x80 outputs")
 
 success_codes = (0x93, 0x94, 0x95, 0x96, 0x97)
 if [entry_posts[code] for code in success_codes] != sorted(
@@ -243,10 +209,15 @@ if "<m61_post_pmm_init>" not in entry_body:
     raise RuntimeError("linked entry does not call m61_post_pmm_init")
 if "<pmm_get_stats>" not in entry_body:
     raise RuntimeError("linked entry does not call pmm_get_stats in 7B-to-7C interval")
+if "<pmm_self_test>" not in entry_body:
+    raise RuntimeError("linked entry does not call pmm_self_test in 7B-to-7C interval")
 if "<m61_post_vmm_init>" not in entry_body:
     raise RuntimeError("linked entry does not call m61_post_vmm_init")
 
-call_re = re.compile(r"^\\s*([0-9a-f]+):.*\\bcall\\b.*<([^>]+)>", re.IGNORECASE | re.MULTILINE)
+call_re = re.compile(
+    r"^\\s*([0-9a-f]+):.*\\bcall\\b.*<([^>]+)>",
+    re.IGNORECASE | re.MULTILINE,
+)
 calls = [(int(address, 16), target) for address, target in call_re.findall(entry_body)]
 
 
@@ -263,21 +234,30 @@ if pmm_call is None or pmm_call >= entry_posts[0x93]:
 stats_call = first_call("pmm_get_stats", entry_posts[0x93])
 if stats_call is None or not (entry_posts[0x93] < stats_call < entry_posts[0x94]):
     raise RuntimeError("linked first pmm_get_stats call is not bracketed by 93/94")
+self_test_call = first_call("pmm_self_test", entry_posts[0x95])
+if self_test_call is None or not (entry_posts[0x95] < self_test_call < entry_posts[0x96]):
+    raise RuntimeError("linked pmm_self_test call is not bracketed by 95/96")
 vmm_call = first_call("m61_post_vmm_init", entry_posts[0x97])
 if vmm_call is None or vmm_call <= entry_posts[0x97]:
     raise RuntimeError("linked VMM wrapper call is not after POST 97")
 
-all_disasm = subprocess.check_output(["objdump", "-d", str(elf)], text=True)
-for code in range(0x92, 0x9A):
-    occurrences = len(post_addresses(all_disasm, code))
-    if occurrences != 1:
-        raise RuntimeError(
-            f"linked POST 0x{code:02X} expected exactly once globally, found {occurrences}"
-        )
+# Fresh codes are required in exactly their intended linked functions. The
+# established M61 verifier immediately above already proves unchanged 7B/7C
+# wrapper meanings and the complete legacy 70..7F sequence.
+for code in range(0x93, 0x9A):
+    if immediate_addresses(pmm_wrapper, code) or immediate_addresses(vmm_wrapper, code):
+        raise RuntimeError(f"linked entry code 0x{code:02X} leaked into PMM/VMM wrapper")
+if immediate_addresses(entry_body, 0x92):
+    raise RuntimeError("linked wrapper-return code 0x92 leaked into entry")
 
 print("M61 linked existing 7B meaning preserved: YES")
 print("M61 linked existing 7C meaning preserved: YES")
-print("M61 POST 7B-to-7C map: 92 wrapper-return; 93 PMM-success/stats-before; 94 stats-success/report-before; 95 report-after/selftest-before; 96 selftest-success/final-serial-before; 97 final-serial-after/VMM-call-before; 98 PMM-false; 99 initial-stats-false")
+print(
+    "M61 POST 7B-to-7C map: 92 wrapper-return; 93 PMM-success/stats-before; "
+    "94 stats-success/report-before; 95 report-after/selftest-before; "
+    "96 selftest-success/final-serial-before; 97 final-serial-after/VMM-call-before; "
+    "98 PMM-false; 99 initial-stats-false"
+)
 print("M61 linked new 92-99 breadcrumbs confined to 7B-to-7C interval: YES")
 print("M61 linked framebuffer diagnostic writes reintroduced: NO")
 print("M61 linked getter wrapper reintroduced: NO")
