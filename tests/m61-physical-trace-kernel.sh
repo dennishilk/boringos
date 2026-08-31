@@ -22,6 +22,21 @@ cat > "$POST_SOURCE" <<'EOF_POST_C'
 #ifdef __real_serial_init
 #undef __real_serial_init
 #endif
+#ifdef __real_boring_cpu_inventory_init
+#undef __real_boring_cpu_inventory_init
+#endif
+#ifdef __real_boring_pci_inventory_init
+#undef __real_boring_pci_inventory_init
+#endif
+#ifdef __real_boring_smbios_boot_init
+#undef __real_boring_smbios_boot_init
+#endif
+#ifdef __real_pmm_init
+#undef __real_pmm_init
+#endif
+#ifdef __real_vmm_init
+#undef __real_vmm_init
+#endif
 #ifdef __real_heap_init
 #undef __real_heap_init
 #endif
@@ -41,7 +56,9 @@ cat > "$POST_SOURCE" <<'EOF_POST_C'
 #undef __real_boring_framebuffer_user_present
 #endif
 
+#include <boring/boot_protocol.h>
 #include <boring/boringfs_vfs.h>
+#include <boring/framebuffer.h>
 #include <boring/framebuffer_user.h>
 #include <boring/heap.h>
 #include <boring/io.h>
@@ -69,7 +86,24 @@ enum m61_post_code {
     M61_POST_BORING_DISPLAY = 0x68,
     M61_POST_BORING_WM = 0x69,
     M61_POST_AUTO_TERMINAL = 0x6a,
-    M61_POST_DESKTOP_PRESENT = 0x6f
+    M61_POST_DESKTOP_PRESENT = 0x6f,
+
+    M61_POST_FB_PROBE_BOOT_INIT_BEFORE = 0x70,
+    M61_POST_FB_PROBE_BOOT_INIT_AFTER = 0x71,
+    M61_POST_CPU_INVENTORY_BEFORE = 0x72,
+    M61_POST_CPU_INVENTORY_AFTER = 0x73,
+    M61_POST_PCI_INVENTORY_BEFORE = 0x74,
+    M61_POST_PCI_INVENTORY_AFTER = 0x75,
+    M61_POST_SMBIOS_BEFORE = 0x76,
+    M61_POST_SMBIOS_AFTER = 0x77,
+    M61_POST_ENTRY_FB_BOOT_INIT_BEFORE = 0x78,
+    M61_POST_ENTRY_FB_BOOT_INIT_AFTER = 0x79,
+    M61_POST_PMM_INIT_BEFORE = 0x7a,
+    M61_POST_PMM_INIT_AFTER = 0x7b,
+    M61_POST_VMM_INIT_BEFORE = 0x7c,
+    M61_POST_VMM_INIT_AFTER = 0x7d,
+    M61_POST_HEAP_INIT_BEFORE = 0x7e,
+    M61_POST_HEAP_INIT_AFTER = 0x7f
 };
 
 const char boring_m61_post_port80_enabled[] =
@@ -78,10 +112,24 @@ const uint8_t boring_m61_post_sequence[] = {
     0x61U, 0x62U, 0x63U, 0x64U, 0x65U, 0x66U,
     0x67U, 0x68U, 0x69U, 0x6aU, 0x6fU
 };
+const uint8_t boring_m61_post_62_to_63_sequence[] = {
+    0x70U, 0x71U, 0x72U, 0x73U, 0x74U, 0x75U, 0x76U, 0x77U,
+    0x78U, 0x79U, 0x7aU, 0x7bU, 0x7cU, 0x7dU, 0x7eU, 0x7fU
+};
 
 void boring_kernel_entry(void);
 void m61_post_real_boring_kernel_entry(void);
 void __real_serial_init(void);
+void __real_boring_cpu_inventory_init(void);
+void __real_boring_pci_inventory_init(void);
+void __real_boring_smbios_boot_init(
+    const struct boring_limine_hhdm_response *,
+    const struct boring_limine_memmap_response *);
+enum boring_framebuffer_status __real_boring_framebuffer_boot_init(void);
+bool __real_pmm_init(const struct boring_limine_memmap_response *);
+bool __real_vmm_init(const struct boring_limine_hhdm_response *,
+                     const struct boring_limine_paging_mode_response *,
+                     const struct boring_limine_memmap_response *);
 bool __real_heap_init(void);
 bool __real_irq_init(void);
 bool __real_usb_mass_storage_init(struct xhci_state *state);
@@ -93,6 +141,16 @@ enum boring_framebuffer_user_result __real_boring_framebuffer_user_present(
     struct process *process, uint32_t handle);
 
 void m61_post_serial_init(void);
+void m61_post_boring_cpu_inventory_init(void);
+void m61_post_boring_pci_inventory_init(void);
+void m61_post_boring_smbios_boot_init(
+    const struct boring_limine_hhdm_response *,
+    const struct boring_limine_memmap_response *);
+enum boring_framebuffer_status __wrap_boring_framebuffer_boot_init(void);
+bool m61_post_pmm_init(const struct boring_limine_memmap_response *);
+bool m61_post_vmm_init(const struct boring_limine_hhdm_response *,
+                       const struct boring_limine_paging_mode_response *,
+                       const struct boring_limine_memmap_response *);
 bool m61_post_heap_init(void);
 bool m61_post_irq_init(void);
 bool m61_post_usb_mass_storage_init(struct xhci_state *state);
@@ -103,6 +161,7 @@ bool m61_post_process_set_name(struct process *process, const char *name);
 enum boring_framebuffer_user_result m61_post_boring_framebuffer_user_present(
     struct process *process, uint32_t handle);
 
+static uint8_t framebuffer_boot_init_calls;
 static bool init_posted;
 static bool display_posted;
 static bool wm_posted;
@@ -151,11 +210,79 @@ void m61_post_serial_init(void) {
     M61_POST(M61_POST_EARLY_CONTAINMENT_SERIAL);
 }
 
-bool m61_post_heap_init(void) {
-    const bool result = __real_heap_init();
+enum boring_framebuffer_status __wrap_boring_framebuffer_boot_init(void) {
+    const uint8_t call_index = framebuffer_boot_init_calls;
+    enum boring_framebuffer_status result;
 
+    if (framebuffer_boot_init_calls != UINT8_MAX) {
+        ++framebuffer_boot_init_calls;
+    }
+    if (call_index == 0U) {
+        M61_POST(M61_POST_FB_PROBE_BOOT_INIT_BEFORE);
+    } else if (call_index == 1U) {
+        M61_POST(M61_POST_ENTRY_FB_BOOT_INIT_BEFORE);
+    }
+
+    result = __real_boring_framebuffer_boot_init();
+
+    if (call_index == 0U) {
+        M61_POST(M61_POST_FB_PROBE_BOOT_INIT_AFTER);
+    } else if (call_index == 1U) {
+        M61_POST(M61_POST_ENTRY_FB_BOOT_INIT_AFTER);
+    }
+    return result;
+}
+
+void m61_post_boring_cpu_inventory_init(void) {
+    /* Reaching this proves the immediate M61 framebuffer probe/witness returned. */
+    M61_POST(M61_POST_CPU_INVENTORY_BEFORE);
+    __real_boring_cpu_inventory_init();
+    M61_POST(M61_POST_CPU_INVENTORY_AFTER);
+}
+
+void m61_post_boring_pci_inventory_init(void) {
+    M61_POST(M61_POST_PCI_INVENTORY_BEFORE);
+    __real_boring_pci_inventory_init();
+    M61_POST(M61_POST_PCI_INVENTORY_AFTER);
+}
+
+void m61_post_boring_smbios_boot_init(
+    const struct boring_limine_hhdm_response *hhdm,
+    const struct boring_limine_memmap_response *memmap) {
+    M61_POST(M61_POST_SMBIOS_BEFORE);
+    __real_boring_smbios_boot_init(hhdm, memmap);
+    M61_POST(M61_POST_SMBIOS_AFTER);
+}
+
+bool m61_post_pmm_init(const struct boring_limine_memmap_response *memmap) {
+    bool result;
+
+    M61_POST(M61_POST_PMM_INIT_BEFORE);
+    result = __real_pmm_init(memmap);
+    M61_POST(M61_POST_PMM_INIT_AFTER);
+    return result;
+}
+
+bool m61_post_vmm_init(
+    const struct boring_limine_hhdm_response *hhdm,
+    const struct boring_limine_paging_mode_response *paging,
+    const struct boring_limine_memmap_response *memmap) {
+    bool result;
+
+    M61_POST(M61_POST_VMM_INIT_BEFORE);
+    result = __real_vmm_init(hhdm, paging, memmap);
+    M61_POST(M61_POST_VMM_INIT_AFTER);
+    return result;
+}
+
+bool m61_post_heap_init(void) {
+    const bool result;
+
+    M61_POST(M61_POST_HEAP_INIT_BEFORE);
+    result = __real_heap_init();
+    M61_POST(M61_POST_HEAP_INIT_AFTER);
     if (result) {
-        /* PMM and VMM are already prerequisites at this call boundary. */
+        /* Preserve the existing 63 meaning after successful real heap init. */
         M61_POST(M61_POST_MEMORY_RUNTIME);
     }
     return result;
@@ -234,7 +361,7 @@ EOF_POST_C
 # observer. Keep the established QEMU runtime acceptance unchanged and prove
 # here that the exact diagnostic kernel contains the real out instructions at
 # every intended call boundary. Physical hardware remains the port-0x80 oracle.
-POST_CPPFLAGS='-Dboring_kernel_entry=m61_post_real_boring_kernel_entry -D__real_serial_init=m61_post_serial_init -D__real_heap_init=m61_post_heap_init -D__real_irq_init=m61_post_irq_init -D__real_usb_mass_storage_init=m61_post_usb_mass_storage_init -D__real_boringfs_vfs_create_writable=m61_post_boringfs_vfs_create_writable -D__real_process_set_name=m61_post_process_set_name -D__real_boring_framebuffer_user_present=m61_post_boring_framebuffer_user_present'
+POST_CPPFLAGS='-Dboring_kernel_entry=m61_post_real_boring_kernel_entry -D__real_serial_init=m61_post_serial_init -D__real_boring_cpu_inventory_init=m61_post_boring_cpu_inventory_init -D__real_boring_pci_inventory_init=m61_post_boring_pci_inventory_init -D__real_boring_smbios_boot_init=m61_post_boring_smbios_boot_init -D__real_pmm_init=m61_post_pmm_init -D__real_vmm_init=m61_post_vmm_init -D__real_heap_init=m61_post_heap_init -D__real_irq_init=m61_post_irq_init -D__real_usb_mass_storage_init=m61_post_usb_mass_storage_init -D__real_boringfs_vfs_create_writable=m61_post_boringfs_vfs_create_writable -D__real_process_set_name=m61_post_process_set_name -D__real_boring_framebuffer_user_present=m61_post_boring_framebuffer_user_present'
 CPPFLAGS="-DBORING_M36_DESKTOP_ACCEPTANCE=1 -DBORING_M37_DESKTOP_ACCEPTANCE=1 -DBORING_M54_USB_ONLY_DESKTOP=1 -DBORING_M61_PHYSICAL_BREADCRUMBS=1 $POST_CPPFLAGS"
 if [ "${M61_EARLY_FAULT_TEST:-0}" = 1 ]; then
     CPPFLAGS="$CPPFLAGS -DBORING_M61_EARLY_FAULT_TEST=1"
@@ -245,7 +372,7 @@ rm -f build/kernel.elf build/boringos.iso build/.test-mode
 make TEST_MODE=m36-desktop \
     TEST_CPPFLAGS="$CPPFLAGS" \
     TEST_HARNESS_C='kernel/core/m61_desktop_test.c kernel/core/m37_desktop_test_adapter.c kernel/core/block_slice.c kernel/core/xhci_mixed.c kernel/arch/x86_64/xhci_mixed.c kernel/core/usb_mass_storage.c kernel/core/m61_physical_breadcrumbs.c kernel/core/m61_post80_generated.c' \
-    LD='ld --wrap=serial_init --wrap=boring_cpu_inventory_init --wrap=boring_pci_inventory_init --wrap=boring_smbios_boot_init --wrap=pmm_init --wrap=vmm_init --wrap=heap_init --wrap=exception_init --wrap=syscall_test_run --wrap=boring_input_init --wrap=irq_init --wrap=timer_init --wrap=xhci_init --wrap=xhci_address_connected --wrap=xhci_discover_descriptors --wrap=xhci_configure_hid_devices_mixed --wrap=usb_mass_storage_init --wrap=boringfs_vfs_create_writable --wrap=process_set_name --wrap=boring_framebuffer_user_claim --wrap=boring_framebuffer_user_present --wrap=boring_ipc_service_register --wrap=x86_64_exception_dispatch' \
+    LD='ld --wrap=serial_init --wrap=boring_cpu_inventory_init --wrap=boring_pci_inventory_init --wrap=boring_smbios_boot_init --wrap=boring_framebuffer_boot_init --wrap=pmm_init --wrap=vmm_init --wrap=heap_init --wrap=exception_init --wrap=syscall_test_run --wrap=boring_input_init --wrap=irq_init --wrap=timer_init --wrap=xhci_init --wrap=xhci_address_connected --wrap=xhci_discover_descriptors --wrap=xhci_configure_hid_devices_mixed --wrap=usb_mass_storage_init --wrap=boringfs_vfs_create_writable --wrap=process_set_name --wrap=boring_framebuffer_user_claim --wrap=boring_framebuffer_user_present --wrap=boring_ipc_service_register --wrap=x86_64_exception_dispatch' \
     BOOT_USER_ELF=build/user/boring-init-desktop.elf \
     BOOT_USER_NAME=boring-init.elf \
     BOOT_EXTRA_USER_ELF= BOOT_EXTRA_USER_NAME= \
@@ -257,6 +384,7 @@ make TEST_MODE=m36-desktop \
 nm build/kernel.elf | grep -Fq 'boring_m61_physical_breadcrumbs_enabled'
 nm build/kernel.elf | grep -Fq 'boring_m61_post_port80_enabled'
 nm build/kernel.elf | grep -Fq 'boring_m61_post_sequence'
+nm build/kernel.elf | grep -Fq 'boring_m61_post_62_to_63_sequence'
 
 python3 - <<'EOF_POST_VERIFY'
 import re
@@ -284,7 +412,13 @@ if any(position < 0 for position in positions) or positions != sorted(positions)
 functions = {
     "boring_kernel_entry": ("61",),
     "m61_post_serial_init": ("62",),
-    "m61_post_heap_init": ("63",),
+    "__wrap_boring_framebuffer_boot_init": ("70", "71", "78", "79"),
+    "m61_post_boring_cpu_inventory_init": ("72", "73"),
+    "m61_post_boring_pci_inventory_init": ("74", "75"),
+    "m61_post_boring_smbios_boot_init": ("76", "77"),
+    "m61_post_pmm_init": ("7a", "7b"),
+    "m61_post_vmm_init": ("7c", "7d"),
+    "m61_post_heap_init": ("7e", "7f", "63"),
     "m61_post_irq_init": ("64",),
     "m61_post_usb_mass_storage_init": ("65",),
     "m61_post_boringfs_vfs_create_writable": ("66",),
@@ -307,10 +441,11 @@ for name, codes in functions.items():
             raise RuntimeError(
                 f"M61 POST binary hook {name} missing code 0x{code.upper()}")
     out_count += outputs
-if out_count < 11:
+if out_count < 27:
     raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")
 print("M61 POST port 0x80 binary acceptance: PASS")
-print("M61 POST sequence: 61 62 63 64 65 66 67 68 69 6A 6F")
+print("M61 POST existing sequence preserved: 61 62 63 64 65 66 67 68 69 6A 6F")
+print("M61 POST 62-to-63 bisector: 70 71 72 73 74 75 76 77 78 79 7A 7B 7C 7D 7E 7F then 63")
 print("M61 QEMU port 0x80 observer: SKIPPED (pc/q35 owns ioport80 sink)")
 EOF_POST_VERIFY
 
