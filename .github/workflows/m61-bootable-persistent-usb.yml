@@ -71,7 +71,7 @@ jobs:
           cp "$twin_sha" "$physical_sha"
 
           set +e
-          python3 tests/m61-bootable-persistent-usb-qemu.py
+          python3 tests/m61-physical-desktop-witness-qemu.py
           rc=$?
           set -e
 
@@ -98,12 +98,20 @@ jobs:
           grep -Fq 'M61 TRACE [18+] BORINGFS ROOT' "$log"
           grep -Fq 'M61 TRACE [25+] WM SERVICE' "$log"
           grep -Fq 'M61 TRACE [26+] DESKTOP PRESENT' "$log"
+          grep -Fq 'M61 TRACE [27+] TERMINAL START' "$log"
+          grep -Fq 'M61 PHYSICAL: automatic terminal spawn requested' "$log"
+          grep -Fq 'M61 PHYSICAL: automatic terminal spawn pid=' "$log"
           proof=build/m61-bootable-persistent-usb/first-boot/physical-trace-proof.txt
           grep -Fqx 'FRAMEBUFFER_TRACE_PROVEN=YES' "$proof"
           grep -Fqx 'capture=QMP screendump before DISPLAY_PRESENT' "$proof"
           grep -Fqx 'retained_after_initial_display_present=YES' "$proof"
+          desktop=build/m61-bootable-persistent-usb/first-boot/physical-desktop-witness.txt
+          grep -Fqx 'AUTO_TERMINAL_PROVEN=YES' "$desktop"
+          grep -Fqx 'WALLPAPER_PROVEN=YES' "$desktop"
+          grep -Fqx 'EXTRA_EARLY_PRESENT_ADDED=NO' "$desktop"
           printf '%s\n' 'SERIAL_TRACE_PROVEN=YES'
           printf '%s\n' 'FRAMEBUFFER_TRACE_PROVEN=YES'
+          printf '%s\n' 'PHYSICAL_DESKTOP_WITNESS_PROVEN=YES'
       - name: Verify restored physical raw and compressed artifact hashes
         run: |
           test ! -e build/boringos-m61-usb-qemu.img

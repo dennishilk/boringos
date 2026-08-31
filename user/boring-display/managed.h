@@ -10,6 +10,7 @@ struct display_placement {
 };
 struct display_managed {
     uint32_t manager_endpoint, background;
+    bool wallpaper;
     struct display_placement placements[BORING_DISPLAY_SURFACE_MAX];
 };
 void display_managed_init(struct display_managed *state);

@@ -11,6 +11,22 @@ rm -rf build/user
 make TEST_MODE=m36-desktop RUNTIME_USER_CPPFLAGS="$USER_CPPFLAGS" \
     boringfsck user-boringfetch user-shell user-boring-terminal user-boringwm \
     user-boring-edit user-cat
+
+# M61 diagnostic only: rebuild the ordinary WM entry with one automatic
+# terminal request. The normal WM death binary and every non-M61 build keep
+# the established runtime behavior and launcher contract unchanged.
+M61_WM_CPPFLAGS="$USER_CPPFLAGS -DBORING_M61_PHYSICAL_DESKTOP_WITNESS=1"
+rm -f build/user/boringwm/main.o build/user/boringwm.elf
+cc $M61_WM_CPPFLAGS $USER_CFLAGS -c user/boringwm/main.c \
+    -o build/user/boringwm/main.o
+ld -nostdlib -static --build-id=none -z max-page-size=0x1000 \
+   -T user/memory-test/linker.ld \
+   build/user/runtime/entry.o build/user/runtime/syscall.o \
+   build/user/runtime/memory.o build/user/runtime/string.o \
+   build/user/runtime/ipc.o build/user/runtime/event.o \
+   build/user/boringwm/core.o build/user/boringwm/main.o \
+   -o build/user/boringwm.elf
+
 mkdir -p build/user/boring-init-desktop
 cc $USER_CFLAGS -c user/boring-init/desktop.c \
     -o build/user/boring-init-desktop/main.o
@@ -79,5 +95,6 @@ nm build/kernel.elf | grep -Fq 'boring_m61_physical_breadcrumbs_enabled'
 grep -Fqx 'timeout: 5' limine-m61-usb.conf
 grep -Fqx 'mouse: no' limine-m61-usb.conf
 printf '%s\n' 'M61 physical framebuffer breadcrumbs: ENABLED'
+printf '%s\n' 'M61 physical desktop auto-terminal witness: ENABLED'
 printf '%s\n' 'M61 USB Limine bounded autoboot: 5 seconds, mouse countdown cancellation disabled'
 printf '%s\n' 'M61 USB-root desktop build passed.'

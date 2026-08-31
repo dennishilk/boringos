@@ -13,6 +13,10 @@ static struct display_event deferred_input;
 static bool has_input, ever_managed;
 int boring_main(void);
 
+#if defined(BORING_M61_PHYSICAL_DESKTOP_WITNESS) && defined(BORING_WM_DEATH_ACCEPTANCE)
+#error "M61 physical desktop witness must not alter the WM death acceptance binary"
+#endif
+
 static struct display_event display_rpc(const struct display_control *request) {
     struct display_event reply;
     struct boring_ipc_receive_result received;
@@ -139,6 +143,19 @@ static void request(uint32_t endpoint) {
     if (changed) { desktop_say("wm: action registration\n"); sync_layout(); }
 }
 
+#ifndef BORING_WM_DEATH_ACCEPTANCE
+static long launch_application(uint32_t key) {
+    const char *path = wm_application_path(key);
+    const char *argv[1] = { path };
+    const struct boring_spawn_stdio stdio_config = {
+        BORING_FD_STDIN, BORING_FD_STDOUT, BORING_FD_STDERR,
+        BORING_SPAWN_FLAG_DETACHED
+    };
+    return path == NULL ? -1L : boring_spawn(path,
+        boring_strlen(path), argv, 1U, &stdio_config);
+}
+#endif
+
 static void handle_input(const struct display_event *message) {
     enum wm_action action;
 #ifdef BORING_M38_WM_DEATH_ACCEPTANCE
@@ -166,14 +183,7 @@ static void handle_input(const struct display_event *message) {
         desktop_say("wm: terminal unavailable; no configured launcher\n");
         desktop_say("wm: dedicated negative acceptance exits WM\n"); boring_exit(0);
 #else
-        const char *path = wm_application_path(message->input.code);
-        const char *argv[1] = { path };
-        const struct boring_spawn_stdio stdio_config = {
-            BORING_FD_STDIN, BORING_FD_STDOUT, BORING_FD_STDERR,
-            BORING_SPAWN_FLAG_DETACHED
-        };
-        const long child_pid = path == NULL ? -1L : boring_spawn(path,
-            boring_strlen(path), argv, 1U, &stdio_config);
+        const long child_pid = launch_application(message->input.code);
         if (child_pid <= 0L) {
             /* Preserves the historical M35 no-launcher acceptance root. */
             desktop_say(message->input.code == BORING_KEY_ENTER ?
@@ -219,6 +229,24 @@ int boring_main(void) {
         desktop_fail("WM manager binding");
     }
     desktop_say("wm: boring.wm Ring3 policy ready; no pixel mappings\n");
+#ifdef BORING_M61_PHYSICAL_DESKTOP_WITNESS
+    {
+        static const char prefix[] = "M61 PHYSICAL: automatic terminal spawn pid=";
+        char line[96];
+        size_t n = sizeof(prefix) - 1U;
+        long child_pid;
+        desktop_say("M61 PHYSICAL: automatic terminal spawn requested\n");
+        child_pid = launch_application(BORING_KEY_ENTER);
+        if (child_pid <= 0L) {
+            desktop_say("M61 PHYSICAL: automatic terminal spawn FAILED\n");
+        } else {
+            boring_memcpy(line, prefix, n);
+            n = desktop_number(line, n, (uint64_t)child_pid);
+            line[n++] = '\n'; line[n] = '\0';
+            desktop_say(line);
+        }
+    }
+#endif
     for (;;) {
         struct boring_event_watch watches[WM_PEERS + 2U] = {0};
         size_t count = 0U, index;
