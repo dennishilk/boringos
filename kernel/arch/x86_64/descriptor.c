@@ -56,6 +56,10 @@ static uint64_t gdt[X86_64_GDT_ENTRY_COUNT] __attribute__((aligned(16)));
 static struct x86_64_tss tss __attribute__((aligned(16)));
 static uint8_t rsp0_stack[X86_64_TSS_RSP0_STACK_SIZE]
     __attribute__((aligned(16)));
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+static uint8_t m61_early_exception_stack[X86_64_TSS_RSP0_STACK_SIZE]
+    __attribute__((aligned(16)));
+#endif
 static struct descriptor_stats descriptor_state;
 static bool descriptor_initialized;
 
@@ -107,6 +111,10 @@ bool descriptor_init(void) {
     gdt[4] = GDT_USER_CODE_DESCRIPTOR;
 
     tss.rsp0 = (uint64_t)stack_top;
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    tss.ist1 = (uint64_t)(uintptr_t)
+        &m61_early_exception_stack[X86_64_TSS_RSP0_STACK_SIZE];
+#endif
     tss.iomap_base = (uint16_t)sizeof(tss);
     gdt_set_tss_descriptor((uintptr_t)&tss,
                            (uint32_t)(sizeof(tss) - 1U));

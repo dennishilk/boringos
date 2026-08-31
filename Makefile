@@ -943,7 +943,7 @@ $(USER_BUILD_DIR)/boringwm/death.o: user/boringwm/main.c user/boringwm/core.h us
 	@mkdir -p $(dir $@)
 	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -DBORING_WM_DEATH_ACCEPTANCE -c $< -o $@
 
-$(USER_BUILD_DIR)/boring-display/%.o: user/boring-display/%.c user/boring-display/managed.h user/boring-display/core.h user/boring-display/wallpaper.h user/runtime/include/boring/display_control.h user/runtime/include/boring/desktop_log.h
+$(USER_BUILD_DIR)/boring-display/%.o: user/boring-display/%.c user/boring-display/managed.h user/boring-display/core.h user/runtime/include/boring/display_control.h user/runtime/include/boring/desktop_log.h
 	@mkdir -p $(dir $@)
 	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
 
@@ -953,7 +953,7 @@ $(WM_ELF): $(DESKTOP_COMMON) $(USER_BUILD_DIR)/boringwm/core.o $(USER_BUILD_DIR)
 $(WM_DEATH_ELF): $(DESKTOP_COMMON) $(USER_BUILD_DIR)/boringwm/core.o $(USER_BUILD_DIR)/boringwm/death.o
 	$(LD) $(DISPLAY_LDFLAGS) $^ -o $@
 
-$(DISPLAY_WM_ELF): $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(BORING_DISPLAY_CORE_OBJECT) $(USER_BUILD_DIR)/boring-display/managed.o $(USER_BUILD_DIR)/boring-display/server.o $(USER_BUILD_DIR)/boring-display/wallpaper.o
+$(DISPLAY_WM_ELF): $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT) $(BORING_DISPLAY_CORE_OBJECT) $(USER_BUILD_DIR)/boring-display/managed.o $(USER_BUILD_DIR)/boring-display/server.o
 	$(LD) $(DISPLAY_LDFLAGS) $^ -o $@
 
 $(USER_BUILD_DIR)/wm-client-a.o: user/wm-client/main.c user/runtime/include/boring/wm.h user/runtime/include/boring/display_control.h user/runtime/include/boring/desktop_log.h
@@ -968,9 +968,9 @@ $(USER_BUILD_DIR)/wm-client-c.o: user/wm-client/main.c user/runtime/include/bori
 $(USER_BUILD_DIR)/wm-client-%.elf: $(USER_BUILD_DIR)/wm-client-%.o $(DESKTOP_COMMON) $(DISPLAY_RUNTIME_OBJECT)
 	$(LD) $(DISPLAY_LDFLAGS) $^ -o $@
 
-$(BUILD_DIR)/wm-host-test: tests/wm-host-test.c user/boringwm/core.c user/boringwm/core.h user/boring-display/managed.c user/boring-display/managed.h user/boring-display/wallpaper.c user/boring-display/wallpaper.h user/boring-display/core.c user/boring-display/core.h user/runtime/include/boring/wm.h user/runtime/include/boring/display_control.h
+$(BUILD_DIR)/wm-host-test: tests/wm-host-test.c user/boringwm/core.c user/boringwm/core.h user/boring-display/managed.c user/boring-display/managed.h user/boring-display/core.c user/boring-display/core.h user/runtime/include/boring/wm.h user/runtime/include/boring/display_control.h
 	@mkdir -p $(dir $@)
-	$(HOST_CC) $(RUNTIME_USER_CPPFLAGS) $(HOST_CFLAGS) tests/wm-host-test.c user/boringwm/core.c user/boring-display/managed.c user/boring-display/wallpaper.c user/boring-display/core.c -o $@
+	$(HOST_CC) $(RUNTIME_USER_CPPFLAGS) $(HOST_CFLAGS) tests/wm-host-test.c user/boringwm/core.c user/boring-display/managed.c user/boring-display/core.c -o $@
 wm-host-test: $(BUILD_DIR)/wm-host-test
 	$(BUILD_DIR)/wm-host-test
 wm-audit: user-boringwm

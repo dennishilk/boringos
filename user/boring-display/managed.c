@@ -1,5 +1,4 @@
 #include "managed.h"
-#include "wallpaper.h"
 
 void display_managed_init(struct display_managed *state) {
     *state = (struct display_managed){0};
@@ -71,7 +70,6 @@ uint32_t display_managed_control(struct display_managed *state,
     if (r->type == DISPLAY_PRESENT) {
         if ((r->background & 0xff000000U) != 0U) { return BORING_DISPLAY_STATUS_INVALID; }
         state->background = r->background;
-        state->wallpaper = true;
         return BORING_DISPLAY_STATUS_OK;
     }
     for (index = 0U; index < BORING_DISPLAY_SURFACE_MAX; ++index) {
@@ -137,7 +135,6 @@ bool display_managed_compose(const struct display_managed *state,
     if ((state == NULL) || (core == NULL) || (output == NULL) ||
         (size != core->byte_size)) { return false; }
     for (offset = 0U; offset < size; offset += 4U) { put(output, offset, state->background); }
-    if (state->wallpaper) { (void)display_wallpaper_compose(core, output, size); }
     for (order = 0U; order < BORING_DISPLAY_SURFACE_MAX; ++order) {
         for (index = 0U; index < BORING_DISPLAY_SURFACE_MAX; ++index) {
             const struct display_placement *p = &state->placements[index];

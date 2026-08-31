@@ -16,22 +16,6 @@ GLYPHS = (
 LETTERS = ((14, 17, 17, 31, 17, 17, 17), (30, 17, 17, 30, 17, 17, 30), GLYPHS[0])
 BODY = (0x32382A, 0x26363C, 0x3E2E34)
 ACCENT = (0xB8BB26, 0x83A598, 0xD3869B)
-WALLPAPER_WIDTH, WALLPAPER_HEIGHT = 800, 600
-WALLPAPER_MARK = "boring by design."
-WALLPAPER_GLYPHS = {
-    "b": (16, 16, 30, 17, 17, 17, 30),
-    "d": (1, 1, 15, 17, 17, 17, 15),
-    "e": (0, 0, 14, 17, 31, 16, 15),
-    "g": (0, 0, 15, 17, 15, 1, 14),
-    "i": (4, 0, 12, 4, 4, 4, 14),
-    "n": (0, 0, 30, 17, 17, 17, 17),
-    "o": (0, 0, 14, 17, 17, 17, 14),
-    "r": (0, 0, 22, 25, 16, 16, 16),
-    "s": (0, 0, 15, 16, 14, 1, 30),
-    "y": (0, 0, 17, 17, 15, 1, 14),
-    ".": (0, 0, 0, 0, 0, 0, 4),
-}
-_WALLPAPER_RGB = None
 
 
 def frames(log):
@@ -84,46 +68,6 @@ def rgb(color):
     return bytes((color >> 16, (color >> 8) & 255, color & 255))
 
 
-def desktop_background(width, height):
-    global _WALLPAPER_RGB
-    if (width, height) != (WALLPAPER_WIDTH, WALLPAPER_HEIGHT):
-        return bytearray(rgb(0x282828) * (width * height))
-    if _WALLPAPER_RGB is None:
-        result = bytearray(width * height * 3)
-        for y in range(height):
-            vertical_distance = abs(y - 365)
-            for x in range(width):
-                hash_value = ((x * 0x45D9F3B) & 0xFFFFFFFF) ^ \
-                    ((y * 0x119DE1F3) & 0xFFFFFFFF)
-                hash_value ^= hash_value >> 16
-                glow = 0
-                if x < 520 and vertical_distance < 300:
-                    glow = ((520 - x) * (300 - vertical_distance) * 18) // (520 * 300)
-                noise = (hash_value >> 29) & 3
-                if hash_value & 0x1FFF == 0:
-                    noise += 9
-                noise = min(noise, 29 - glow)
-                offset = (y * width + x) * 3
-                result[offset:offset + 3] = bytes((glow + noise,
-                                                   glow + noise + 1,
-                                                   glow + noise + 3))
-        x = 596
-        for index, character in enumerate(WALLPAPER_MARK):
-            glyph = WALLPAPER_GLYPHS.get(character, (0,) * 7)
-            color = bytes((98, 96, 100) if index < 6 else (76, 75, 80))
-            for row, bits in enumerate(glyph):
-                for column in range(5):
-                    if bits & (1 << (4 - column)):
-                        for yy in range(2):
-                            for xx in range(2):
-                                offset = ((529 + row * 2 + yy) * width +
-                                          x + column * 2 + xx) * 3
-                                result[offset:offset + 3] = color
-            x += 8 if character == " " else 12
-        _WALLPAPER_RGB = bytes(result)
-    return bytearray(_WALLPAPER_RGB)
-
-
 def client_pixel(client, x, y):
     color = BODY[client]
     if 4 <= y < 6:
@@ -144,7 +88,7 @@ def validate(ppm, metadata):
         raise ValueError("framebuffer does not match serial dimensions")
     tiles = metadata["tiles"]
     expected_rects = expected_layout(width, height, len(tiles))
-    expected = desktop_background(width, height)
+    expected = bytearray(rgb(0x282828) * (width * height))
     focused = 0
     for tile, rect in zip(tiles, expected_rects):
         if tuple(tile[k] for k in ("x", "y", "width", "height", "border")) != rect:

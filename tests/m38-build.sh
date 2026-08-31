@@ -36,8 +36,7 @@ ld ${USER_LDFLAGS} \
     build/user/runtime/memory.o build/user/runtime/string.o \
     build/user/runtime/ipc.o build/user/runtime/event.o \
     build/user/runtime/display.o build/user/boring-display/core.o \
-    build/user/boring-display/managed.o build/user/boring-display/wallpaper.o \
-    build/user/boring-display-m38/server.o \
+    build/user/boring-display/managed.o build/user/boring-display-m38/server.o \
     -o build/user/boring-display-m38-death.elf
 
 for elf in build/user/boring-init-desktop.elf \

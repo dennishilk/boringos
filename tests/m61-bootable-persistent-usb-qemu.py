@@ -337,37 +337,111 @@ def run_session(name, expect_existing):
         finally:
             qmp("cont")
 
-    def capture_wallpaper():
-        geometry = re.search(r"boring-framebuffer: (\d+)x(\d+)x(?:24|32)", text())
-        if geometry is None:
-            raise RuntimeError("missing framebuffer geometry")
-        width, height = map(int, geometry.groups())
-        if (width, height) != (800, 600):
-            raise RuntimeError("M61 wallpaper acceptance requires exact 800x600 scanout")
+    def capture_physical_trace():
+        witness_match = wait(
+            lambda current: re.search(
+                r"M61 FRAMEBUFFER WITNESS index=(\d+) selected=yes "
+                r"x=(\d+) y=(\d+) width=(\d+) height=(\d+) result=pass",
+                current),
+            "selected framebuffer witness")
+        candidate_match = wait(
+            lambda current: re.search(
+                r"M61 FRAMEBUFFER CANDIDATE index=(\d+) selected=yes "
+                r"width=(\d+) height=(\d+) pitch=(\d+) bpp=(\d+) "
+                r"model=(\d+) masks=([^\n]+)",
+                current),
+            "selected framebuffer metadata")
+        ready_match = wait(
+            lambda current: re.search(
+                r"M61 FRAMEBUFFER TRACE READY index=(\d+) "
+                r"x=(\d+) y=(\d+) width=(\d+) height=(\d+)",
+                current),
+            "framebuffer trace-ready marker")
+        witness_values = tuple(map(int, witness_match.groups()))
+        ready_values = tuple(map(int, ready_match.groups()))
+        candidate_index, width, height, pitch, bpp, model = map(
+            int, candidate_match.groups()[:6])
+        masks = candidate_match.group(7)
+        if witness_values != ready_values:
+            raise RuntimeError(
+                f"witness/ready metadata mismatch: "
+                f"{witness_values!r} != {ready_values!r}")
+        index, x, y, region_width, region_height = ready_values
+        if index != candidate_index:
+            raise RuntimeError("selected framebuffer index changed")
+        if (region_width, region_height) != (64, 16):
+            raise RuntimeError("unexpected M61 trace witness geometry")
+        if (x + region_width > width) or (y + region_height > height):
+            raise RuntimeError("M61 trace witness exceeds actual framebuffer")
+
         qmp("stop")
         try:
-            ppm = out / "empty-desktop-wallpaper.ppm"
+            snapshot = text()
+            if (("M61 TRACE [23" in snapshot) or
+                    ("M61 TRACE [26" in snapshot)):
+                raise RuntimeError(
+                    "framebuffer proof was captured after desktop composition")
+            ppm = out / "early-physical-trace.ppm"
             qmp("screendump", {"filename": str(ppm)})
-            actual_width, actual_height, actual = WM["parse_ppm"](ppm)
+            actual_width, actual_height, pixels = WM["parse_ppm"](ppm)
             if (actual_width, actual_height) != (width, height):
-                raise ValueError("wallpaper screenshot geometry mismatch")
-            expected = WM["desktop_background"](width, height)
-            x, y, region_width, region_height = 590, 520, 205, 35
-            actual_region = bytearray()
-            expected_region = bytearray()
+                raise ValueError(
+                    "early trace screendump differs from actual metadata")
+            colors = (
+                bytes((255, 0, 0)), bytes((0, 255, 0)),
+                bytes((0, 0, 255)), bytes((0, 255, 255)),
+                bytes((255, 0, 255)), bytes((255, 255, 0)),
+                bytes((255, 255, 255)), bytes((0, 0, 0)),
+            )
+            expected = b"".join(color * 8 for color in colors) * 16
+            actual = bytearray()
             for row in range(y, y + region_height):
                 first = (row * width + x) * 3
                 last = first + region_width * 3
-                actual_region.extend(actual[first:last])
-                expected_region.extend(expected[first:last])
-            if actual_region != expected_region:
-                raise ValueError("empty desktop does not contain exact boring by design wallpaper region")
-            if len(set(actual_region)) < 16:
-                raise ValueError("wallpaper region is not visually distinctive")
-            (out / "wallpaper-proof.txt").write_text(
-                "empty 800x600 desktop exact wallpaper logo region: PASS\n"
-                f"region={x},{y} {region_width}x{region_height}\n"
-                f"region-sha256={hashlib.sha256(actual_region).hexdigest()}\n")
+                actual.extend(pixels[first:last])
+            if bytes(actual) != expected:
+                raise ValueError(
+                    "QEMU pixels do not contain the exact M61 trace witness")
+            (out / "physical-trace-proof.txt").write_text(
+                "FRAMEBUFFER_TRACE_PROVEN=YES\n"
+                "capture=QMP screendump before DISPLAY_PRESENT\n"
+                f"framebuffer_index={index}\n"
+                f"framebuffer_geometry={width}x{height}\n"
+                f"pitch={pitch}\n"
+                f"bpp={bpp}\n"
+                f"memory_model={model}\n"
+                f"rgb_masks={masks}\n"
+                f"witness_region={x},{y} {region_width}x{region_height}\n"
+                f"witness_sha256={hashlib.sha256(actual).hexdigest()}\n"
+                "limine_or_wallpaper_pixels=no; exact kernel witness matched\n")
+        finally:
+            qmp("cont")
+        return (width, height, x, y, region_width, region_height, expected)
+
+    def capture_retained_trace(meta):
+        width, height, x, y, region_width, region_height, expected = meta
+        witness("M61 TRACE [23+] DISPLAY INITIAL PRESENT")
+        qmp("stop")
+        try:
+            ppm = out / "retained-physical-trace.ppm"
+            qmp("screendump", {"filename": str(ppm)})
+            actual_width, actual_height, pixels = WM["parse_ppm"](ppm)
+            if (actual_width, actual_height) != (width, height):
+                raise ValueError(
+                    "retained trace screendump differs from actual metadata")
+            actual = bytearray()
+            for row in range(y, y + region_height):
+                first = (row * width + x) * 3
+                last = first + region_width * 3
+                actual.extend(pixels[first:last])
+            if bytes(actual) != expected:
+                raise ValueError(
+                    "M61 trace witness was lost at initial display presentation")
+            with (out / "physical-trace-proof.txt").open("a") as proof:
+                proof.write(
+                    "retained_after_initial_display_present=YES\n"
+                    f"retained_witness_sha256="
+                    f"{hashlib.sha256(actual).hexdigest()}\n")
         finally:
             qmp("cont")
 
@@ -383,6 +457,7 @@ def run_session(name, expect_existing):
                 time.sleep(0.1)
 
     try:
+        trace_meta = capture_physical_trace()
         witness(kernel_version())
         witness("m54-desktop: q35 i8042-free xHCI USB keyboard/tablet path online")
         witness("m61-root: Mass Storage 08/06/50 usb0 registered through M21")
@@ -395,8 +470,7 @@ def run_session(name, expect_existing):
         witness("boring-spawn: VFS executable source /bin/boringwm")
         witness("display: M35 service and M31 input ready")
         witness("wm: boring.wm Ring3 policy ready; no pixel mappings")
-        latest(0)
-        capture_wallpaper()
+        capture_retained_trace(trace_meta)
         current = text()
         if ("VirtIO block:" in current) or ("m57-desktop:" in current) or ("AHCI:" in current):
             raise RuntimeError("M61 USB-root mode entered a forbidden fallback path")

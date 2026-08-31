@@ -49,4 +49,10 @@ bool boring_framebuffer_surface_valid(const struct boring_framebuffer *surface);
 enum boring_framebuffer_status boring_framebuffer_boot_init(void);
 const struct boring_framebuffer *boring_framebuffer_get(void);
 
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+uint64_t boring_m61_framebuffer_count(void);
+bool boring_m61_framebuffer_get(uint64_t index,
+                                struct boring_framebuffer *surface);
+#endif
+
 #endif

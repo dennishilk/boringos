@@ -198,3 +198,48 @@ enum boring_framebuffer_status boring_framebuffer_boot_init(void) {
 const struct boring_framebuffer *boring_framebuffer_get(void) {
     return boot_surface_ready ? &boot_surface : NULL;
 }
+
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+uint64_t boring_m61_framebuffer_count(void) {
+    const struct boring_limine_framebuffer_response *const response =
+        limine_framebuffer_request.response;
+
+    if ((response == NULL) || (response->framebuffers == NULL)) {
+        return 0ULL;
+    }
+    return response->framebuffer_count;
+}
+
+bool boring_m61_framebuffer_get(uint64_t index,
+                                struct boring_framebuffer *surface) {
+    const struct boring_limine_framebuffer_response *const response =
+        limine_framebuffer_request.response;
+    const struct boring_limine_framebuffer *framebuffer;
+
+    if ((surface == NULL) || (response == NULL) ||
+        (response->framebuffers == NULL) ||
+        (response->framebuffer_count > BORING_FRAMEBUFFER_MAX_BOOT_SURFACES) ||
+        (index >= response->framebuffer_count)) {
+        return false;
+    }
+    framebuffer = response->framebuffers[index];
+    if ((framebuffer == NULL) ||
+        (framebuffer->memory_model != BORING_LIMINE_FRAMEBUFFER_RGB)) {
+        return false;
+    }
+    return boring_framebuffer_surface_init(
+        surface,
+        (volatile uint8_t *)framebuffer->address,
+        framebuffer->width,
+        framebuffer->height,
+        framebuffer->pitch,
+        framebuffer->bpp,
+        framebuffer->memory_model,
+        framebuffer->red_mask_size,
+        framebuffer->red_mask_shift,
+        framebuffer->green_mask_size,
+        framebuffer->green_mask_shift,
+        framebuffer->blue_mask_size,
+        framebuffer->blue_mask_shift);
+}
+#endif

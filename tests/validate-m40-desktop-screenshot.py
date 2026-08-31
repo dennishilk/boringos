@@ -10,12 +10,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 parse_ppm = runpy.run_path(str(ROOT / "tests/validate-display-screenshot.py"))["parse_ppm"]
-WM_ORACLE = runpy.run_path(str(ROOT / "tests/validate-wm-screenshot.py"))
-expected_layout = WM_ORACLE["expected_layout"]
-desktop_background = WM_ORACLE["desktop_background"]
+expected_layout = runpy.run_path(str(ROOT / "tests/validate-wm-screenshot.py"))["expected_layout"]
 TERM_BG = bytes((0x1D, 0x20, 0x21))
 TERM_FG = bytes((0xEB, 0xDB, 0xB2))
 TERM_CURSOR = bytes((0x83, 0xA5, 0x98))
+WM_BG = bytes((0x28, 0x28, 0x28))
 MARGIN_X, MARGIN_Y, CELL_W, CELL_H = 4, 4, 6, 8
 MAX_COLS, MAX_ROWS = 160, 96
 
@@ -117,7 +116,7 @@ def decode(ppm, metadata):
     for row in range(12):
         for col in range(row // 2 + 1):
             pointer[cx + col, cy + row] = bytes((0xFF, 0xEE, 0xF5)) if col == 0 else bytes((0x30, 0xEE, 0xF5))
-    expected = desktop_background(width, height)
+    expected = bytearray(WM_BG * (width * height))
     screens = {}
     for tile, rect in zip(tiles, expected_layout(width, height, len(tiles))):
         if tuple(tile[k] for k in ("x", "y", "width", "height", "border")) != rect:

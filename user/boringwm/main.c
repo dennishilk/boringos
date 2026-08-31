@@ -219,7 +219,6 @@ int boring_main(void) {
         desktop_fail("WM manager binding");
     }
     desktop_say("wm: boring.wm Ring3 policy ready; no pixel mappings\n");
-    sync_layout();
     for (;;) {
         struct boring_event_watch watches[WM_PEERS + 2U] = {0};
         size_t count = 0U, index;

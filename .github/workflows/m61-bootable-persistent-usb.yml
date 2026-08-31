@@ -25,6 +25,14 @@ jobs:
         run: sh tests/m61-xhci-event-coexistence-host.sh
       - name: Build M61 runtime and negative contracts
         run: sh tests/m61-build.sh
+      - name: Prove diagnostic-only pre-IDT fault containment
+        run: |
+          M61_EARLY_FAULT_TEST=1 sh tests/m61-physical-trace-kernel.sh
+          env -u GITHUB_SHA sh tests/m61-build-usb-image.sh
+          python3 tests/m61-early-fault-qemu.py
+          cat build/m61-early-fault/proof.txt
+          grep -Fqx 'EARLY_FAULT_CONTAINMENT_PROVEN=YES' build/m61-early-fault/proof.txt
+          grep -Fqx 'guest_reset_observed=no' build/m61-early-fault/proof.txt
       - name: Relink M61 physical trace kernel
         run: sh tests/m61-physical-trace-kernel.sh
       - name: Build physical image and deterministic QEMU test twin
@@ -82,7 +90,7 @@ jobs:
             tail -n 500 build/m61-bootable-persistent-usb/first-boot/qemu.log || true
           fi
           exit "$rc"
-      - name: Verify physical boot trace progression
+      - name: Verify distinct serial and framebuffer trace proofs
         run: |
           log=build/m61-bootable-persistent-usb/first-boot/serial.log
           grep -Fq 'M61 TRACE [08+] EXCEPTIONS' "$log"
@@ -90,6 +98,12 @@ jobs:
           grep -Fq 'M61 TRACE [18+] BORINGFS ROOT' "$log"
           grep -Fq 'M61 TRACE [25+] WM SERVICE' "$log"
           grep -Fq 'M61 TRACE [26+] DESKTOP PRESENT' "$log"
+          proof=build/m61-bootable-persistent-usb/first-boot/physical-trace-proof.txt
+          grep -Fqx 'FRAMEBUFFER_TRACE_PROVEN=YES' "$proof"
+          grep -Fqx 'capture=QMP screendump before DISPLAY_PRESENT' "$proof"
+          grep -Fqx 'retained_after_initial_display_present=YES' "$proof"
+          printf '%s\n' 'SERIAL_TRACE_PROVEN=YES'
+          printf '%s\n' 'FRAMEBUFFER_TRACE_PROVEN=YES'
       - name: Verify restored physical raw and compressed artifact hashes
         run: |
           test ! -e build/boringos-m61-usb-qemu.img
@@ -119,6 +133,7 @@ jobs:
             build/m61-qemu-twin-proof.txt
             build/m61-bundle/geometry.txt
             build/m61-bundle/boringfsck-before.txt
+            build/m61-early-fault/**
             build/m61-bootable-persistent-usb/**
           if-no-files-found: error
           retention-days: 14

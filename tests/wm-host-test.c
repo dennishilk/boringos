@@ -181,39 +181,8 @@ static void display_authority(void) {
     check(display_managed_control(&state, &core, 99U, 2ULL, &r) == BORING_DISPLAY_STATUS_INVALID, "stale surface rejected");
 }
 
-static void display_wallpaper(void) {
-    struct boring_display_core core;
-    struct display_managed state;
-    const struct boring_display_scanout_info info = {
-        BORING_DISPLAY_SCANOUT_VERSION, 800U, 600U, 3200U, 1920000ULL
-    };
-    struct display_control present = {0};
-    uint8_t *output = malloc((size_t)info.byte_size);
-    size_t logo;
-    check(output != NULL, "wallpaper output allocation");
-    check(boring_display_core_init(&core, &info), "wallpaper display init");
-    display_managed_init(&state);
-    check(display_managed_compose(&state, &core, output, (size_t)info.byte_size),
-          "pre-manager compose");
-    check(output[0] == 0x28U && output[1] == 0x28U && output[2] == 0x28U,
-          "pre-manager background remains solid");
-    state.manager_endpoint = 99U;
-    present.version = BORING_DISPLAY_CONTROL_VERSION;
-    present.type = DISPLAY_PRESENT;
-    present.background = BORING_WM_BACKGROUND;
-    check(display_managed_control(&state, &core, 99U, 2ULL, &present) ==
-          BORING_DISPLAY_STATUS_OK, "manager enables wallpaper");
-    check(display_managed_compose(&state, &core, output, (size_t)info.byte_size),
-          "empty desktop wallpaper compose");
-    logo = 529U * 3200U + 596U * 4U;
-    check(output[logo] == 100U && output[logo + 1U] == 96U &&
-          output[logo + 2U] == 98U && output[logo + 3U] == 0U,
-          "distinctive boring by design wallpaper pixel");
-    free(output);
-}
-
 int main(void) {
-    layouts(); policy(); protocol(); display_authority(); display_wallpaper();
+    layouts(); policy(); protocol(); display_authority();
     (void)printf("M35 WM policy/protocol/layout/authority tests passed (%lu checks).\n", checks);
     return 0;
 }
