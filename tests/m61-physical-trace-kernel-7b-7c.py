@@ -248,6 +248,16 @@ def loaded_al_code(raw: bytes):
     return None
 
 
+def eax_constant_write(raw: bytes):
+    if raw in (bytes((0x31, 0xC0)), bytes((0x33, 0xC0))):
+        return 0
+    if len(raw) == 5 and raw[0] == 0xB8:
+        return int.from_bytes(raw[1:5], "little", signed=False)
+    if len(raw) == 6 and raw[0] == 0xC7 and raw[1] == 0xC0:
+        return int.from_bytes(raw[2:6], "little", signed=False)
+    return None
+
+
 def post_sites(start: int, end: int, code: int):
     rows = rows_in_range(start, end)
     found = []
@@ -483,6 +493,10 @@ vmm_post_start, vmm_post_end = function_range("m61_post_vmm_init")
 entry_start, entry_end = function_range("m61_post_real_boring_kernel_entry")
 real_pmm = symbol_address("pmm_init")
 real_vmm = symbol_address("vmm_init")
+pmm_init_start, pmm_init_end = function_range("pmm_init")
+
+if pmm_init_start != real_pmm:
+    raise RuntimeError("linked real PMM symbol/range disagreement")
 
 if len({pmm_wrap_start, pmm_post_start, real_pmm}) != 3:
     raise RuntimeError("PMM wrapper, POST shim, and real function are not distinct")
@@ -708,6 +722,92 @@ stats_failure_branch = require_false_result_branch(
     initial_stats_call, 0x94, 0x99, "initial PMM stats result"
 )
 
+# The real, candidate-gated pmm_init carries one direct port-0x80 code for
+# every existing semantic false-return class. Prove the final linked function
+# using decoded instruction bytes and its CFG: every reason site must flow
+# through the shared EAX=false return, none may reach the EAX=true setter, and
+# a successful post-free path must still reach the true return.
+pmm_false_posts = {
+    code: require_post_site(pmm_init_start, pmm_init_end, code, "real pmm_init")
+    for code in range(0xA0, 0xAC)
+}
+pmm_init_rows = rows_in_range(pmm_init_start, pmm_init_end)
+pmm_init_cfg = function_cfg(pmm_init_start, pmm_init_end)
+pmm_false_setters = [
+    address
+    for address, raw, _asm in pmm_init_rows
+    if eax_constant_write(raw) == 0
+]
+pmm_true_setters = [
+    address
+    for address, raw, _asm in pmm_init_rows
+    if eax_constant_write(raw) == 1
+]
+pmm_returns = [
+    address for address, raw, _asm in pmm_init_rows if is_return(raw)
+]
+if len(pmm_false_setters) != 1 or len(pmm_true_setters) != 1 or len(pmm_returns) != 1:
+    raise RuntimeError(
+        "real pmm_init expected one decoded false setter, true setter, and return: "
+        f"false={pmm_false_setters} true={pmm_true_setters} returns={pmm_returns}"
+    )
+pmm_false_setter = pmm_false_setters[0]
+pmm_true_setter = pmm_true_setters[0]
+pmm_return = pmm_returns[0]
+
+for code, (_load_address, out_address) in pmm_false_posts.items():
+    if not cfg_reachable(pmm_init_cfg, out_address, pmm_false_setter):
+        raise RuntimeError(
+            f"real pmm_init POST 0x{code:02X} cannot reach its false result setter"
+        )
+    if cfg_reachable(pmm_init_cfg, out_address, pmm_true_setter):
+        raise RuntimeError(
+            f"real pmm_init POST 0x{code:02X} can escape to the true result setter"
+        )
+    if not cfg_reachable(pmm_init_cfg, out_address, pmm_return):
+        raise RuntimeError(
+            f"real pmm_init POST 0x{code:02X} cannot reach the function return"
+        )
+    if cfg_reachable(
+        pmm_init_cfg, out_address, pmm_return, frozenset((pmm_false_setter,))
+    ):
+        raise RuntimeError(
+            f"real pmm_init POST 0x{code:02X} can return without setting false"
+        )
+
+pmm_reason_outs = frozenset(site[1] for site in pmm_false_posts.values())
+if not cfg_reachable(
+    pmm_init_cfg, pmm_init_rows[0][0], pmm_true_setter, pmm_reason_outs
+):
+    raise RuntimeError("real pmm_init has no reason-POST-free successful path")
+if not cfg_reachable(pmm_init_cfg, pmm_true_setter, pmm_return):
+    raise RuntimeError("real pmm_init true result cannot reach the function return")
+if any(
+    cfg_reachable(pmm_init_cfg, pmm_true_setter, out_address)
+    for out_address in pmm_reason_outs
+):
+    raise RuntimeError("real pmm_init successful path can reach a false-reason POST")
+if cfg_reachable(
+    pmm_init_cfg,
+    pmm_init_rows[0][0],
+    pmm_return,
+    frozenset((pmm_false_setter, pmm_true_setter)),
+):
+    raise RuntimeError("real pmm_init can return without setting a boolean result")
+
+for code in range(0xA0, 0xAC):
+    global_hits = [
+        out_address
+        for _load_address, out_address in post_sites(
+            instructions[0][0], instructions[-1][0] + 16, code
+        )
+    ]
+    if len(global_hits) != 1:
+        raise RuntimeError(
+            f"linked PMM reason POST 0x{code:02X} expected one decoded global "
+            f"port write, found {global_hits}"
+        )
+
 # Fresh codes must be unique globally as actual port-0x80 writes, not merely as
 # immediate constants elsewhere in data or code.
 for code in range(0x92, 0x9A):
@@ -771,6 +871,20 @@ print(
     f"halt@0x{stats_failure_branch[1]:x}"
 )
 print("M61 linked failure POST 98/99 boolean branches and halts proven: YES")
+print(
+    f"M61 linked real pmm_init range: 0x{pmm_init_start:x}-0x{pmm_init_end:x}; "
+    f"false-setter=0x{pmm_false_setter:x}; true-setter=0x{pmm_true_setter:x}; "
+    f"return=0x{pmm_return:x}"
+)
+print(
+    "M61 linked PMM false-reason map: "
+    "A0 map-null; A1 first-entry-invalid; A2 other-entry-invalid; "
+    "A3 overlap; A4 usable-entry-invalid; A5 usable-base-align-overflow; "
+    "A6 total-over-cap; A7 add-overflow/capacity; A8 no-usable-frames; "
+    "A9 entries-null; AA entry-count-zero; AB entry-count-over-256"
+)
+print("M61 linked PMM A0-AB reason writes unique and false-returning: YES")
+print("M61 linked successful pmm_init path remains reason-POST-free and true: YES")
 print("M61 linked existing 7B meaning preserved: YES")
 print("M61 linked existing 7C meaning preserved: YES")
 print(

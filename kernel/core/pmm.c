@@ -3,6 +3,12 @@
 
 #include <boring/pmm.h>
 
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+#include <boring/io.h>
+#define M61_PMM_FALSE_POST(code) \
+    x86_64_out8((uint16_t)0x80U, (uint8_t)(code))
+#endif
+
 #define PMM_MAX_MEMORY_MAP_ENTRIES 256ULL
 #define PMM_MAX_REGIONS 64ULL
 #define PMM_MAX_FRAMES 8388608ULL
@@ -200,11 +206,30 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
 
     pmm_reset_state();
 
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    if (memory_map == NULL) {
+        M61_PMM_FALSE_POST(0xa0U);
+        return false;
+    }
+    if (memory_map->entries == NULL) {
+        M61_PMM_FALSE_POST(0xa9U);
+        return false;
+    }
+    if (memory_map->entry_count == 0ULL) {
+        M61_PMM_FALSE_POST(0xaaU);
+        return false;
+    }
+    if (memory_map->entry_count > PMM_MAX_MEMORY_MAP_ENTRIES) {
+        M61_PMM_FALSE_POST(0xabU);
+        return false;
+    }
+#else
     if ((memory_map == NULL) || (memory_map->entries == NULL) ||
         (memory_map->entry_count == 0ULL) ||
         (memory_map->entry_count > PMM_MAX_MEMORY_MAP_ENTRIES)) {
         return false;
     }
+#endif
 
     for (entry_index = 0ULL; entry_index < memory_map->entry_count;
          ++entry_index) {
@@ -214,6 +239,9 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
             memory_map->entries[entry_index];
 
         if (!pmm_entry_end(entry, &first_end)) {
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+            M61_PMM_FALSE_POST(0xa1U);
+#endif
             return false;
         }
 
@@ -224,11 +252,17 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
                 memory_map->entries[other_index];
 
             if (!pmm_entry_end(other, &second_end)) {
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+                M61_PMM_FALSE_POST(0xa2U);
+#endif
                 return false;
             }
 
             if (pmm_ranges_overlap(entry->base, first_end,
                                    other->base, second_end)) {
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+                M61_PMM_FALSE_POST(0xa3U);
+#endif
                 return false;
             }
         }
@@ -248,11 +282,24 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
             continue;
         }
 
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        if (!pmm_entry_end(entry, &raw_end)) {
+            M61_PMM_FALSE_POST(0xa4U);
+            pmm_reset_state();
+            return false;
+        }
+        if (!pmm_align_up(entry->base, &aligned_base)) {
+            M61_PMM_FALSE_POST(0xa5U);
+            pmm_reset_state();
+            return false;
+        }
+#else
         if (!pmm_entry_end(entry, &raw_end) ||
             !pmm_align_up(entry->base, &aligned_base)) {
             pmm_reset_state();
             return false;
         }
+#endif
 
         aligned_end = pmm_align_down(raw_end);
         if (aligned_end <= aligned_base) {
@@ -264,6 +311,9 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
             continue;
         }
         if (pmm_total_frames > PMM_MAX_FRAMES) {
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+            M61_PMM_FALSE_POST(0xa6U);
+#endif
             pmm_reset_state();
             return false;
         }
@@ -279,6 +329,9 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
         }
         if ((pmm_total_frames > (UINT64_MAX - frame_count)) ||
             ((pmm_total_frames + frame_count) > PMM_MAX_FRAMES)) {
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+            M61_PMM_FALSE_POST(0xa7U);
+#endif
             pmm_reset_state();
             return false;
         }
@@ -291,6 +344,9 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
     }
 
     if (pmm_total_frames == 0ULL) {
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        M61_PMM_FALSE_POST(0xa8U);
+#endif
         pmm_reset_state();
         return false;
     }
