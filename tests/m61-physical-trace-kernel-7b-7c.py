@@ -17,8 +17,8 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
-# 7B is emitted after the real PMM init returns. Add exactly one breadcrumb
-# after the existing 7B and before the diagnostic wrapper returns to entry.c.
+# 7B is emitted only after a successful real PMM init return. Add exactly one
+# breadcrumb after the existing 7B and before that true-result wrapper return.
 base_instrumented = replace_once(
     base_src,
     "    M61_POST(M61_POST_PMM_INIT_AFTER);\n    return result;\n",
@@ -418,6 +418,63 @@ def return_reachable_after(graph, start: int, function_start: int,
     return returns[0]
 
 
+def is_boolean_return_zero_test(raw: bytes) -> bool:
+    # _Bool is returned in AL on x86_64 SysV. Require the linked PMM shim to
+    # test that exact return byte immediately after the real pmm_init call.
+    return raw in (
+        bytes((0x84, 0xC0)),  # test %al,%al
+        bytes((0x3C, 0x00)),  # cmp $0,%al
+    )
+
+
+def require_boolean_result_split(graph, function_start: int, function_end: int,
+                                 call_address: int, label: str):
+    rows = rows_in_range(function_start, function_end)
+    index_by_address = {row[0]: index for index, row in enumerate(rows)}
+    if call_address not in index_by_address:
+        raise RuntimeError(f"{label} call 0x{call_address:x} is outside its function")
+    call_index = index_by_address[call_address]
+    if call_index + 3 >= len(rows):
+        raise RuntimeError(f"{label} has no complete result-test branch after call")
+
+    test_address, test_raw, _test_asm = rows[call_index + 1]
+    branch_address, branch_raw, _branch_asm = rows[call_index + 2]
+    if not is_boolean_return_zero_test(test_raw):
+        raise RuntimeError(
+            f"{label} does not test the returned AL immediately after the call: "
+            f"0x{test_address:x} bytes={test_raw.hex()}"
+        )
+    decoded = decode_direct_transfer(branch_address, branch_raw)
+    if decoded is None or decoded[0] != "branch" or decoded[2] not in (0x4, 0x5):
+        raise RuntimeError(
+            f"{label} result test is not followed by decoded JZ/JNZ: "
+            f"0x{branch_address:x} bytes={branch_raw.hex()} decoded={decoded}"
+        )
+
+    _kind, branch_target, condition = decoded
+    fallthrough = rows[call_index + 3][0]
+    if branch_target not in graph or fallthrough not in graph:
+        raise RuntimeError(
+            f"{label} result branch leaves linked function: "
+            f"target=0x{branch_target:x} fallthrough=0x{fallthrough:x}"
+        )
+    expected_successors = {branch_target, fallthrough}
+    actual_successors = set(graph.get(branch_address, ()))
+    if actual_successors != expected_successors:
+        raise RuntimeError(
+            f"{label} CFG result split mismatch: expected {expected_successors}, "
+            f"found {actual_successors}"
+        )
+
+    if condition == 0x4:  # JZ: zero/false branches, nonzero/true falls through.
+        false_start = branch_target
+        true_start = fallthrough
+    else:  # JNZ: nonzero/true branches, zero/false falls through.
+        true_start = branch_target
+        false_start = fallthrough
+    return test_address, branch_address, condition, true_start, false_start
+
+
 def call_addresses_to(start: int, end: int, target: int):
     return [
         address
@@ -492,7 +549,7 @@ if len({vmm_wrap_start, vmm_post_start, real_vmm}) != 3:
 # Prove each GNU --wrap execution chain using actual rel32 targets. The outer
 # diagnostic wrapper may CALL the POST shim or tail-JMP to it; both preserve the
 # required semantics. The POST shim itself must CALL the real implementation so
-# execution can resume to emit the after-code.
+# execution can resume to test its boolean result.
 pmm_wrap_to_post = require_transfer_target(
     pmm_wrap_start, pmm_wrap_end, pmm_post_start,
     "__wrap_pmm_init -> m61_post_pmm_init"
@@ -517,14 +574,47 @@ vmm_7c = require_post_site(vmm_post_start, vmm_post_end, 0x7C, "VMM POST shim")
 vmm_7d = require_post_site(vmm_post_start, vmm_post_end, 0x7D, "VMM POST shim")
 
 pmm_post_cfg = function_cfg(pmm_post_start, pmm_post_end)
+pmm_post_rows = rows_in_range(pmm_post_start, pmm_post_end)
+if not pmm_post_rows:
+    raise RuntimeError("PMM POST shim has no decoded instructions")
+require_cfg_sequence(
+    pmm_post_cfg,
+    [pmm_post_rows[0][0], pmm_7a[1], pmm_post_to_real[0]],
+    "PMM entry -> 7A -> real pmm_init call",
+)
+(
+    pmm_result_test,
+    pmm_result_branch,
+    pmm_result_condition,
+    pmm_true_start,
+    pmm_false_start,
+) = require_boolean_result_split(
+    pmm_post_cfg,
+    pmm_post_start,
+    pmm_post_end,
+    pmm_post_to_real[0],
+    "PMM real pmm_init result",
+)
 pmm_post_return = return_reachable_after(
-    pmm_post_cfg, pmm_92[1], pmm_post_start, pmm_post_end, "PMM POST shim"
+    pmm_post_cfg, pmm_92[1], pmm_post_start, pmm_post_end, "PMM true-result shim"
 )
 require_cfg_sequence(
     pmm_post_cfg,
-    [pmm_7a[1], pmm_post_to_real[0], pmm_7b[1], pmm_92[1], pmm_post_return],
-    "PMM 7A -> real pmm_init -> 7B -> 92",
+    [pmm_true_start, pmm_7b[1], pmm_92[1], pmm_post_return],
+    "PMM TRUE result -> 7B -> 92 -> return",
 )
+pmm_false_return = return_reachable_after(
+    pmm_post_cfg,
+    pmm_false_start,
+    pmm_post_start,
+    pmm_post_end,
+    "PMM false-result shim",
+)
+for code, node in ((0x7B, pmm_7b[1]), (0x92, pmm_92[1])):
+    if cfg_reachable(pmm_post_cfg, pmm_false_start, node):
+        raise RuntimeError(
+            f"PMM FALSE result can incorrectly reach true-only POST 0x{code:02X}"
+        )
 
 vmm_post_cfg = function_cfg(vmm_post_start, vmm_post_end)
 vmm_post_return = return_reachable_after(
@@ -744,7 +834,11 @@ print(
 print(
     f"M61 decoded PMM boundary: 7A@0x{pmm_7a[1]:x} "
     f"real-call@0x{pmm_post_to_real[0]:x} "
-    f"7B@0x{pmm_7b[1]:x} 92@0x{pmm_92[1]:x}"
+    f"result-test@0x{pmm_result_test:x} result-branch@0x{pmm_result_branch:x} "
+    f"condition={'JZ' if pmm_result_condition == 0x4 else 'JNZ'} "
+    f"true@0x{pmm_true_start:x} false@0x{pmm_false_start:x} "
+    f"7B@0x{pmm_7b[1]:x} 92@0x{pmm_92[1]:x} "
+    f"false-return@0x{pmm_false_return:x}"
 )
 print(
     f"M61 decoded VMM chain: entry-{vmm_entry_to_wrap[1]}@0x{vmm_entry_to_wrap[0]:x} "
@@ -760,7 +854,9 @@ print(
     "POST shims, and real functions modeled by decoded transfer targets"
 )
 print("M61 linked PMM call chain proven: YES")
-print("M61 linked PMM 7A -> real -> 7B -> 92 execution order proven: YES")
+print("M61 linked PMM entry -> 7A -> real call ordering proven: YES")
+print("M61 linked PMM TRUE result -> 7B -> 92 -> return CFG proven: YES")
+print("M61 linked PMM FALSE result bypasses 7B/92 -> return CFG proven: YES")
 print("M61 linked VMM call chain proven: YES")
 print("M61 linked VMM 7C -> real -> 7D execution order proven: YES")
 print("M61 linked 92 -> 93 -> 94 -> 95 -> 96 -> 97 CFG order proven: YES")
@@ -770,14 +866,15 @@ print(
     f"99-branch@0x{stats_failure_branch[0]:x} "
     f"halt@0x{stats_failure_branch[1]:x}"
 )
-print("M61 linked failure POST 98/99 boolean branches and halts proven: YES")
+print("M61 linked temporary verifier POST 98/99 boolean branches and halts proven: YES")
 print("M61 linked existing 7B meaning preserved: YES")
 print("M61 linked existing 7C meaning preserved: YES")
 print(
-    "M61 POST 7B-to-7C map: 92 wrapper-return; 93 PMM-success/stats-before; "
-    "94 stats-success/report-before; 95 report-after/selftest-before; "
-    "96 selftest-success/final-serial-before; 97 final-serial-after/VMM-call-before; "
-    "98 PMM-false; 99 initial-stats-false"
+    "M61 POST 7B-to-7C map: 92 true-only wrapper-return; "
+    "93 PMM-success/stats-before; 94 stats-success/report-before; "
+    "95 report-after/selftest-before; 96 selftest-success/final-serial-before; "
+    "97 final-serial-after/VMM-call-before; 98 temporary verifier PMM-false; "
+    "99 initial-stats-false"
 )
 print("M61 linked new 92-99 breadcrumbs confined to 7B-to-7C execution interval: YES")
 print("M61 linked framebuffer diagnostic writes reintroduced: NO")
