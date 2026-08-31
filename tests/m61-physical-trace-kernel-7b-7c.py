@@ -130,7 +130,14 @@ elf = root / "build/kernel.elf"
 if not elf.exists():
     raise RuntimeError("M61 7B-to-7C relink did not produce build/kernel.elf")
 
+# Consume all four requested linked-binary views. The proof below is based on
+# symbol addresses/sizes plus decoded instruction bytes; pretty-printed objdump
+# function blocks are never used as a correctness boundary.
 nm_output = subprocess.check_output(["nm", "-n", str(elf)], text=True)
+disasm = subprocess.check_output(["objdump", "-d", str(elf)], text=True)
+disasm_reloc = subprocess.check_output(["objdump", "-dr", str(elf)], text=True)
+readelf_output = subprocess.check_output(["readelf", "-sW", str(elf)], text=True)
+
 for forbidden in (
     "__wrap_boring_framebuffer_get",
     "__real_boring_framebuffer_get",
@@ -139,117 +146,279 @@ for forbidden in (
     "__wrap_serial_write_string",
     "__real_serial_write_string",
 ):
-    if forbidden in nm_output:
+    if forbidden in nm_output or forbidden in disasm_reloc:
         raise RuntimeError(
-            f"M61 7B-to-7C linked kernel contains forbidden wrapper symbol {forbidden}"
+            f"M61 7B-to-7C linked kernel contains forbidden wrapper/reference {forbidden}"
         )
 
+# nm is used to detect aliases and to provide a next-symbol fallback for the
+# rare zero-sized ELF function symbol. readelf supplies the authoritative FUNC
+# start/size whenever available.
+nm_symbols = {}
+for line in nm_output.splitlines():
+    fields = line.split()
+    if len(fields) < 3:
+        continue
+    try:
+        address = int(fields[0], 16)
+    except ValueError:
+        continue
+    nm_symbols.setdefault(fields[-1], []).append((address, fields[1]))
 
-def function_disassembly(name: str) -> str:
-    return subprocess.check_output(
-        ["objdump", "-d", "--disassemble=" + name, str(elf)], text=True
+elf_functions = {}
+for line in readelf_output.splitlines():
+    fields = line.split()
+    if len(fields) < 8 or fields[3] != "FUNC" or fields[6] == "UND":
+        continue
+    try:
+        address = int(fields[1], 16)
+        size = int(fields[2], 10)
+    except ValueError:
+        continue
+    elf_functions.setdefault(fields[7], []).append(
+        (address, size, fields[4], fields[5], fields[6])
     )
 
 
-def immediate_addresses(body: str, code: int):
-    pattern = re.compile(
-        rf"^\\s*([0-9a-f]+):.*\\$0x0*{code:02x}\\b",
-        re.IGNORECASE | re.MULTILINE,
+def function_range(name: str):
+    rows = elf_functions.get(name, [])
+    if len(rows) != 1:
+        raise RuntimeError(
+            f"readelf expected one defined FUNC symbol {name}, found {rows}"
+        )
+    start, size, _bind, _visibility, _section = rows[0]
+    if size > 0:
+        return start, start + size
+
+    next_addresses = []
+    for symbol_rows in nm_symbols.values():
+        for address, kind in symbol_rows:
+            if address > start and kind.lower() == "t":
+                next_addresses.append(address)
+    if not next_addresses:
+        raise RuntimeError(f"cannot determine zero-sized function end for {name}")
+    return start, min(next_addresses)
+
+
+instruction_re = re.compile(
+    r"^\s*([0-9a-f]+):\s+((?:[0-9a-f]{2}\s+)+)\s*(.*)$",
+    re.IGNORECASE,
+)
+instructions = []
+for line in disasm.splitlines():
+    match = instruction_re.match(line)
+    if match is None:
+        continue
+    instructions.append(
+        (int(match.group(1), 16), bytes.fromhex(match.group(2)), match.group(3))
     )
-    return [int(address, 16) for address in pattern.findall(body)]
 
 
-def port80_out_addresses(body: str):
-    pattern = re.compile(
-        r"^\\s*([0-9a-f]+):.*\\bout\\b.*\\$0x0*80\\b",
-        re.IGNORECASE | re.MULTILINE,
-    )
-    return [int(address, 16) for address in pattern.findall(body)]
+def rows_in_range(start: int, end: int):
+    return [row for row in instructions if start <= row[0] < end]
 
 
-def require_code_once(body: str, code: int, label: str) -> int:
-    addresses = immediate_addresses(body, code)
+def is_port80_out(raw: bytes) -> bool:
+    return len(raw) == 2 and raw[0] == 0xE6 and raw[1] == 0x80
+
+
+def loads_al_code(raw: bytes, code: int) -> bool:
+    # Accept the concrete encodings GCC emits for the uint8_t AL operand. For
+    # imm32 forms only the low byte is semantically relevant, so both positive
+    # and sign-extended pretty-print forms decode identically here.
+    if len(raw) == 2 and raw[0] == 0xB0 and raw[1] == code:
+        return True
+    if len(raw) == 5 and raw[0] == 0xB8 and raw[1] == code:
+        return True
+    if len(raw) == 3 and raw[0] == 0xC6 and raw[1] == 0xC0 and raw[2] == code:
+        return True
+    if len(raw) == 6 and raw[0] == 0xC7 and raw[1] == 0xC0 and raw[2] == code:
+        return True
+    if (
+        len(raw) == 7
+        and raw[0] == 0x48
+        and raw[1] == 0xC7
+        and raw[2] == 0xC0
+        and raw[3] == code
+    ):
+        return True
+    return False
+
+
+def post_out_addresses(start: int, end: int, code: int):
+    rows = rows_in_range(start, end)
+    found = []
+    for out_index, (out_address, raw, _asm) in enumerate(rows):
+        if not is_port80_out(raw):
+            continue
+        lower = max(0, out_index - 5)
+        for load_index in range(out_index - 1, lower - 1, -1):
+            if loads_al_code(rows[load_index][1], code):
+                found.append(out_address)
+                break
+    return found
+
+
+def require_post_once(start: int, end: int, code: int, label: str) -> int:
+    addresses = post_out_addresses(start, end, code)
     if len(addresses) != 1:
         raise RuntimeError(
-            f"{label} expected one linked immediate 0x{code:02X}, found {addresses}"
+            f"{label} expected one decoded POST 0x{code:02X}, found {addresses}"
         )
     return addresses[0]
 
 
-pmm_wrapper = function_disassembly("m61_post_pmm_init")
-vmm_wrapper = function_disassembly("m61_post_vmm_init")
-entry_body = function_disassembly("m61_post_real_boring_kernel_entry")
+def direct_calls(start: int, end: int):
+    calls = []
+    for address, raw, asm in rows_in_range(start, end):
+        if len(raw) == 5 and raw[0] == 0xE8:
+            displacement = int.from_bytes(raw[1:5], "little", signed=True)
+            target = (address + 5 + displacement) & 0xFFFFFFFFFFFFFFFF
+            calls.append((address, target, asm))
+    return calls
 
-pmm_7b = require_code_once(pmm_wrapper, 0x7B, "m61_post_pmm_init")
-pmm_92 = require_code_once(pmm_wrapper, 0x92, "m61_post_pmm_init")
-if pmm_7b >= pmm_92:
-    raise RuntimeError("existing 7B is not before new 92 in linked PMM wrapper")
-if len(port80_out_addresses(pmm_wrapper)) < 3:
-    raise RuntimeError("linked PMM wrapper does not contain 7A/7B/92 port-0x80 outputs")
 
-require_code_once(vmm_wrapper, 0x7C, "m61_post_vmm_init")
-if len(port80_out_addresses(vmm_wrapper)) < 2:
-    raise RuntimeError("linked VMM wrapper does not contain existing 7C/7D outputs")
+def symbol_address(name: str) -> int:
+    rows = elf_functions.get(name, [])
+    if len(rows) != 1:
+        raise RuntimeError(f"expected one linked FUNC {name}, found {rows}")
+    return rows[0][0]
 
-entry_posts = {}
-for code in range(0x93, 0x9A):
-    entry_posts[code] = require_code_once(
-        entry_body, code, "m61_post_real_boring_kernel_entry"
-    )
-if len(port80_out_addresses(entry_body)) < 7:
-    raise RuntimeError("linked entry does not contain seven direct 93-99 port-0x80 outputs")
 
-success_codes = (0x93, 0x94, 0x95, 0x96, 0x97)
-if [entry_posts[code] for code in success_codes] != sorted(
-    entry_posts[code] for code in success_codes
+def require_call_target(start: int, end: int, target: int, label: str) -> int:
+    addresses = [address for address, call_target, _asm in direct_calls(start, end)
+                 if call_target == target]
+    if len(addresses) != 1:
+        raise RuntimeError(f"{label} expected one direct E8 call, found {addresses}")
+    return addresses[0]
+
+
+pmm_start, pmm_end = function_range("m61_post_pmm_init")
+vmm_start, vmm_end = function_range("m61_post_vmm_init")
+entry_start, entry_end = function_range("m61_post_real_boring_kernel_entry")
+real_pmm = symbol_address("pmm_init")
+real_vmm = symbol_address("vmm_init")
+
+# If GNU --wrap aliases survive in the symbol table, they must not disagree
+# with the concrete wrapper/real addresses we prove from decoded call targets.
+for alias, expected in (
+    ("__wrap_pmm_init", pmm_start),
+    ("__real_pmm_init", real_pmm),
+    ("__wrap_vmm_init", vmm_start),
+    ("__real_vmm_init", real_vmm),
 ):
-    raise RuntimeError("linked 93-97 success-path POST order is not preserved")
+    for address, _kind in nm_symbols.get(alias, []):
+        if address != expected:
+            raise RuntimeError(
+                f"linked alias {alias}=0x{address:x} disagrees with expected 0x{expected:x}"
+            )
 
-if "<m61_post_pmm_init>" not in entry_body:
-    raise RuntimeError("linked entry does not call m61_post_pmm_init")
-if "<pmm_get_stats>" not in entry_body:
-    raise RuntimeError("linked entry does not call pmm_get_stats in 7B-to-7C interval")
-if "<pmm_self_test>" not in entry_body:
-    raise RuntimeError("linked entry does not call pmm_self_test in 7B-to-7C interval")
-if "<m61_post_vmm_init>" not in entry_body:
-    raise RuntimeError("linked entry does not call m61_post_vmm_init")
-
-call_re = re.compile(
-    r"^\\s*([0-9a-f]+):.*\\bcall\\b.*<([^>]+)>",
-    re.IGNORECASE | re.MULTILINE,
+pmm_7a = require_post_once(pmm_start, pmm_end, 0x7A, "PMM wrapper")
+pmm_7b = require_post_once(pmm_start, pmm_end, 0x7B, "PMM wrapper")
+pmm_92 = require_post_once(pmm_start, pmm_end, 0x92, "PMM wrapper")
+pmm_real_call = require_call_target(
+    pmm_start, pmm_end, real_pmm, "PMM wrapper -> real pmm_init"
 )
-calls = [(int(address, 16), target) for address, target in call_re.findall(entry_body)]
+if not (pmm_7a < pmm_real_call < pmm_7b < pmm_92):
+    raise RuntimeError(
+        "decoded PMM wrapper order is not 7A -> real pmm_init -> 7B -> 92"
+    )
 
+vmm_7c = require_post_once(vmm_start, vmm_end, 0x7C, "VMM wrapper")
+vmm_7d = require_post_once(vmm_start, vmm_end, 0x7D, "VMM wrapper")
+vmm_real_call = require_call_target(
+    vmm_start, vmm_end, real_vmm, "VMM wrapper -> real vmm_init"
+)
+if not (vmm_7c < vmm_real_call < vmm_7d):
+    raise RuntimeError("decoded VMM wrapper order is not 7C -> real vmm_init -> 7D")
 
-def first_call(target: str, minimum: int = 0):
-    for address, name in calls:
-        if address >= minimum and name == target:
-            return address
-    return None
+entry_posts = {
+    code: require_post_once(
+        entry_start, entry_end, code, "m61_post_real_boring_kernel_entry"
+    )
+    for code in range(0x93, 0x9A)
+}
+pmm_wrapper_call = require_call_target(
+    entry_start, entry_end, pmm_start, "entry -> m61_post_pmm_init"
+)
+vmm_wrapper_call = require_call_target(
+    entry_start, entry_end, vmm_start, "entry -> m61_post_vmm_init"
+)
 
+pmm_get_stats_address = symbol_address("pmm_get_stats")
+pmm_self_test_address = symbol_address("pmm_self_test")
+stats_calls = [
+    address
+    for address, target, _asm in direct_calls(entry_start, entry_end)
+    if target == pmm_get_stats_address
+]
+self_test_calls = [
+    address
+    for address, target, _asm in direct_calls(entry_start, entry_end)
+    if target == pmm_self_test_address
+]
+if not stats_calls:
+    raise RuntimeError("entry has no decoded direct call to pmm_get_stats")
+if len(self_test_calls) != 1:
+    raise RuntimeError(f"entry expected one decoded pmm_self_test call, found {self_test_calls}")
 
-pmm_call = first_call("m61_post_pmm_init")
-if pmm_call is None or pmm_call >= entry_posts[0x93]:
-    raise RuntimeError("linked 93 is not after the PMM wrapper call")
-stats_call = first_call("pmm_get_stats", entry_posts[0x93])
-if stats_call is None or not (entry_posts[0x93] < stats_call < entry_posts[0x94]):
-    raise RuntimeError("linked first pmm_get_stats call is not bracketed by 93/94")
-self_test_call = first_call("pmm_self_test", entry_posts[0x95])
-if self_test_call is None or not (entry_posts[0x95] < self_test_call < entry_posts[0x96]):
-    raise RuntimeError("linked pmm_self_test call is not bracketed by 95/96")
-vmm_call = first_call("m61_post_vmm_init", entry_posts[0x97])
-if vmm_call is None or vmm_call <= entry_posts[0x97]:
-    raise RuntimeError("linked VMM wrapper call is not after POST 97")
+first_stats_call = min(address for address in stats_calls if address > pmm_wrapper_call)
+self_test_call = self_test_calls[0]
+if not (
+    pmm_wrapper_call
+    < entry_posts[0x93]
+    < first_stats_call
+    < entry_posts[0x94]
+    < entry_posts[0x95]
+    < self_test_call
+    < entry_posts[0x96]
+    < entry_posts[0x97]
+    < vmm_wrapper_call
+):
+    raise RuntimeError(
+        "decoded 7B-to-7C success path is not PMM-call -> 93 -> stats -> 94 -> "
+        "95 -> self-test -> 96 -> 97 -> VMM-call"
+    )
 
-# Fresh codes are required in exactly their intended linked functions. The
-# established M61 verifier immediately above already proves unchanged 7B/7C
-# wrapper meanings and the complete legacy 70..7F sequence.
-for code in range(0x93, 0x9A):
-    if immediate_addresses(pmm_wrapper, code) or immediate_addresses(vmm_wrapper, code):
-        raise RuntimeError(f"linked entry code 0x{code:02X} leaked into PMM/VMM wrapper")
-if immediate_addresses(entry_body, 0x92):
-    raise RuntimeError("linked wrapper-return code 0x92 leaked into entry")
+# Failure-only 98/99 remain in the same linked entry function. Their source
+# anchors are already proven above and their decoded port writes are unique;
+# neither path can reach VMM because both immediately take the existing halt
+# path. Do not impose linear-address ordering on compiler-placed failure blocks.
+for code in (0x98, 0x99):
+    if not (entry_start <= entry_posts[code] < entry_end):
+        raise RuntimeError(f"decoded failure POST 0x{code:02X} escaped entry function")
 
+# Fresh codes must be unique globally as actual port-0x80 writes, not merely as
+# immediate constants elsewhere in data or code.
+for code in range(0x92, 0x9A):
+    global_hits = []
+    for index, (address, raw, _asm) in enumerate(instructions):
+        if not is_port80_out(raw):
+            continue
+        lower = max(0, index - 5)
+        for load_index in range(index - 1, lower - 1, -1):
+            if loads_al_code(instructions[load_index][1], code):
+                global_hits.append(address)
+                break
+    if len(global_hits) != 1:
+        raise RuntimeError(
+            f"linked POST 0x{code:02X} expected one decoded global port write, found {global_hits}"
+        )
+
+print(
+    f"M61 linked symbol ranges: pmm-wrapper=0x{pmm_start:x}-0x{pmm_end:x} "
+    f"vmm-wrapper=0x{vmm_start:x}-0x{vmm_end:x} "
+    f"entry=0x{entry_start:x}-0x{entry_end:x}"
+)
+print(
+    f"M61 decoded PMM boundary: 7A@0x{pmm_7a:x} real-call@0x{pmm_real_call:x} "
+    f"7B@0x{pmm_7b:x} 92@0x{pmm_92:x}"
+)
+print(
+    f"M61 decoded VMM boundary: 7C@0x{vmm_7c:x} real-call@0x{vmm_real_call:x} "
+    f"7D@0x{vmm_7d:x}"
+)
+print("M61 verifier root cause fixed: double-escaped regex extraction removed")
 print("M61 linked existing 7B meaning preserved: YES")
 print("M61 linked existing 7C meaning preserved: YES")
 print(
@@ -258,7 +427,7 @@ print(
     "96 selftest-success/final-serial-before; 97 final-serial-after/VMM-call-before; "
     "98 PMM-false; 99 initial-stats-false"
 )
-print("M61 linked new 92-99 breadcrumbs confined to 7B-to-7C interval: YES")
+print("M61 linked new 92-99 breadcrumbs confined to 7B-to-7C execution interval: YES")
 print("M61 linked framebuffer diagnostic writes reintroduced: NO")
 print("M61 linked getter wrapper reintroduced: NO")
 print("M61 linked PMM/VMM runtime semantics changed beyond candidate POST breadcrumbs: NO")
