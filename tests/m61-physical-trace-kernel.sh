@@ -55,6 +55,8 @@ cat > "$POST_SOURCE" <<'EOF_POST_C'
 
 #define M61_POST_PORT 0x80U
 #define M61_NAME_LIMIT 96U
+#define M61_POST(code) \
+    x86_64_out8((uint16_t)M61_POST_PORT, (uint8_t)(code))
 
 enum m61_post_code {
     M61_POST_KERNEL_ENTRY = 0x61,
@@ -72,6 +74,10 @@ enum m61_post_code {
 
 const char boring_m61_post_port80_enabled[] =
     "M61 diagnostic POST port 0x80 witness enabled";
+const uint8_t boring_m61_post_sequence[] = {
+    0x61U, 0x62U, 0x63U, 0x64U, 0x65U, 0x66U,
+    0x67U, 0x68U, 0x69U, 0x6aU, 0x6fU
+};
 
 void boring_kernel_entry(void);
 void m61_post_real_boring_kernel_entry(void);
@@ -102,10 +108,6 @@ static bool display_posted;
 static bool wm_posted;
 static bool terminal_posted;
 static bool desktop_posted;
-
-static void post_code(enum m61_post_code code) {
-    x86_64_out8((uint16_t)M61_POST_PORT, (uint8_t)code);
-}
 
 static bool name_ends_with(const char *value, const char *ending) {
     size_t value_length = 0U;
@@ -138,7 +140,7 @@ static bool name_ends_with(const char *value, const char *ending) {
 
 void boring_kernel_entry(void) {
     /* First diagnostic instruction after Limine transfers to kernel entry. */
-    post_code(M61_POST_KERNEL_ENTRY);
+    M61_POST(M61_POST_KERNEL_ENTRY);
     m61_post_real_boring_kernel_entry();
 }
 
@@ -146,7 +148,7 @@ void m61_post_serial_init(void) {
     /* Existing M61 wrapper has installed its bounded early exception IDT. */
     __real_serial_init();
     /* COM1 probing is fail-open and has now returned, before framebuffer I/O. */
-    post_code(M61_POST_EARLY_CONTAINMENT_SERIAL);
+    M61_POST(M61_POST_EARLY_CONTAINMENT_SERIAL);
 }
 
 bool m61_post_heap_init(void) {
@@ -154,7 +156,7 @@ bool m61_post_heap_init(void) {
 
     if (result) {
         /* PMM and VMM are already prerequisites at this call boundary. */
-        post_code(M61_POST_MEMORY_RUNTIME);
+        M61_POST(M61_POST_MEMORY_RUNTIME);
     }
     return result;
 }
@@ -164,7 +166,7 @@ bool m61_post_irq_init(void) {
 
     if (result) {
         /* Normal exception setup precedes the runtime IRQ foundation. */
-        post_code(M61_POST_EXCEPTION_IRQ);
+        M61_POST(M61_POST_EXCEPTION_IRQ);
     }
     return result;
 }
@@ -174,7 +176,7 @@ bool m61_post_usb_mass_storage_init(struct xhci_state *state) {
 
     if (result) {
         /* xHCI discovery/configuration precedes successful USB storage. */
-        post_code(M61_POST_USB_STORAGE);
+        M61_POST(M61_POST_USB_STORAGE);
     }
     return result;
 }
@@ -186,7 +188,7 @@ enum vfs_result m61_post_boringfs_vfs_create_writable(
         device, id, out, error);
 
     if (result == VFS_RESULT_OK) {
-        post_code(M61_POST_USB_ROOT);
+        M61_POST(M61_POST_USB_ROOT);
     }
     return result;
 }
@@ -199,16 +201,16 @@ bool m61_post_process_set_name(struct process *process, const char *name) {
     }
     if (!init_posted && name_ends_with(name, "boring-init")) {
         init_posted = true;
-        post_code(M61_POST_BORING_INIT);
+        M61_POST(M61_POST_BORING_INIT);
     } else if (!display_posted && name_ends_with(name, "boring-display")) {
         display_posted = true;
-        post_code(M61_POST_BORING_DISPLAY);
+        M61_POST(M61_POST_BORING_DISPLAY);
     } else if (!wm_posted && name_ends_with(name, "boringwm")) {
         wm_posted = true;
-        post_code(M61_POST_BORING_WM);
+        M61_POST(M61_POST_BORING_WM);
     } else if (!terminal_posted && name_ends_with(name, "boring-terminal")) {
         terminal_posted = true;
-        post_code(M61_POST_AUTO_TERMINAL);
+        M61_POST(M61_POST_AUTO_TERMINAL);
     }
     return true;
 }
@@ -221,83 +223,17 @@ enum boring_framebuffer_user_result m61_post_boring_framebuffer_user_present(
     if ((result == BORING_FRAMEBUFFER_USER_OK) && terminal_posted &&
         !desktop_posted) {
         desktop_posted = true;
-        post_code(M61_POST_DESKTOP_PRESENT);
+        M61_POST(M61_POST_DESKTOP_PRESENT);
     }
     return result;
 }
 EOF_POST_C
 
-# QEMU can cheaply observe legacy port 0x80 through isa-debugcon. Patch only
-# this job's checkout; the repository's established two-boot acceptance remains
-# the harness and the change is idempotent across the early-fault/normal relink.
-python3 - <<'EOF_POST_QEMU'
-from pathlib import Path
-
-path = Path("tests/m61-bootable-persistent-usb-qemu.py")
-text = path.read_text()
-marker = "# M61_POST80_QEMU_CAPTURE"
-if marker not in text:
-    old = '    qemu_log = qemu_log_path.open("w")\n'
-    new = (
-        '    qemu_log = qemu_log_path.open("w")\n'
-        '    # M61_POST80_QEMU_CAPTURE\n'
-        '    post80 = out / "post80.bin"\n'
-        '    post80.write_bytes(b"")\n')
-    if text.count(old) != 1:
-        raise RuntimeError("M61 POST QEMU patch: qemu-log anchor mismatch")
-    text = text.replace(old, new, 1)
-
-    old = '        "-serial", f"file:{serial}", "-monitor", "none", "-qmp", "stdio",\n'
-    new = (
-        '        "-serial", f"file:{serial}", "-monitor", "none", "-qmp", "stdio",\n'
-        '        "-global", "isa-debugcon.iobase=0x80",\n'
-        '        "-debugcon", f"file:{post80}",\n')
-    if text.count(old) != 1:
-        raise RuntimeError("M61 POST QEMU patch: command anchor mismatch")
-    text = text.replace(old, new, 1)
-
-    old = '''    def latest(count=None, after=0):
-        return wait(lambda _current: next((frame for frame in reversed(frames())
-                                           if frame["frame"] > after and
-                                           (count is None or frame["count"] == count)), None),
-                    f"WM frame count={count} after={after}")
-'''
-    new = '''    def latest(count=None, after=0):
-        frame = wait(lambda _current: next((item for item in reversed(frames())
-                                            if item["frame"] > after and
-                                            (count is None or item["count"] == count)), None),
-                     f"WM frame count={count} after={after}")
-        if count == 1:
-            expected_post = bytes((
-                0x61, 0x62, 0x63, 0x64, 0x65, 0x66,
-                0x67, 0x68, 0x69, 0x6a, 0x6f))
-            deadline = time.monotonic() + 5
-            while True:
-                captured = post80.read_bytes()
-                offset = captured.find(expected_post)
-                if offset >= 0:
-                    (out / "post80-proof.txt").write_text(
-                        "POST_PORT80_PROVEN=YES\\n"
-                        "POST_SEQUENCE=61,62,63,64,65,66,67,68,69,6A,6F\\n"
-                        f"post_sequence_offset={offset}\\n")
-                    print("M61 POST port 0x80 sequence: PASS 61 62 63 64 65 66 67 68 69 6A 6F")
-                    break
-                if time.monotonic() >= deadline:
-                    raise RuntimeError(
-                        "M61 POST port 0x80 sequence missing; tail=" +
-                        captured[-64:].hex(" "))
-                time.sleep(0.02)
-        return frame
-'''
-    if text.count(old) != 1:
-        raise RuntimeError("M61 POST QEMU patch: latest() anchor mismatch")
-    text = text.replace(old, new, 1)
-    path.write_text(text)
-EOF_POST_QEMU
-
-# Redirect only this diagnostic build's original entry and selected __real_*
-# boundaries through the generated port-0x80 hook. The normal trace wrappers
-# stay intact and continue to own framebuffer/serial behavior.
+# QEMU pc/q35 already owns port 0x80 as its built-in ioport80 compatibility
+# sink, so an isa-debugcon device on the same port is not a trustworthy cheap
+# observer. Keep the established QEMU runtime acceptance unchanged and prove
+# here that the exact diagnostic kernel contains the real out instructions at
+# every intended call boundary. Physical hardware remains the port-0x80 oracle.
 POST_CPPFLAGS='-Dboring_kernel_entry=m61_post_real_boring_kernel_entry -D__real_serial_init=m61_post_serial_init -D__real_heap_init=m61_post_heap_init -D__real_irq_init=m61_post_irq_init -D__real_usb_mass_storage_init=m61_post_usb_mass_storage_init -D__real_boringfs_vfs_create_writable=m61_post_boringfs_vfs_create_writable -D__real_process_set_name=m61_post_process_set_name -D__real_boring_framebuffer_user_present=m61_post_boring_framebuffer_user_present'
 CPPFLAGS="-DBORING_M36_DESKTOP_ACCEPTANCE=1 -DBORING_M37_DESKTOP_ACCEPTANCE=1 -DBORING_M54_USB_ONLY_DESKTOP=1 -DBORING_M61_PHYSICAL_BREADCRUMBS=1 $POST_CPPFLAGS"
 if [ "${M61_EARLY_FAULT_TEST:-0}" = 1 ]; then
@@ -320,6 +256,64 @@ make TEST_MODE=m36-desktop \
 
 nm build/kernel.elf | grep -Fq 'boring_m61_physical_breadcrumbs_enabled'
 nm build/kernel.elf | grep -Fq 'boring_m61_post_port80_enabled'
+nm build/kernel.elf | grep -Fq 'boring_m61_post_sequence'
+
+python3 - <<'EOF_POST_VERIFY'
+import re
+import subprocess
+from pathlib import Path
+
+source = Path("kernel/core/m61_post80_generated.c").read_text()
+ordered = [
+    "M61_POST(M61_POST_KERNEL_ENTRY)",
+    "M61_POST(M61_POST_EARLY_CONTAINMENT_SERIAL)",
+    "M61_POST(M61_POST_MEMORY_RUNTIME)",
+    "M61_POST(M61_POST_EXCEPTION_IRQ)",
+    "M61_POST(M61_POST_USB_STORAGE)",
+    "M61_POST(M61_POST_USB_ROOT)",
+    "M61_POST(M61_POST_BORING_INIT)",
+    "M61_POST(M61_POST_BORING_DISPLAY)",
+    "M61_POST(M61_POST_BORING_WM)",
+    "M61_POST(M61_POST_AUTO_TERMINAL)",
+    "M61_POST(M61_POST_DESKTOP_PRESENT)",
+]
+positions = [source.find(item) for item in ordered]
+if any(position < 0 for position in positions) or positions != sorted(positions):
+    raise RuntimeError("M61 POST source milestone sequence is incomplete or reordered")
+
+functions = {
+    "boring_kernel_entry": ("61",),
+    "m61_post_serial_init": ("62",),
+    "m61_post_heap_init": ("63",),
+    "m61_post_irq_init": ("64",),
+    "m61_post_usb_mass_storage_init": ("65",),
+    "m61_post_boringfs_vfs_create_writable": ("66",),
+    "m61_post_process_set_name": ("67", "68", "69", "6a"),
+    "m61_post_boring_framebuffer_user_present": ("6f",),
+}
+out_count = 0
+for name, codes in functions.items():
+    body = subprocess.check_output(
+        ["objdump", "-d", "--disassemble=" + name, "build/kernel.elf"],
+        text=True)
+    outputs = len(re.findall(r"\bout\b", body))
+    if outputs < len(codes):
+        raise RuntimeError(
+            f"M61 POST binary hook {name} has only {outputs} out instructions")
+    if "$0x80" not in body:
+        raise RuntimeError(f"M61 POST binary hook {name} does not target port 0x80")
+    for code in codes:
+        if re.search(rf"\$0x0*{code}\b", body, re.IGNORECASE) is None:
+            raise RuntimeError(
+                f"M61 POST binary hook {name} missing code 0x{code.upper()}")
+    out_count += outputs
+if out_count < 11:
+    raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")
+print("M61 POST port 0x80 binary acceptance: PASS")
+print("M61 POST sequence: 61 62 63 64 65 66 67 68 69 6A 6F")
+print("M61 QEMU port 0x80 observer: SKIPPED (pc/q35 owns ioport80 sink)")
+EOF_POST_VERIFY
+
 if [ "${M61_EARLY_FAULT_TEST:-0}" = 1 ]; then
     nm build/kernel.elf | grep -Fq 'boring_m61_early_fault_test_enabled'
     printf '%s\n' 'M61 controlled early-fault test kernel: ENABLED'
