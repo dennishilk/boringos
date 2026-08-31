@@ -259,6 +259,9 @@ bool m61_post_pmm_init(const struct boring_limine_memmap_response *memmap) {
 
     M61_POST(M61_POST_PMM_INIT_BEFORE);
     result = __real_pmm_init(memmap);
+    if (!result) {
+        return result;
+    }
     M61_POST(M61_POST_PMM_INIT_AFTER);
     return result;
 }

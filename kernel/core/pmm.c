@@ -3,6 +3,14 @@
 
 #include <boring/pmm.h>
 
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+#include <boring/io.h>
+#define PMM_M61_FAILURE_POST(code) \
+    x86_64_out8((uint16_t)0x80U, (uint8_t)(code))
+#else
+#define PMM_M61_FAILURE_POST(code) ((void)0)
+#endif
+
 #define PMM_MAX_MEMORY_MAP_ENTRIES 256ULL
 #define PMM_MAX_REGIONS 64ULL
 #define PMM_MAX_FRAMES 8388608ULL
@@ -209,9 +217,20 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
 
     pmm_reset_state();
 
-    if ((memory_map == NULL) || (memory_map->entries == NULL) ||
-        (memory_map->entry_count == 0ULL) ||
-        (memory_map->entry_count > PMM_MAX_MEMORY_MAP_ENTRIES)) {
+    if (memory_map == NULL) {
+        PMM_M61_FAILURE_POST(0xA0U);
+        return false;
+    }
+    if (memory_map->entries == NULL) {
+        PMM_M61_FAILURE_POST(0xA9U);
+        return false;
+    }
+    if (memory_map->entry_count == 0ULL) {
+        PMM_M61_FAILURE_POST(0xAAU);
+        return false;
+    }
+    if (memory_map->entry_count > PMM_MAX_MEMORY_MAP_ENTRIES) {
+        PMM_M61_FAILURE_POST(0xABU);
         return false;
     }
 
@@ -223,6 +242,7 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
             memory_map->entries[entry_index];
 
         if (!pmm_entry_end(entry, &first_end)) {
+            PMM_M61_FAILURE_POST(0xA1U);
             return false;
         }
 
@@ -233,12 +253,14 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
                 memory_map->entries[other_index];
 
             if (!pmm_entry_end(other, &second_end)) {
+                PMM_M61_FAILURE_POST(0xA2U);
                 return false;
             }
 
             if (pmm_ranges_overlap(entry->base, first_end,
                                    other->base, second_end) &&
                 pmm_overlap_requires_rejection(entry->type, other->type)) {
+                PMM_M61_FAILURE_POST(0xA3U);
                 return false;
             }
         }
@@ -258,9 +280,14 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
             continue;
         }
 
-        if (!pmm_entry_end(entry, &raw_end) ||
-            !pmm_align_up(entry->base, &aligned_base)) {
+        if (!pmm_entry_end(entry, &raw_end)) {
             pmm_reset_state();
+            PMM_M61_FAILURE_POST(0xA4U);
+            return false;
+        }
+        if (!pmm_align_up(entry->base, &aligned_base)) {
+            pmm_reset_state();
+            PMM_M61_FAILURE_POST(0xA5U);
             return false;
         }
 
@@ -275,6 +302,7 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
         }
         if (pmm_total_frames > PMM_MAX_FRAMES) {
             pmm_reset_state();
+            PMM_M61_FAILURE_POST(0xA6U);
             return false;
         }
         remaining_frames = PMM_MAX_FRAMES - pmm_total_frames;
@@ -290,6 +318,7 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
         if ((pmm_total_frames > (UINT64_MAX - frame_count)) ||
             ((pmm_total_frames + frame_count) > PMM_MAX_FRAMES)) {
             pmm_reset_state();
+            PMM_M61_FAILURE_POST(0xA7U);
             return false;
         }
 
@@ -302,6 +331,7 @@ bool pmm_init(const struct boring_limine_memmap_response *memory_map) {
 
     if (pmm_total_frames == 0ULL) {
         pmm_reset_state();
+        PMM_M61_FAILURE_POST(0xA8U);
         return false;
     }
 
