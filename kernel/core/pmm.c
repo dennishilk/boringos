@@ -8,6 +8,8 @@
 
 static uint8_t m61_pmm_false_reason;
 
+uint8_t boring_m61_pmm_false_reason(void);
+
 uint8_t boring_m61_pmm_false_reason(void) {
     return m61_pmm_false_reason;
 }
