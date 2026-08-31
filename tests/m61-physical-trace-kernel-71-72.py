@@ -82,6 +82,18 @@ bool __real_boring_graphics_fill_rect(
     uint32_t color);
 void __real_serial_write_string(const char *value);
 
+uint64_t __wrap_boring_m61_framebuffer_count(void);
+const struct boring_framebuffer *__wrap_boring_framebuffer_get(void);
+bool __wrap_boring_framebuffer_surface_valid(
+    const struct boring_framebuffer *surface);
+bool __wrap_boring_m61_framebuffer_get(
+    uint64_t index, struct boring_framebuffer *surface);
+bool __wrap_boring_graphics_fill_rect(
+    const struct boring_framebuffer *surface,
+    uint64_t x, uint64_t y, uint64_t width, uint64_t height,
+    uint32_t color);
+void __wrap_serial_write_string(const char *value);
+
 static uint8_t acquire_71_72_phase;
 static bool candidate_enum_posted;
 static bool first_candidate_metadata_posted;
