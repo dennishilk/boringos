@@ -5,13 +5,9 @@ import subprocess
 root = Path(__file__).resolve().parent.parent
 base = root / "tests/m61-physical-trace-kernel.sh"
 entry = root / "kernel/core/entry.c"
-io = root / "kernel/include/boring/io.h"
-pmm = root / "kernel/core/pmm.c"
 previous = root / "tests/m61-physical-trace-kernel-71-72.py"
 base_src = base.read_text()
 entry_src = entry.read_text()
-io_src = io.read_text()
-pmm_src = pmm.read_text()
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -19,32 +15,6 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     if count != 1:
         raise RuntimeError(f"{label}: expected one anchor, found {count}")
     return text.replace(old, new, 1)
-
-
-# The generic I/O primitive must remain boring. PMM false-reason state belongs
-# only to pmm.c and must not execute on the early 61..79 POST path.
-expected_out8 = '''static inline void x86_64_out8(uint16_t port, uint8_t value) {
-    __asm__ volatile ("outb %0, %1" : : "a"(value), "Nd"(port));
-}
-'''
-if io_src.count(expected_out8) != 1:
-    raise RuntimeError("generic x86_64_out8 is not the transparent pre-d24 primitive")
-for forbidden in (
-    "BORING_M61_PHYSICAL_BREADCRUMBS",
-    "m61_pmm_false_reason",
-    "0x7aU",
-    "0x98U",
-):
-    if forbidden in io_src:
-        raise RuntimeError(f"generic io.h still contains M61 PMM interception: {forbidden}")
-for required in (
-    "static uint8_t m61_pmm_false_reason;",
-    "m61_pmm_false_reason = (uint8_t)(code);",
-    "uint8_t boring_m61_pmm_false_reason(void)",
-    "m61_pmm_false_reason = 0U;",
-):
-    if required not in pmm_src:
-        raise RuntimeError(f"localized PMM false-reason source is missing: {required}")
 
 
 # 7B is emitted after the real PMM init returns. Add exactly one breadcrumb
@@ -75,7 +45,6 @@ entry_instrumented = replace_once(
     "#ifndef BORING_M61_PHYSICAL_BREADCRUMBS\n"
     "#error \"M61 7B-to-7C direct breadcrumbs must stay candidate-build gated\"\n"
     "#endif\n"
-    "uint8_t boring_m61_pmm_false_reason(void);\n"
     "#define M61_7B_7C_POST(code) \\\n"
     "    x86_64_out8((uint16_t)0x80U, (uint8_t)(code))\n",
     "candidate POST macro",
@@ -88,15 +57,8 @@ old_pmm_gate = '''    if (!pmm_init(limine_memmap_request.response) ||
     }
 '''
 new_pmm_gate = '''    if (!pmm_init(limine_memmap_request.response)) {
-        uint8_t pmm_reason;
-
         /* 98: PMM wrapper returned false; normal failure path follows. */
         M61_7B_7C_POST(0x98U);
-        pmm_reason = boring_m61_pmm_false_reason();
-        if ((pmm_reason >= 0xa0U) && (pmm_reason <= 0xabU)) {
-            /* Leave the exact PMM false reason as the final stable board code. */
-            M61_7B_7C_POST(pmm_reason);
-        }
         serial_write_string("Physical memory manager: FAILED\\n");
         x86_64_halt_forever();
     }
@@ -143,17 +105,13 @@ entry_instrumented = replace_once(
     "PMM self-test/final-serial/VMM boundary",
 )
 
-if entry_instrumented.count("M61_7B_7C_POST(") != 9:
+if entry_instrumented.count("M61_7B_7C_POST(") != 8:
     raise RuntimeError(
-        "expected seven direct 7B-to-7C breadcrumbs, one PMM reason re-emit, and the macro definition"
+        "expected exactly seven direct 7B-to-7C entry breadcrumbs plus the macro definition"
     )
 for code in range(0x93, 0x9A):
     if entry_instrumented.count(f"0x{code:02X}U") != 1:
         raise RuntimeError(f"entry breadcrumb 0x{code:02X} is missing or duplicated")
-if entry_instrumented.count("boring_m61_pmm_false_reason()") != 1:
-    raise RuntimeError("PMM false-reason accessor call is missing or duplicated")
-if entry_instrumented.count("M61_7B_7C_POST(pmm_reason)") != 1:
-    raise RuntimeError("PMM final reason re-emit is missing or duplicated")
 if base_instrumented.count("M61_POST(0x92U)") != 1:
     raise RuntimeError("wrapper breadcrumb 0x92 is missing or duplicated")
 
@@ -287,16 +245,6 @@ def loaded_al_code(raw: bytes):
         and raw[2] == 0xC0
     ):
         return raw[3]
-    return None
-
-
-def eax_constant_write(raw: bytes):
-    if raw in (bytes((0x31, 0xC0)), bytes((0x33, 0xC0))):
-        return 0
-    if len(raw) == 5 and raw[0] == 0xB8:
-        return int.from_bytes(raw[1:5], "little", signed=False)
-    if len(raw) == 6 and raw[0] == 0xC7 and raw[1] == 0xC0:
-        return int.from_bytes(raw[2:6], "little", signed=False)
     return None
 
 
@@ -535,13 +483,6 @@ vmm_post_start, vmm_post_end = function_range("m61_post_vmm_init")
 entry_start, entry_end = function_range("m61_post_real_boring_kernel_entry")
 real_pmm = symbol_address("pmm_init")
 real_vmm = symbol_address("vmm_init")
-pmm_init_start, pmm_init_end = function_range("pmm_init")
-pmm_reason_accessor_start, pmm_reason_accessor_end = function_range(
-    "boring_m61_pmm_false_reason"
-)
-
-if pmm_init_start != real_pmm:
-    raise RuntimeError("linked real PMM symbol/range disagreement")
 
 if len({pmm_wrap_start, pmm_post_start, real_pmm}) != 3:
     raise RuntimeError("PMM wrapper, POST shim, and real function are not distinct")
@@ -767,123 +708,6 @@ stats_failure_branch = require_false_result_branch(
     initial_stats_call, 0x94, 0x99, "initial PMM stats result"
 )
 
-pmm_reason_accessor_call = require_transfer_target(
-    entry_start, entry_end, pmm_reason_accessor_start,
-    "PMM false caller -> localized reason accessor", ("call",)
-)
-entry_reason_outs = [
-    address
-    for address, raw, _asm in rows_in_range(entry_start, entry_end)
-    if is_port80_out(raw)
-    and cfg_reachable(entry_cfg, pmm_reason_accessor_call[0], address)
-    and cfg_reachable(entry_cfg, address, pmm_failure_branch[1])
-]
-if len(entry_reason_outs) != 1:
-    raise RuntimeError(
-        f"PMM false caller expected one dynamic final reason out, found {entry_reason_outs}"
-    )
-pmm_reason_final_out = entry_reason_outs[0]
-if not cfg_reachable(entry_cfg, entry_posts[0x98][1], pmm_reason_accessor_call[0]):
-    raise RuntimeError("PMM false POST 98 cannot reach localized reason accessor")
-if not cfg_reachable(entry_cfg, pmm_reason_accessor_call[0], pmm_reason_final_out):
-    raise RuntimeError("localized PMM reason accessor cannot reach final port-0x80 write")
-if not cfg_reachable(entry_cfg, pmm_reason_final_out, pmm_failure_branch[1]):
-    raise RuntimeError("final PMM reason write cannot reach the existing terminal halt")
-if cfg_reachable(entry_cfg, entry_posts[0x93][1], pmm_reason_accessor_call[0]):
-    raise RuntimeError("successful PMM path can reach the false-reason accessor")
-if cfg_reachable(entry_cfg, entry_posts[0x93][1], pmm_reason_final_out):
-    raise RuntimeError("successful PMM path can reach the final false-reason write")
-
-# The real, candidate-gated pmm_init carries one direct port-0x80 code for
-# every existing semantic false-return class. Prove the final linked function
-# using decoded instruction bytes and its CFG: every reason site must flow
-# through the shared EAX=false return, none may reach the EAX=true setter, and
-# a successful post-free path must still reach the true return.
-pmm_false_posts = {
-    code: require_post_site(pmm_init_start, pmm_init_end, code, "real pmm_init")
-    for code in range(0xA0, 0xAC)
-}
-pmm_init_rows = rows_in_range(pmm_init_start, pmm_init_end)
-pmm_init_cfg = function_cfg(pmm_init_start, pmm_init_end)
-pmm_false_setters = [
-    address
-    for address, raw, _asm in pmm_init_rows
-    if eax_constant_write(raw) == 0
-]
-pmm_true_setters = [
-    address
-    for address, raw, _asm in pmm_init_rows
-    if eax_constant_write(raw) == 1
-]
-pmm_returns = [
-    address for address, raw, _asm in pmm_init_rows if is_return(raw)
-]
-if len(pmm_false_setters) != 1 or len(pmm_true_setters) != 1 or len(pmm_returns) != 1:
-    raise RuntimeError(
-        "real pmm_init expected one decoded false setter, true setter, and return: "
-        f"false={pmm_false_setters} true={pmm_true_setters} returns={pmm_returns}"
-    )
-pmm_false_setter = pmm_false_setters[0]
-pmm_true_setter = pmm_true_setters[0]
-pmm_return = pmm_returns[0]
-
-for code, (_load_address, out_address) in pmm_false_posts.items():
-    if not cfg_reachable(pmm_init_cfg, out_address, pmm_false_setter):
-        raise RuntimeError(
-            f"real pmm_init POST 0x{code:02X} cannot reach its false result setter"
-        )
-    if cfg_reachable(pmm_init_cfg, out_address, pmm_true_setter):
-        raise RuntimeError(
-            f"real pmm_init POST 0x{code:02X} can escape to the true result setter"
-        )
-    if not cfg_reachable(pmm_init_cfg, out_address, pmm_return):
-        raise RuntimeError(
-            f"real pmm_init POST 0x{code:02X} cannot reach the function return"
-        )
-    if cfg_reachable(
-        pmm_init_cfg, out_address, pmm_return, frozenset((pmm_false_setter,))
-    ):
-        raise RuntimeError(
-            f"real pmm_init POST 0x{code:02X} can return without setting false"
-        )
-
-pmm_reason_outs = frozenset(site[1] for site in pmm_false_posts.values())
-if cfg_reachable(
-    pmm_init_cfg, pmm_init_rows[0][0], pmm_false_setter, pmm_reason_outs
-):
-    raise RuntimeError("real pmm_init can produce false without an A0-AB reason write")
-if not cfg_reachable(
-    pmm_init_cfg, pmm_init_rows[0][0], pmm_true_setter, pmm_reason_outs
-):
-    raise RuntimeError("real pmm_init has no reason-POST-free successful path")
-if not cfg_reachable(pmm_init_cfg, pmm_true_setter, pmm_return):
-    raise RuntimeError("real pmm_init true result cannot reach the function return")
-if any(
-    cfg_reachable(pmm_init_cfg, pmm_true_setter, out_address)
-    for out_address in pmm_reason_outs
-):
-    raise RuntimeError("real pmm_init successful path can reach a false-reason POST")
-if cfg_reachable(
-    pmm_init_cfg,
-    pmm_init_rows[0][0],
-    pmm_return,
-    frozenset((pmm_false_setter, pmm_true_setter)),
-):
-    raise RuntimeError("real pmm_init can return without setting a boolean result")
-
-for code in range(0xA0, 0xAC):
-    global_hits = [
-        out_address
-        for _load_address, out_address in post_sites(
-            instructions[0][0], instructions[-1][0] + 16, code
-        )
-    ]
-    if len(global_hits) != 1:
-        raise RuntimeError(
-            f"linked PMM reason POST 0x{code:02X} expected one decoded immediate "
-            f"port write, found {global_hits}"
-        )
-
 # Fresh codes must be unique globally as actual port-0x80 writes, not merely as
 # immediate constants elsewhere in data or code.
 for code in range(0x92, 0x9A):
@@ -935,8 +759,6 @@ print(
     "M61 verifier root cause fixed: distinct GNU --wrap outer wrappers, "
     "POST shims, and real functions modeled by decoded transfer targets"
 )
-print("M61 generic x86_64_out8 PMM interception removed: YES")
-print("M61 localized PMM reason state begins only inside real pmm_init: YES")
 print("M61 linked PMM call chain proven: YES")
 print("M61 linked PMM 7A -> real -> 7B -> 92 execution order proven: YES")
 print("M61 linked VMM call chain proven: YES")
@@ -944,36 +766,18 @@ print("M61 linked VMM 7C -> real -> 7D execution order proven: YES")
 print("M61 linked 92 -> 93 -> 94 -> 95 -> 96 -> 97 CFG order proven: YES")
 print(
     f"M61 linked failure branches: 98-branch@0x{pmm_failure_branch[0]:x} "
-    f"reason-accessor@0x{pmm_reason_accessor_call[0]:x} "
-    f"reason-out@0x{pmm_reason_final_out:x} halt@0x{pmm_failure_branch[1]:x}; "
+    f"halt@0x{pmm_failure_branch[1]:x}; "
     f"99-branch@0x{stats_failure_branch[0]:x} "
     f"halt@0x{stats_failure_branch[1]:x}"
 )
-print("M61 linked PMM false path 98 -> exact reason accessor -> final port80 -> halt proven: YES")
-print("M61 linked successful PMM path cannot reach false-reason re-emit: YES")
 print("M61 linked failure POST 98/99 boolean branches and halts proven: YES")
-print(
-    f"M61 linked real pmm_init range: 0x{pmm_init_start:x}-0x{pmm_init_end:x}; "
-    f"false-setter=0x{pmm_false_setter:x}; true-setter=0x{pmm_true_setter:x}; "
-    f"return=0x{pmm_return:x}"
-)
-print(
-    "M61 linked PMM false-reason map: "
-    "A0 map-null; A1 first-entry-invalid; A2 other-entry-invalid; "
-    "A3 overlap; A4 usable-entry-invalid; A5 usable-base-align-overflow; "
-    "A6 total-over-cap; A7 add-overflow/capacity; A8 no-usable-frames; "
-    "A9 entries-null; AA entry-count-zero; AB entry-count-over-256"
-)
-print("M61 linked PMM A0-AB reason writes unique and false-returning: YES")
-print("M61 linked every pmm_init false path records/emits A0-AB before returning: YES")
-print("M61 linked successful pmm_init path remains reason-POST-free and true: YES")
 print("M61 linked existing 7B meaning preserved: YES")
 print("M61 linked existing 7C meaning preserved: YES")
 print(
     "M61 POST 7B-to-7C map: 92 wrapper-return; 93 PMM-success/stats-before; "
     "94 stats-success/report-before; 95 report-after/selftest-before; "
     "96 selftest-success/final-serial-before; 97 final-serial-after/VMM-call-before; "
-    "98 PMM-false then recorded A0-AB; 99 initial-stats-false"
+    "98 PMM-false; 99 initial-stats-false"
 )
 print("M61 linked new 92-99 breadcrumbs confined to 7B-to-7C execution interval: YES")
 print("M61 linked framebuffer diagnostic writes reintroduced: NO")

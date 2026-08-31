@@ -8,14 +8,20 @@
 #define FOUR_GIB 0x100000000ULL
 #define THIRTY_TWO_GIB 0x800000000ULL
 
-static struct boring_limine_memmap_entry usable(uint64_t base,
-                                                 uint64_t length) {
+static struct boring_limine_memmap_entry typed(uint64_t base,
+                                                uint64_t length,
+                                                uint64_t type) {
     struct boring_limine_memmap_entry entry;
 
     entry.base = base;
     entry.length = length;
-    entry.type = BORING_LIMINE_MEMMAP_USABLE;
+    entry.type = type;
     return entry;
+}
+
+static struct boring_limine_memmap_entry usable(uint64_t base,
+                                                 uint64_t length) {
+    return typed(base, length, BORING_LIMINE_MEMMAP_USABLE);
 }
 
 static void test_configured_capacity_and_last_bitmap_frame(void) {
@@ -169,6 +175,157 @@ static void test_malformed_maps_still_fail_closed(void) {
     assert(!pmm_init(&overflow_map));
 }
 
+static void test_separate_usable_and_reserved_succeeds(void) {
+    struct boring_limine_memmap_entry reserved =
+        typed(0x1000ULL, 2ULL * PMM_PAGE_SIZE, BORING_LIMINE_MEMMAP_RESERVED);
+    struct boring_limine_memmap_entry ram =
+        usable(0x10000ULL, 3ULL * PMM_PAGE_SIZE);
+    struct boring_limine_memmap_entry *entries[] = {&reserved, &ram};
+    struct boring_limine_memmap_response map = {0ULL, 2ULL, entries};
+    struct pmm_stats stats;
+    uint64_t frame = 0ULL;
+
+    assert(pmm_init(&map));
+    assert(pmm_get_stats(&stats));
+    assert(stats.usable_frames == 3ULL);
+    assert(stats.free_frames == 3ULL);
+    assert(stats.region_count == 1ULL);
+    assert(!stats.memory_map_capped);
+    assert(!pmm_frame_is_usable(reserved.base));
+    assert(pmm_frame_is_usable(ram.base));
+    assert(pmm_alloc_frame(&frame));
+    assert(frame == ram.base);
+    assert(pmm_free_frame(frame));
+}
+
+static void test_reserved_acpi_overlap_succeeds(void) {
+    struct boring_limine_memmap_entry reserved =
+        typed(0x1800ULL, 0x3000ULL, BORING_LIMINE_MEMMAP_RESERVED);
+    struct boring_limine_memmap_entry acpi =
+        typed(0x2800ULL, 0x3000ULL, BORING_LIMINE_MEMMAP_ACPI_RECLAIMABLE);
+    struct boring_limine_memmap_entry ram =
+        usable(0x10000ULL, 2ULL * PMM_PAGE_SIZE);
+    struct boring_limine_memmap_entry *entries[] = {&reserved, &acpi, &ram};
+    struct boring_limine_memmap_response map = {0ULL, 3ULL, entries};
+    struct pmm_stats stats;
+    uint64_t frame = 0ULL;
+
+    assert(pmm_init(&map));
+    assert(pmm_get_stats(&stats));
+    assert(stats.usable_frames == 2ULL);
+    assert(stats.free_frames == 2ULL);
+    assert(stats.region_count == 1ULL);
+    assert(!pmm_frame_is_usable(0x2000ULL));
+    assert(pmm_alloc_frame(&frame));
+    assert(frame == ram.base);
+    assert(pmm_free_frame(frame));
+}
+
+static void test_executable_reserved_overlap_succeeds(void) {
+    struct boring_limine_memmap_entry executable =
+        typed(0x2000ULL, 0x5000ULL,
+              BORING_LIMINE_MEMMAP_EXECUTABLE_AND_MODULES);
+    struct boring_limine_memmap_entry reserved =
+        typed(0x4000ULL, 0x2000ULL, BORING_LIMINE_MEMMAP_RESERVED);
+    struct boring_limine_memmap_entry ram =
+        usable(0x10000ULL, 2ULL * PMM_PAGE_SIZE);
+    struct boring_limine_memmap_entry *entries[] = {&executable, &reserved, &ram};
+    struct boring_limine_memmap_response map = {0ULL, 3ULL, entries};
+    struct pmm_stats stats;
+
+    assert(pmm_init(&map));
+    assert(pmm_get_stats(&stats));
+    assert(stats.usable_frames == 2ULL);
+    assert(stats.free_frames == 2ULL);
+    assert(stats.region_count == 1ULL);
+    assert(!pmm_frame_is_usable(executable.base));
+    assert(pmm_frame_is_usable(ram.base));
+}
+
+static void test_usable_reserved_overlap_fails(void) {
+    struct boring_limine_memmap_entry reserved =
+        typed(0x1000ULL, 3ULL * PMM_PAGE_SIZE, BORING_LIMINE_MEMMAP_RESERVED);
+    struct boring_limine_memmap_entry ram =
+        usable(0x2000ULL, 3ULL * PMM_PAGE_SIZE);
+    struct boring_limine_memmap_entry *entries[] = {&reserved, &ram};
+    struct boring_limine_memmap_response map = {0ULL, 2ULL, entries};
+
+    assert(!pmm_init(&map));
+}
+
+static void test_usable_acpi_overlap_fails(void) {
+    struct boring_limine_memmap_entry acpi =
+        typed(0x1000ULL, 3ULL * PMM_PAGE_SIZE,
+              BORING_LIMINE_MEMMAP_ACPI_RECLAIMABLE);
+    struct boring_limine_memmap_entry ram =
+        usable(0x2000ULL, 3ULL * PMM_PAGE_SIZE);
+    struct boring_limine_memmap_entry *entries[] = {&acpi, &ram};
+    struct boring_limine_memmap_response map = {0ULL, 2ULL, entries};
+
+    assert(!pmm_init(&map));
+}
+
+static void test_bootloader_reclaimable_overlap_fails(void) {
+    struct boring_limine_memmap_entry reclaimable =
+        typed(0x1000ULL, 3ULL * PMM_PAGE_SIZE,
+              BORING_LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE);
+    struct boring_limine_memmap_entry reserved =
+        typed(0x2000ULL, 2ULL * PMM_PAGE_SIZE, BORING_LIMINE_MEMMAP_RESERVED);
+    struct boring_limine_memmap_entry ram =
+        usable(0x10000ULL, 2ULL * PMM_PAGE_SIZE);
+    struct boring_limine_memmap_entry *entries[] = {&reclaimable, &reserved, &ram};
+    struct boring_limine_memmap_response map = {0ULL, 3ULL, entries};
+
+    assert(!pmm_init(&map));
+}
+
+static void test_two_usable_regions_overlap_fails(void) {
+    struct boring_limine_memmap_entry first =
+        usable(0x1000ULL, 3ULL * PMM_PAGE_SIZE);
+    struct boring_limine_memmap_entry second =
+        usable(0x2000ULL, 3ULL * PMM_PAGE_SIZE);
+    struct boring_limine_memmap_entry *entries[] = {&first, &second};
+    struct boring_limine_memmap_response map = {0ULL, 2ULL, entries};
+
+    assert(!pmm_init(&map));
+}
+
+static void test_clean_qemu_style_map_is_unchanged(void) {
+    struct boring_limine_memmap_entry low_reserved =
+        typed(0x0ULL, 0x100000ULL, BORING_LIMINE_MEMMAP_RESERVED);
+    struct boring_limine_memmap_entry ram =
+        usable(0x100000ULL, 16ULL * PMM_PAGE_SIZE);
+    struct boring_limine_memmap_entry high_reserved =
+        typed(0x110000ULL, PMM_PAGE_SIZE, BORING_LIMINE_MEMMAP_RESERVED);
+    struct boring_limine_memmap_entry acpi =
+        typed(0x111000ULL, 3ULL * PMM_PAGE_SIZE,
+              BORING_LIMINE_MEMMAP_ACPI_RECLAIMABLE);
+    struct boring_limine_memmap_entry *entries[] = {
+        &low_reserved, &ram, &high_reserved, &acpi
+    };
+    struct boring_limine_memmap_response map = {0ULL, 4ULL, entries};
+    struct pmm_stats before;
+    struct pmm_stats after;
+    uint64_t frame = 0ULL;
+
+    assert(pmm_init(&map));
+    assert(pmm_get_stats(&before));
+    assert(before.usable_frames == 16ULL);
+    assert(before.free_frames == 16ULL);
+    assert(before.region_count == 1ULL);
+    assert(!before.memory_map_capped);
+    assert(!pmm_frame_is_usable(low_reserved.base));
+    assert(!pmm_frame_is_usable(high_reserved.base));
+    assert(!pmm_frame_is_usable(acpi.base));
+    assert(pmm_alloc_frame(&frame));
+    assert(frame == ram.base);
+    assert(pmm_get_stats(&after));
+    assert(after.free_frames + 1ULL == before.free_frames);
+    assert(pmm_free_frame(frame));
+    assert(pmm_get_stats(&after));
+    assert(after.free_frames == before.free_frames);
+}
+
 int main(void) {
     test_configured_capacity_and_last_bitmap_frame();
     test_exact_32gib_capacity_is_not_capped();
@@ -177,6 +334,14 @@ int main(void) {
     test_region_accumulation_and_range_selection();
     test_invalid_ranges_and_addresses_are_rejected();
     test_malformed_maps_still_fail_closed();
+    test_separate_usable_and_reserved_succeeds();
+    test_reserved_acpi_overlap_succeeds();
+    test_executable_reserved_overlap_succeeds();
+    test_usable_reserved_overlap_fails();
+    test_usable_acpi_overlap_fails();
+    test_bootloader_reclaimable_overlap_fails();
+    test_two_usable_regions_overlap_fails();
+    test_clean_qemu_style_map_is_unchanged();
     (void)puts("M58 high-memory PMM host tests passed");
     return 0;
 }
