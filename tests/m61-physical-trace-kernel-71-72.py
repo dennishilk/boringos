@@ -299,7 +299,6 @@ replace_once(
     '    "__wrap_boring_framebuffer_boot_init": ("70", "71", "78", "79"),\n',
     '    "__wrap_boring_framebuffer_boot_init": ("70", "71", "78", "79"),\n'
     '    "__wrap_boring_m61_framebuffer_count": ("80", "81"),\n'
-    '    "acquire_framebuffers": ("82", "83"),\n'
     '    "__wrap_boring_framebuffer_surface_valid": ("84",),\n'
     '    "__wrap_boring_m61_framebuffer_get": ("85", "86"),\n'
     '    "__wrap_boring_graphics_fill_rect": ("87", "88", "89", "8a", "8b", "8c", "8d"),\n'
@@ -314,7 +313,7 @@ replace_once(
 old_binary_tail = (
     'if out_count < 27:\n'
     '    raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")\n')
-new_binary_tail = r'''if out_count < 44:
+new_binary_tail = r'''if out_count < 42:
     raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")
 
 nm_output = subprocess.check_output(["nm", "build/kernel.elf"], text=True)
