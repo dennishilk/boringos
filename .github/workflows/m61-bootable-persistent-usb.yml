@@ -33,8 +33,8 @@ jobs:
           cat build/m61-early-fault/proof.txt
           grep -Fqx 'EARLY_FAULT_CONTAINMENT_PROVEN=YES' build/m61-early-fault/proof.txt
           grep -Fqx 'guest_reset_observed=no' build/m61-early-fault/proof.txt
-      - name: Relink M61 physical trace kernel
-        run: sh tests/m61-physical-trace-kernel.sh
+      - name: Relink M61 physical 71-to-72 trace kernel
+        run: python3 tests/m61-physical-trace-kernel-71-72.py
       - name: Build physical image and deterministic QEMU test twin
         run: env -u GITHUB_SHA sh tests/m61-build-usb-image.sh
       - name: Prove physical/QEMU twin runtime payload equivalence
