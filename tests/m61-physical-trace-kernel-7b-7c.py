@@ -134,8 +134,12 @@ if not elf.exists():
 # symbol addresses/sizes plus decoded instruction bytes; pretty-printed objdump
 # function blocks are never used as a correctness boundary.
 nm_output = subprocess.check_output(["nm", "-n", str(elf)], text=True)
-disasm = subprocess.check_output(["objdump", "-d", str(elf)], text=True)
-disasm_reloc = subprocess.check_output(["objdump", "-dr", str(elf)], text=True)
+disasm = subprocess.check_output(
+    ["objdump", "-d", "--insn-width=16", str(elf)], text=True
+)
+disasm_reloc = subprocess.check_output(
+    ["objdump", "-dr", "--insn-width=16", str(elf)], text=True
+)
 readelf_output = subprocess.check_output(["readelf", "-sW", str(elf)], text=True)
 
 for forbidden in (
@@ -222,30 +226,29 @@ def is_port80_out(raw: bytes) -> bool:
     return len(raw) == 2 and raw[0] == 0xE6 and raw[1] == 0x80
 
 
-def loads_al_code(raw: bytes, code: int) -> bool:
+def loaded_al_code(raw: bytes):
     # Accept the concrete encodings GCC emits for the uint8_t AL operand. For
     # imm32 forms only the low byte is semantically relevant, so both positive
     # and sign-extended pretty-print forms decode identically here.
-    if len(raw) == 2 and raw[0] == 0xB0 and raw[1] == code:
-        return True
-    if len(raw) == 5 and raw[0] == 0xB8 and raw[1] == code:
-        return True
-    if len(raw) == 3 and raw[0] == 0xC6 and raw[1] == 0xC0 and raw[2] == code:
-        return True
-    if len(raw) == 6 and raw[0] == 0xC7 and raw[1] == 0xC0 and raw[2] == code:
-        return True
+    if len(raw) == 2 and raw[0] == 0xB0:
+        return raw[1]
+    if len(raw) == 5 and raw[0] == 0xB8:
+        return raw[1]
+    if len(raw) == 3 and raw[0] == 0xC6 and raw[1] == 0xC0:
+        return raw[2]
+    if len(raw) == 6 and raw[0] == 0xC7 and raw[1] == 0xC0:
+        return raw[2]
     if (
         len(raw) == 7
         and raw[0] == 0x48
         and raw[1] == 0xC7
         and raw[2] == 0xC0
-        and raw[3] == code
     ):
-        return True
-    return False
+        return raw[3]
+    return None
 
 
-def post_out_addresses(start: int, end: int, code: int):
+def post_sites(start: int, end: int, code: int):
     rows = rows_in_range(start, end)
     found = []
     for out_index, (out_address, raw, _asm) in enumerate(rows):
@@ -253,29 +256,23 @@ def post_out_addresses(start: int, end: int, code: int):
             continue
         lower = max(0, out_index - 5)
         for load_index in range(out_index - 1, lower - 1, -1):
-            if loads_al_code(rows[load_index][1], code):
-                found.append(out_address)
+            loaded = loaded_al_code(rows[load_index][1])
+            if loaded is not None:
+                if loaded == code:
+                    found.append((rows[load_index][0], out_address))
+                break
+            if is_port80_out(rows[load_index][1]):
                 break
     return found
 
 
-def require_post_once(start: int, end: int, code: int, label: str) -> int:
-    addresses = post_out_addresses(start, end, code)
-    if len(addresses) != 1:
+def require_post_site(start: int, end: int, code: int, label: str):
+    sites = post_sites(start, end, code)
+    if len(sites) != 1:
         raise RuntimeError(
-            f"{label} expected one decoded POST 0x{code:02X}, found {addresses}"
+            f"{label} expected one decoded POST 0x{code:02X}, found {sites}"
         )
-    return addresses[0]
-
-
-def direct_calls(start: int, end: int):
-    calls = []
-    for address, raw, asm in rows_in_range(start, end):
-        if len(raw) == 5 and raw[0] == 0xE8:
-            displacement = int.from_bytes(raw[1:5], "little", signed=True)
-            target = (address + 5 + displacement) & 0xFFFFFFFFFFFFFFFF
-            calls.append((address, target, asm))
-    return calls
+    return sites[0]
 
 
 def symbol_address(name: str) -> int:
@@ -285,140 +282,495 @@ def symbol_address(name: str) -> int:
     return rows[0][0]
 
 
-def require_call_target(start: int, end: int, target: int, label: str) -> int:
-    addresses = [address for address, call_target, _asm in direct_calls(start, end)
-                 if call_target == target]
-    if len(addresses) != 1:
-        raise RuntimeError(f"{label} expected one direct E8 call, found {addresses}")
-    return addresses[0]
+def decode_direct_transfer(address: int, raw: bytes):
+    if len(raw) == 5 and raw[0] in (0xE8, 0xE9):
+        displacement = int.from_bytes(raw[1:5], "little", signed=True)
+        target = (address + 5 + displacement) & 0xFFFFFFFFFFFFFFFF
+        return ("call" if raw[0] == 0xE8 else "jump", target, None)
+    if len(raw) == 2 and raw[0] == 0xEB:
+        displacement = int.from_bytes(raw[1:2], "little", signed=True)
+        target = (address + 2 + displacement) & 0xFFFFFFFFFFFFFFFF
+        return ("jump", target, None)
+    if len(raw) == 2 and 0x70 <= raw[0] <= 0x7F:
+        displacement = int.from_bytes(raw[1:2], "little", signed=True)
+        target = (address + 2 + displacement) & 0xFFFFFFFFFFFFFFFF
+        return ("branch", target, raw[0] & 0x0F)
+    if len(raw) == 6 and raw[0] == 0x0F and 0x80 <= raw[1] <= 0x8F:
+        displacement = int.from_bytes(raw[2:6], "little", signed=True)
+        target = (address + 6 + displacement) & 0xFFFFFFFFFFFFFFFF
+        return ("branch", target, raw[1] & 0x0F)
+    return None
 
 
-pmm_start, pmm_end = function_range("m61_post_pmm_init")
-vmm_start, vmm_end = function_range("m61_post_vmm_init")
+def direct_transfers(start: int, end: int, kinds=("call", "jump")):
+    transfers = []
+    for address, raw, _asm in rows_in_range(start, end):
+        decoded = decode_direct_transfer(address, raw)
+        if decoded is not None and decoded[0] in kinds:
+            transfers.append((address, decoded[0], decoded[1]))
+    return transfers
+
+
+def require_transfer_target(start: int, end: int, target: int, label: str,
+                            kinds=("call", "jump")):
+    matches = [
+        transfer
+        for transfer in direct_transfers(start, end, kinds)
+        if transfer[2] == target
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"{label} expected one decoded direct transfer to 0x{target:x}, "
+            f"found {matches}"
+        )
+    return matches[0]
+
+
+def is_return(raw: bytes) -> bool:
+    return bool(raw) and raw[0] in (0xC2, 0xC3, 0xCA, 0xCB)
+
+
+def function_cfg(start: int, end: int, terminal_call_targets=frozenset()):
+    rows = rows_in_range(start, end)
+    addresses = {row[0] for row in rows}
+    graph = {}
+    for index, (address, raw, _asm) in enumerate(rows):
+        next_address = rows[index + 1][0] if index + 1 < len(rows) else None
+        decoded = decode_direct_transfer(address, raw)
+        successors = []
+        if decoded is not None:
+            kind, target, _condition = decoded
+            if kind == "call":
+                if target not in terminal_call_targets and next_address is not None:
+                    successors.append(next_address)
+            elif kind == "jump":
+                if target in addresses:
+                    successors.append(target)
+            else:
+                if target in addresses:
+                    successors.append(target)
+                if next_address is not None:
+                    successors.append(next_address)
+        elif is_return(raw) or raw == bytes((0x0F, 0x0B)) or raw == bytes((0xF4,)):
+            successors = []
+        elif len(raw) >= 2 and raw[0] == 0xFF:
+            extension = (raw[1] >> 3) & 0x07
+            if extension in (2, 3) and next_address is not None:
+                # An indirect CALL still returns to the following instruction.
+                successors.append(next_address)
+            # Indirect JMP targets cannot be derived from these bytes alone.
+        elif next_address is not None:
+            successors.append(next_address)
+        graph[address] = tuple(dict.fromkeys(successors))
+    return graph
+
+
+def cfg_reachable(graph, start: int, target: int, blocked=frozenset()) -> bool:
+    if start in blocked or target in blocked or start not in graph or target not in graph:
+        return False
+    pending = [start]
+    seen = set()
+    while pending:
+        address = pending.pop()
+        if address == target:
+            return True
+        if address in seen or address in blocked:
+            continue
+        seen.add(address)
+        pending.extend(
+            successor
+            for successor in graph.get(address, ())
+            if successor not in seen and successor not in blocked
+        )
+    return False
+
+
+def require_cfg_sequence(graph, nodes, label: str):
+    if len(nodes) != len(set(nodes)):
+        raise RuntimeError(f"{label} contains duplicate CFG nodes: {nodes}")
+    for node in nodes:
+        if node not in graph:
+            raise RuntimeError(f"{label} node 0x{node:x} is outside its linked function")
+    for before, after in zip(nodes, nodes[1:]):
+        if not cfg_reachable(graph, before, after):
+            raise RuntimeError(
+                f"{label} has no execution path 0x{before:x} -> 0x{after:x}"
+            )
+    start = nodes[0]
+    terminal = nodes[-1]
+    for required in nodes[1:-1]:
+        if cfg_reachable(graph, start, terminal, frozenset((required,))):
+            raise RuntimeError(
+                f"{label} can reach 0x{terminal:x} without required "
+                f"node 0x{required:x}"
+            )
+
+
+def return_reachable_after(graph, start: int, function_start: int,
+                           function_end: int, label: str) -> int:
+    returns = [
+        address
+        for address, raw, _asm in rows_in_range(function_start, function_end)
+        if is_return(raw) and cfg_reachable(graph, start, address)
+    ]
+    if len(returns) != 1:
+        raise RuntimeError(f"{label} expected one reachable return, found {returns}")
+    return returns[0]
+
+
+def call_addresses_to(start: int, end: int, target: int):
+    return [
+        address
+        for address, kind, call_target in direct_transfers(start, end, ("call",))
+        if kind == "call" and call_target == target
+    ]
+
+
+def dominating_calls_between(graph, function_start: int, function_end: int,
+                              start: int, end: int, target: int):
+    return [
+        address
+        for address in call_addresses_to(function_start, function_end, target)
+        if cfg_reachable(graph, start, address)
+        and cfg_reachable(graph, address, end)
+        and not cfg_reachable(graph, start, end, frozenset((address,)))
+    ]
+
+
+def cfg_order(graph, nodes, label: str):
+    remaining = set(nodes)
+    ordered = []
+    while remaining:
+        first = [
+            node
+            for node in remaining
+            if all(
+                node == other or cfg_reachable(graph, node, other)
+                for other in remaining
+            )
+        ]
+        if len(first) != 1:
+            raise RuntimeError(f"{label} is not a unique execution order: {nodes}")
+        ordered.append(first[0])
+        remaining.remove(first[0])
+    return ordered
+
+
+def require_false_return(name: str) -> int:
+    start, end = function_range(name)
+    rows = rows_in_range(start, end)
+    zeroes = [
+        address
+        for address, raw, _asm in rows
+        if raw in (bytes((0x31, 0xC0)), bytes((0x33, 0xC0)))
+        or (len(raw) == 5 and raw[0] == 0xB8 and raw[1:] == bytes(4))
+    ]
+    returns = [address for address, raw, _asm in rows if is_return(raw)]
+    if len(zeroes) != 1 or len(returns) != 1:
+        raise RuntimeError(
+            f"{name} does not have one decoded EAX-zero and return: "
+            f"zeroes={zeroes} returns={returns}"
+        )
+    cfg = function_cfg(start, end)
+    require_cfg_sequence(cfg, [rows[0][0], zeroes[0], returns[0]], name)
+    return start
+
+
+pmm_wrap_start, pmm_wrap_end = function_range("__wrap_pmm_init")
+pmm_post_start, pmm_post_end = function_range("m61_post_pmm_init")
+vmm_wrap_start, vmm_wrap_end = function_range("__wrap_vmm_init")
+vmm_post_start, vmm_post_end = function_range("m61_post_vmm_init")
 entry_start, entry_end = function_range("m61_post_real_boring_kernel_entry")
 real_pmm = symbol_address("pmm_init")
 real_vmm = symbol_address("vmm_init")
 
-# If GNU --wrap aliases survive in the symbol table, they must not disagree
-# with the concrete wrapper/real addresses we prove from decoded call targets.
-for alias, expected in (
-    ("__wrap_pmm_init", pmm_start),
-    ("__real_pmm_init", real_pmm),
-    ("__wrap_vmm_init", vmm_start),
-    ("__real_vmm_init", real_vmm),
+if len({pmm_wrap_start, pmm_post_start, real_pmm}) != 3:
+    raise RuntimeError("PMM wrapper, POST shim, and real function are not distinct")
+if len({vmm_wrap_start, vmm_post_start, real_vmm}) != 3:
+    raise RuntimeError("VMM wrapper, POST shim, and real function are not distinct")
+
+# Prove each GNU --wrap execution chain using actual rel32 targets. The outer
+# diagnostic wrapper may CALL the POST shim or tail-JMP to it; both preserve the
+# required semantics. The POST shim itself must CALL the real implementation so
+# execution can resume to emit the after-code.
+pmm_wrap_to_post = require_transfer_target(
+    pmm_wrap_start, pmm_wrap_end, pmm_post_start,
+    "__wrap_pmm_init -> m61_post_pmm_init"
+)
+vmm_wrap_to_post = require_transfer_target(
+    vmm_wrap_start, vmm_wrap_end, vmm_post_start,
+    "__wrap_vmm_init -> m61_post_vmm_init"
+)
+pmm_post_to_real = require_transfer_target(
+    pmm_post_start, pmm_post_end, real_pmm,
+    "m61_post_pmm_init -> real pmm_init", ("call",)
+)
+vmm_post_to_real = require_transfer_target(
+    vmm_post_start, vmm_post_end, real_vmm,
+    "m61_post_vmm_init -> real vmm_init", ("call",)
+)
+
+pmm_7a = require_post_site(pmm_post_start, pmm_post_end, 0x7A, "PMM POST shim")
+pmm_7b = require_post_site(pmm_post_start, pmm_post_end, 0x7B, "PMM POST shim")
+pmm_92 = require_post_site(pmm_post_start, pmm_post_end, 0x92, "PMM POST shim")
+vmm_7c = require_post_site(vmm_post_start, vmm_post_end, 0x7C, "VMM POST shim")
+vmm_7d = require_post_site(vmm_post_start, vmm_post_end, 0x7D, "VMM POST shim")
+
+pmm_post_cfg = function_cfg(pmm_post_start, pmm_post_end)
+pmm_post_return = return_reachable_after(
+    pmm_post_cfg, pmm_92[1], pmm_post_start, pmm_post_end, "PMM POST shim"
+)
+require_cfg_sequence(
+    pmm_post_cfg,
+    [pmm_7a[1], pmm_post_to_real[0], pmm_7b[1], pmm_92[1], pmm_post_return],
+    "PMM 7A -> real pmm_init -> 7B -> 92",
+)
+
+vmm_post_cfg = function_cfg(vmm_post_start, vmm_post_end)
+vmm_post_return = return_reachable_after(
+    vmm_post_cfg, vmm_7d[1], vmm_post_start, vmm_post_end, "VMM POST shim"
+)
+require_cfg_sequence(
+    vmm_post_cfg,
+    [vmm_7c[1], vmm_post_to_real[0], vmm_7d[1], vmm_post_return],
+    "VMM 7C -> real vmm_init -> 7D",
+)
+
+for label, start, end, transfer in (
+    ("PMM outer wrapper", pmm_wrap_start, pmm_wrap_end, pmm_wrap_to_post),
+    ("VMM outer wrapper", vmm_wrap_start, vmm_wrap_end, vmm_wrap_to_post),
 ):
-    for address, _kind in nm_symbols.get(alias, []):
-        if address != expected:
-            raise RuntimeError(
-                f"linked alias {alias}=0x{address:x} disagrees with expected 0x{expected:x}"
-            )
-
-pmm_7a = require_post_once(pmm_start, pmm_end, 0x7A, "PMM wrapper")
-pmm_7b = require_post_once(pmm_start, pmm_end, 0x7B, "PMM wrapper")
-pmm_92 = require_post_once(pmm_start, pmm_end, 0x92, "PMM wrapper")
-pmm_real_call = require_call_target(
-    pmm_start, pmm_end, real_pmm, "PMM wrapper -> real pmm_init"
-)
-if not (pmm_7a < pmm_real_call < pmm_7b < pmm_92):
-    raise RuntimeError(
-        "decoded PMM wrapper order is not 7A -> real pmm_init -> 7B -> 92"
-    )
-
-vmm_7c = require_post_once(vmm_start, vmm_end, 0x7C, "VMM wrapper")
-vmm_7d = require_post_once(vmm_start, vmm_end, 0x7D, "VMM wrapper")
-vmm_real_call = require_call_target(
-    vmm_start, vmm_end, real_vmm, "VMM wrapper -> real vmm_init"
-)
-if not (vmm_7c < vmm_real_call < vmm_7d):
-    raise RuntimeError("decoded VMM wrapper order is not 7C -> real vmm_init -> 7D")
+    if transfer[1] == "call":
+        wrapper_cfg = function_cfg(start, end)
+        return_reachable_after(wrapper_cfg, transfer[0], start, end, label)
+    elif transfer[1] != "jump":
+        raise RuntimeError(f"{label} has unsupported transfer {transfer}")
 
 entry_posts = {
-    code: require_post_once(
+    code: require_post_site(
         entry_start, entry_end, code, "m61_post_real_boring_kernel_entry"
     )
     for code in range(0x93, 0x9A)
 }
-pmm_wrapper_call = require_call_target(
-    entry_start, entry_end, pmm_start, "entry -> m61_post_pmm_init"
+pmm_entry_to_wrap = require_transfer_target(
+    entry_start, entry_end, pmm_wrap_start,
+    "entry -> __wrap_pmm_init", ("call",)
 )
-vmm_wrapper_call = require_call_target(
-    entry_start, entry_end, vmm_start, "entry -> m61_post_vmm_init"
+vmm_entry_to_wrap = require_transfer_target(
+    entry_start, entry_end, vmm_wrap_start,
+    "entry -> __wrap_vmm_init", ("call",)
+)
+
+halt_address = symbol_address("x86_64_halt_forever")
+pmm_self_test_fail_address = require_false_return("pmm_self_test_fail")
+entry_cfg = function_cfg(
+    entry_start,
+    entry_end,
+    frozenset((halt_address, pmm_self_test_fail_address)),
 )
 
 pmm_get_stats_address = symbol_address("pmm_get_stats")
-pmm_self_test_address = symbol_address("pmm_self_test")
-stats_calls = [
-    address
-    for address, target, _asm in direct_calls(entry_start, entry_end)
-    if target == pmm_get_stats_address
-]
-self_test_calls = [
-    address
-    for address, target, _asm in direct_calls(entry_start, entry_end)
-    if target == pmm_self_test_address
-]
-if not stats_calls:
-    raise RuntimeError("entry has no decoded direct call to pmm_get_stats")
-if len(self_test_calls) != 1:
-    raise RuntimeError(f"entry expected one decoded pmm_self_test call, found {self_test_calls}")
-
-first_stats_call = min(address for address in stats_calls if address > pmm_wrapper_call)
-self_test_call = self_test_calls[0]
-if not (
-    pmm_wrapper_call
-    < entry_posts[0x93]
-    < first_stats_call
-    < entry_posts[0x94]
-    < entry_posts[0x95]
-    < self_test_call
-    < entry_posts[0x96]
-    < entry_posts[0x97]
-    < vmm_wrapper_call
-):
+initial_stats_calls = dominating_calls_between(
+    entry_cfg, entry_start, entry_end,
+    entry_posts[0x93][1], entry_posts[0x94][1], pmm_get_stats_address,
+)
+if len(initial_stats_calls) != 1:
     raise RuntimeError(
-        "decoded 7B-to-7C success path is not PMM-call -> 93 -> stats -> 94 -> "
-        "95 -> self-test -> 96 -> 97 -> VMM-call"
+        f"expected one required initial pmm_get_stats call between 93 and 94, "
+        f"found {initial_stats_calls}"
+    )
+initial_stats_call = initial_stats_calls[0]
+
+serial_string_address = symbol_address("serial_write_string")
+serial_u64_address = symbol_address("serial_write_u64")
+report_string_calls = dominating_calls_between(
+    entry_cfg, entry_start, entry_end,
+    entry_posts[0x94][1], entry_posts[0x95][1], serial_string_address,
+)
+report_u64_calls = dominating_calls_between(
+    entry_cfg, entry_start, entry_end,
+    entry_posts[0x94][1], entry_posts[0x95][1], serial_u64_address,
+)
+if not report_string_calls or not report_u64_calls:
+    raise RuntimeError(
+        "linked PMM report between 94 and 95 lacks required string/u64 calls"
     )
 
-# Failure-only 98/99 remain in the same linked entry function. Their source
-# anchors are already proven above and their decoded port writes are unique;
-# neither path can reach VMM because both immediately take the existing halt
-# path. Do not impose linear-address ordering on compiler-placed failure blocks.
-for code in (0x98, 0x99):
-    if not (entry_start <= entry_posts[code] < entry_end):
-        raise RuntimeError(f"decoded failure POST 0x{code:02X} escaped entry function")
+# GCC inlines the static pmm_self_test into entry.c in this candidate. Prove
+# that its three source-level stats checkpoints and its allocator/free/usable
+# operations are mandatory CFG cutpoints on every path that reaches 96. This
+# avoids inventing a nonexistent linked pmm_self_test symbol or comparing code
+# addresses that the compiler has laid out across forward/backward branches.
+self_test_stats_calls = dominating_calls_between(
+    entry_cfg, entry_start, entry_end,
+    entry_posts[0x95][1], entry_posts[0x96][1], pmm_get_stats_address,
+)
+if len(self_test_stats_calls) != 3:
+    raise RuntimeError(
+        "inlined pmm_self_test expected three required pmm_get_stats CFG "
+        f"cutpoints, found {self_test_stats_calls}"
+    )
+self_test_stats_order = cfg_order(
+    entry_cfg, self_test_stats_calls, "inlined pmm_self_test stats calls"
+)
+for operation in ("pmm_alloc_frame", "pmm_free_frame", "pmm_frame_is_usable"):
+    operation_calls = dominating_calls_between(
+        entry_cfg, entry_start, entry_end,
+        entry_posts[0x95][1], entry_posts[0x96][1], symbol_address(operation),
+    )
+    if not operation_calls:
+        raise RuntimeError(
+            f"inlined pmm_self_test has no required linked {operation} call"
+        )
+
+final_serial_calls = dominating_calls_between(
+    entry_cfg, entry_start, entry_end,
+    entry_posts[0x96][1], entry_posts[0x97][1], serial_string_address,
+)
+if len(final_serial_calls) != 1:
+    raise RuntimeError(
+        f"expected one required final PMM PASS serial call between 96 and 97, "
+        f"found {final_serial_calls}"
+    )
+final_serial_call = final_serial_calls[0]
+
+success_nodes = [
+    pmm_entry_to_wrap[0],
+    entry_posts[0x93][1],
+    initial_stats_call,
+    entry_posts[0x94][1],
+    entry_posts[0x95][1],
+    *self_test_stats_order,
+    entry_posts[0x96][1],
+    final_serial_call,
+    entry_posts[0x97][1],
+    vmm_entry_to_wrap[0],
+]
+require_cfg_sequence(
+    entry_cfg,
+    success_nodes,
+    "PMM return -> 93 -> stats -> 94 -> 95 -> self-test -> 96 -> "
+    "final serial -> 97 -> VMM call",
+)
+
+
+def require_false_result_branch(call_address: int, success_code: int,
+                                failure_code: int, label: str):
+    rows = rows_in_range(entry_start, entry_end)
+    index_by_address = {row[0]: index for index, row in enumerate(rows)}
+    call_index = index_by_address[call_address]
+    branches = []
+    for row in rows[call_index + 1:call_index + 5]:
+        decoded = decode_direct_transfer(row[0], row[1])
+        if decoded is not None and decoded[0] == "branch":
+            branches.append((row[0], decoded[1], decoded[2]))
+    if len(branches) != 1:
+        raise RuntimeError(f"{label} expected one nearby result branch, found {branches}")
+    branch_address, branch_target, condition = branches[0]
+    if condition != 0x5 or branch_target != entry_posts[success_code][0]:
+        raise RuntimeError(
+            f"{label} is not decoded JNE(nonzero) -> POST {success_code:02X}: "
+            f"{branches[0]}"
+        )
+    branch_index = index_by_address[branch_address]
+    false_fallthrough = rows[branch_index + 1][0]
+    failure_out = entry_posts[failure_code][1]
+    success_out = entry_posts[success_code][1]
+    if not cfg_reachable(entry_cfg, false_fallthrough, failure_out):
+        raise RuntimeError(f"{label} false path does not reach POST {failure_code:02X}")
+    if cfg_reachable(entry_cfg, false_fallthrough, success_out):
+        raise RuntimeError(f"{label} false path can escape to POST {success_code:02X}")
+    if cfg_reachable(entry_cfg, branch_target, failure_out):
+        raise RuntimeError(f"{label} true path can reach POST {failure_code:02X}")
+    halt_calls = [
+        address
+        for address in call_addresses_to(entry_start, entry_end, halt_address)
+        if cfg_reachable(entry_cfg, failure_out, address)
+        and not cfg_reachable(
+            entry_cfg, false_fallthrough, address,
+            frozenset((failure_out,)),
+        )
+    ]
+    if len(halt_calls) != 1:
+        raise RuntimeError(
+            f"{label} POST {failure_code:02X} path expected one required halt, "
+            f"found {halt_calls}"
+        )
+    if cfg_reachable(entry_cfg, false_fallthrough, vmm_entry_to_wrap[0]):
+        raise RuntimeError(f"{label} false path can reach the VMM call")
+    return branch_address, halt_calls[0]
+
+
+pmm_failure_branch = require_false_result_branch(
+    pmm_entry_to_wrap[0], 0x93, 0x98, "PMM init result"
+)
+stats_failure_branch = require_false_result_branch(
+    initial_stats_call, 0x94, 0x99, "initial PMM stats result"
+)
 
 # Fresh codes must be unique globally as actual port-0x80 writes, not merely as
 # immediate constants elsewhere in data or code.
 for code in range(0x92, 0x9A):
-    global_hits = []
-    for index, (address, raw, _asm) in enumerate(instructions):
-        if not is_port80_out(raw):
-            continue
-        lower = max(0, index - 5)
-        for load_index in range(index - 1, lower - 1, -1):
-            if loads_al_code(instructions[load_index][1], code):
-                global_hits.append(address)
-                break
+    global_hits = [
+        out_address
+        for _load_address, out_address in post_sites(
+            instructions[0][0], instructions[-1][0] + 16, code
+        )
+    ]
     if len(global_hits) != 1:
         raise RuntimeError(
             f"linked POST 0x{code:02X} expected one decoded global port write, found {global_hits}"
         )
 
 print(
-    f"M61 linked symbol ranges: pmm-wrapper=0x{pmm_start:x}-0x{pmm_end:x} "
-    f"vmm-wrapper=0x{vmm_start:x}-0x{vmm_end:x} "
+    f"M61 linked PMM ranges: outer-wrapper=0x{pmm_wrap_start:x}-0x{pmm_wrap_end:x} "
+    f"post-shim=0x{pmm_post_start:x}-0x{pmm_post_end:x} "
+    f"real=0x{real_pmm:x}"
+)
+print(
+    f"M61 linked VMM ranges: outer-wrapper=0x{vmm_wrap_start:x}-0x{vmm_wrap_end:x} "
+    f"post-shim=0x{vmm_post_start:x}-0x{vmm_post_end:x} "
+    f"real=0x{real_vmm:x}"
+)
+print(
+    f"M61 linked entry range: "
     f"entry=0x{entry_start:x}-0x{entry_end:x}"
 )
 print(
-    f"M61 decoded PMM boundary: 7A@0x{pmm_7a:x} real-call@0x{pmm_real_call:x} "
-    f"7B@0x{pmm_7b:x} 92@0x{pmm_92:x}"
+    f"M61 decoded PMM chain: entry-{pmm_entry_to_wrap[1]}@0x{pmm_entry_to_wrap[0]:x} "
+    f"-> outer-{pmm_wrap_to_post[1]}@0x{pmm_wrap_to_post[0]:x} "
+    f"-> post-call@0x{pmm_post_to_real[0]:x} -> real=0x{real_pmm:x}"
 )
 print(
-    f"M61 decoded VMM boundary: 7C@0x{vmm_7c:x} real-call@0x{vmm_real_call:x} "
-    f"7D@0x{vmm_7d:x}"
+    f"M61 decoded PMM boundary: 7A@0x{pmm_7a[1]:x} "
+    f"real-call@0x{pmm_post_to_real[0]:x} "
+    f"7B@0x{pmm_7b[1]:x} 92@0x{pmm_92[1]:x}"
 )
-print("M61 verifier root cause fixed: double-escaped regex extraction removed")
+print(
+    f"M61 decoded VMM chain: entry-{vmm_entry_to_wrap[1]}@0x{vmm_entry_to_wrap[0]:x} "
+    f"-> outer-{vmm_wrap_to_post[1]}@0x{vmm_wrap_to_post[0]:x} "
+    f"-> post-call@0x{vmm_post_to_real[0]:x} -> real=0x{real_vmm:x}"
+)
+print(
+    f"M61 decoded VMM boundary: 7C@0x{vmm_7c[1]:x} "
+    f"real-call@0x{vmm_post_to_real[0]:x} 7D@0x{vmm_7d[1]:x}"
+)
+print(
+    "M61 verifier root cause fixed: distinct GNU --wrap outer wrappers, "
+    "POST shims, and real functions modeled by decoded transfer targets"
+)
+print("M61 linked PMM call chain proven: YES")
+print("M61 linked PMM 7A -> real -> 7B -> 92 execution order proven: YES")
+print("M61 linked VMM call chain proven: YES")
+print("M61 linked VMM 7C -> real -> 7D execution order proven: YES")
+print("M61 linked 92 -> 93 -> 94 -> 95 -> 96 -> 97 CFG order proven: YES")
+print(
+    f"M61 linked failure branches: 98-branch@0x{pmm_failure_branch[0]:x} "
+    f"halt@0x{pmm_failure_branch[1]:x}; "
+    f"99-branch@0x{stats_failure_branch[0]:x} "
+    f"halt@0x{stats_failure_branch[1]:x}"
+)
+print("M61 linked failure POST 98/99 boolean branches and halts proven: YES")
 print("M61 linked existing 7B meaning preserved: YES")
 print("M61 linked existing 7C meaning preserved: YES")
 print(
