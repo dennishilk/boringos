@@ -90,7 +90,7 @@ jobs:
             tail -n 500 build/m61-bootable-persistent-usb/first-boot/qemu.log || true
           fi
           exit "$rc"
-      - name: Verify distinct serial and framebuffer trace proofs
+      - name: Verify serial, diagnostic-write bypass, and runtime framebuffer proofs
         run: |
           log=build/m61-bootable-persistent-usb/first-boot/serial.log
           grep -Fq 'M61 TRACE [08+] EXCEPTIONS' "$log"
@@ -102,15 +102,16 @@ jobs:
           grep -Fq 'M61 PHYSICAL: automatic terminal spawn requested' "$log"
           grep -Fq 'M61 PHYSICAL: automatic terminal spawn pid=' "$log"
           proof=build/m61-bootable-persistent-usb/first-boot/physical-trace-proof.txt
-          grep -Fqx 'FRAMEBUFFER_TRACE_PROVEN=YES' "$proof"
-          grep -Fqx 'capture=QMP screendump before DISPLAY_PRESENT' "$proof"
-          grep -Fqx 'retained_after_initial_display_present=YES' "$proof"
+          grep -Fqx 'DIAGNOSTIC_FRAMEBUFFER_WRITES_BYPASSED=YES' "$proof"
+          grep -Fqx 'EARLY_DIAGNOSTIC_FRAMEBUFFER_WRITE_COUNT=0' "$proof"
           desktop=build/m61-bootable-persistent-usb/first-boot/physical-desktop-witness.txt
           grep -Fqx 'AUTO_TERMINAL_PROVEN=YES' "$desktop"
           grep -Fqx 'WALLPAPER_PROVEN=YES' "$desktop"
+          grep -Fqx 'NORMAL_FRAMEBUFFER_RUNTIME_PROVEN=YES' "$desktop"
           grep -Fqx 'EXTRA_EARLY_PRESENT_ADDED=NO' "$desktop"
           printf '%s\n' 'SERIAL_TRACE_PROVEN=YES'
-          printf '%s\n' 'FRAMEBUFFER_TRACE_PROVEN=YES'
+          printf '%s\n' 'DIAGNOSTIC_FRAMEBUFFER_WRITES_BYPASSED=YES'
+          printf '%s\n' 'NORMAL_FRAMEBUFFER_RUNTIME_PROVEN=YES'
           printf '%s\n' 'PHYSICAL_DESKTOP_WITNESS_PROVEN=YES'
       - name: Verify restored physical raw and compressed artifact hashes
         run: |

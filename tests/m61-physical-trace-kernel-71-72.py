@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import subprocess
 
 root = Path(__file__).resolve().parent.parent
@@ -26,6 +27,8 @@ def trace_replace_once(old: str, new: str, label: str) -> None:
     trace_src = trace_src.replace(old, new, 1)
 
 
+# Keep the ordinary getter completely unwrapped. The direct source boundary is
+# candidate-only and survives into the exact physical kernel.
 trace_replace_once(
     "#include <boring/input.h>\n",
     "#include <boring/input.h>\n#include <boring/io.h>\n",
@@ -37,6 +40,121 @@ trace_replace_once(
     "    x86_64_out8((uint16_t)0x80U, (uint8_t)0x83U);\n",
     "direct 82/83 getter boundary")
 
+# The physical 87 result proved that the diagnostic framebuffer writes are
+# themselves perturbing boot. Remove every acquire_framebuffers write from the
+# generated physical candidate instead of replacing it with a different write.
+trace_replace_once(
+    '''static bool tiny_surface_probe(const struct boring_framebuffer *surface) {
+    bool wrote;
+
+    framebuffer_write_active = true;
+    wrote = boring_graphics_fill_rect(
+        surface, 0ULL, 0ULL, 2ULL, 2ULL,
+        boring_color_pack(surface, 255U, 255U, 255U));
+    framebuffer_write_active = false;
+    return wrote;
+}
+
+''',
+    "",
+    "remove tiny framebuffer write helper")
+trace_replace_once(
+    '''static uint64_t read_tsc(void) {
+    uint32_t low;
+    uint32_t high;
+
+    __asm__ volatile("rdtsc" : "=a"(low), "=d"(high));
+    return ((uint64_t)high << 32U) | (uint64_t)low;
+}
+
+static void hold_trace_for_qmp(void) {
+    const uint64_t start = read_tsc();
+
+    while ((read_tsc() - start) < TRACE_TSC_HOLD_CYCLES) {
+        x86_64_pause();
+    }
+}
+
+''',
+    "",
+    "remove obsolete diagnostic trace hold")
+trace_replace_once(
+    "    bool selected_witness = false;\n",
+    "",
+    "remove selected witness state")
+trace_replace_once(
+    '''        serial_surface(index, &candidate, selected);
+        if (!tiny_surface_probe(&candidate)) {
+            serial_write_string("M61 FRAMEBUFFER TINY PROBE FAILED index=");
+            serial_write_u64(index);
+            serial_write_string("\\n");
+            continue;
+        }
+        witness = witness_surface(&candidate);
+        serial_write_string("M61 FRAMEBUFFER WITNESS index=");
+        serial_write_u64(index);
+        serial_write_string(" selected=");
+        serial_write_string(selected ? "yes" : "no");
+        serial_write_string(" x=4 y=4 width=64 height=16 result=");
+        serial_write_string(witness ? "pass\\n" : "fail\\n");
+        if (selected) {
+            selected_witness = witness;
+        }
+''',
+    '''        serial_surface(index, &candidate, selected);
+''',
+    "remove candidate tiny/witness writes")
+trace_replace_once(
+    "        bool witness;\n",
+    "",
+    "remove candidate witness local")
+trace_replace_once(
+    '''    if (!selected_witness) {
+        serial_write_string("M61 FRAMEBUFFER TRACE SELECTED WITNESS FAILED\\n");
+        return;
+    }
+
+    framebuffer_writes_proven = true;
+    framebuffer_write_active = true;
+    (void)boring_graphics_fill_rect(
+        fb, 76ULL, 2ULL,
+        fb->width > 80ULL ?
+            ((fb->width - 80ULL < 320ULL) ? fb->width - 80ULL : 320ULL) :
+            0ULL,
+        34ULL, trace_color(12U, 12U, 16U));
+    trace_text(TRACE_TEXT_X, 8ULL, "BORINGOS PHYSICAL BOOT TRACE",
+               trace_color(96U, 224U, 255U), TRACE_SCALE);
+    trace_text(TRACE_TEXT_X, 22ULL, "FB", trace_color(180U, 180U, 190U), 1U);
+    (void)trace_decimal(TRACE_TEXT_X + 12ULL, 22ULL, fb->width,
+                        trace_color(180U, 180U, 190U), 1U);
+    framebuffer_write_active = false;
+
+    serial_write_string("M61 FRAMEBUFFER TRACE READY index=");
+    serial_write_u64(selected_index);
+    serial_write_string(" x=4 y=4 width=64 height=16\\n");
+    hold_trace_for_qmp();
+''',
+    '''    serial_write_string("M61 FRAMEBUFFER DIAGNOSTIC WRITES BYPASSED count=");
+    serial_write_u64(count);
+    serial_write_string(" selected_index=");
+    serial_write_u64(selected_index);
+    serial_write_string("\\n");
+''',
+    "remove final diagnostic framebuffer writes")
+
+acquire_start = trace_src.find("static void acquire_framebuffers(void) {")
+acquire_end = trace_src.find("\nstatic bool ends_with", acquire_start)
+if (acquire_start < 0) or (acquire_end < 0):
+    raise RuntimeError("cannot isolate generated acquire_framebuffers")
+acquire_body = trace_src[acquire_start:acquire_end]
+for forbidden in (
+        "tiny_surface_probe", "witness_surface", "boring_graphics_fill_rect",
+        "boring_graphics_put_pixel", "trace_text", "hold_trace_for_qmp",
+        "framebuffer_writes_proven = true"):
+    if forbidden in acquire_body:
+        raise RuntimeError(
+            f"generated acquire_framebuffers still contains diagnostic framebuffer write path: {forbidden}")
+
 replace_once(
     "    M61_POST_HEAP_INIT_AFTER = 0x7f\n};",
     "    M61_POST_HEAP_INIT_AFTER = 0x7f,\n\n"
@@ -47,17 +165,9 @@ replace_once(
     "    M61_POST_SELECTED_FRAMEBUFFER_VALID = 0x84,\n"
     "    M61_POST_CANDIDATE_ENUM_ENTERED = 0x85,\n"
     "    M61_POST_FIRST_CANDIDATE_METADATA = 0x86,\n"
-    "    M61_POST_FIRST_FRAMEBUFFER_WRITE_BEFORE = 0x87,\n"
-    "    M61_POST_FIRST_FRAMEBUFFER_WRITE_AFTER = 0x88,\n"
-    "    M61_POST_WITNESS_WRITE_BEFORE = 0x89,\n"
-    "    M61_POST_WITNESS_WRITE_AFTER = 0x8a,\n"
-    "    M61_POST_CANDIDATE_LOOP_COMPLETED = 0x8b,\n"
-    "    M61_POST_SELECTED_WITNESS_CONFIRMED = 0x8c,\n"
-    "    M61_POST_TRACE_WRITES_BEFORE = 0x8d,\n"
-    "    M61_POST_TRACE_WRITES_AFTER = 0x8e,\n"
-    "    M61_POST_QMP_HOLD_BEFORE = 0x8f\n"
+    "    M61_POST_DIAGNOSTIC_WRITES_BYPASSED = 0x87\n"
     "};",
-    "71-to-72 enum")
+    "71-to-72 no-write enum")
 
 old_seq = (
     "const uint8_t boring_m61_post_62_to_63_sequence[] = {\n"
@@ -66,10 +176,9 @@ old_seq = (
     "};")
 new_seq = old_seq + (
     "\nconst uint8_t boring_m61_post_71_to_72_sequence[] = {\n"
-    "    0x80U, 0x81U, 0x82U, 0x83U, 0x84U, 0x85U, 0x86U, 0x87U,\n"
-    "    0x88U, 0x89U, 0x8aU, 0x8bU, 0x8cU, 0x8dU, 0x8eU, 0x8fU\n"
+    "    0x80U, 0x81U, 0x82U, 0x83U, 0x84U, 0x85U, 0x86U, 0x87U\n"
     "};")
-replace_once(old_seq, new_seq, "71-to-72 sequence marker")
+replace_once(old_seq, new_seq, "71-to-72 no-write sequence marker")
 
 replace_once(
     "static uint8_t framebuffer_boot_init_calls;\nstatic bool init_posted;",
@@ -84,65 +193,27 @@ old_cpu = (
     "    M61_POST(M61_POST_CPU_INVENTORY_BEFORE);")
 new_cpu = (
     "void m61_post_boring_cpu_inventory_init(void) {\n"
-    "    /* Reaching this proves the immediate M61 framebuffer probe/witness returned. */\n"
+    "    /* Reaching this proves the metadata-only M61 framebuffer acquire returned. */\n"
     "    acquire_71_72_active = false;\n"
     "    M61_POST(M61_POST_CPU_INVENTORY_BEFORE);")
 replace_once(old_cpu, new_cpu, "CPU boundary resets acquire tracing")
 
 extra = r'''
-#include <boring/graphics.h>
-#include <boring/serial.h>
-
 uint64_t __real_boring_m61_framebuffer_count(void);
 bool __real_boring_framebuffer_surface_valid(
     const struct boring_framebuffer *surface);
 bool __real_boring_m61_framebuffer_get(
     uint64_t index, struct boring_framebuffer *surface);
-bool __real_boring_graphics_fill_rect(
-    const struct boring_framebuffer *surface,
-    uint64_t x, uint64_t y, uint64_t width, uint64_t height,
-    uint32_t color);
-void __real_serial_write_string(const char *value);
 
 uint64_t __wrap_boring_m61_framebuffer_count(void);
 bool __wrap_boring_framebuffer_surface_valid(
     const struct boring_framebuffer *surface);
 bool __wrap_boring_m61_framebuffer_get(
     uint64_t index, struct boring_framebuffer *surface);
-bool __wrap_boring_graphics_fill_rect(
-    const struct boring_framebuffer *surface,
-    uint64_t x, uint64_t y, uint64_t width, uint64_t height,
-    uint32_t color);
-void __wrap_serial_write_string(const char *value);
 
 static uint8_t acquire_71_72_phase;
 static bool candidate_enum_posted;
 static bool first_candidate_metadata_posted;
-static bool first_framebuffer_write_posted;
-static bool first_witness_write_posted;
-static uint8_t first_witness_rectangles;
-static bool candidate_loop_posted;
-static bool selected_witness_posted;
-static bool trace_writes_started;
-static bool trace_writes_completed;
-static bool qmp_hold_posted;
-
-static bool m61_post_string_equal(const char *first, const char *second) {
-    size_t index;
-
-    if ((first == NULL) || (second == NULL)) {
-        return false;
-    }
-    for (index = 0U; index < 96U; ++index) {
-        if (first[index] != second[index]) {
-            return false;
-        }
-        if (first[index] == '\0') {
-            return true;
-        }
-    }
-    return false;
-}
 
 uint64_t __wrap_boring_m61_framebuffer_count(void) {
     uint64_t result;
@@ -185,103 +256,22 @@ bool __wrap_boring_m61_framebuffer_get(
         first_candidate_metadata_posted = true;
         acquire_71_72_phase = 5U;
         M61_POST(M61_POST_FIRST_CANDIDATE_METADATA);
+        M61_POST(M61_POST_DIAGNOSTIC_WRITES_BYPASSED);
     }
     return result;
-}
-
-bool __wrap_boring_graphics_fill_rect(
-    const struct boring_framebuffer *surface,
-    uint64_t x, uint64_t y, uint64_t width, uint64_t height,
-    uint32_t color) {
-    const bool tiny = (x == 0ULL) && (y == 0ULL) &&
-                      (width == 2ULL) && (height == 2ULL);
-    const bool witness = (y == 4ULL) && (width == 8ULL) &&
-                         (height == 16ULL) && (x >= 4ULL) && (x <= 60ULL);
-    const bool trace_panel = (x == 76ULL) && (y == 2ULL) &&
-                             (height == 34ULL);
-    bool result;
-
-    if (acquire_71_72_active && first_candidate_metadata_posted && tiny &&
-        !first_framebuffer_write_posted) {
-        first_framebuffer_write_posted = true;
-        M61_POST(M61_POST_FIRST_FRAMEBUFFER_WRITE_BEFORE);
-        result = __real_boring_graphics_fill_rect(
-            surface, x, y, width, height, color);
-        M61_POST(M61_POST_FIRST_FRAMEBUFFER_WRITE_AFTER);
-        return result;
-    }
-
-    if (acquire_71_72_active && first_framebuffer_write_posted && witness &&
-        (first_witness_rectangles < 8U)) {
-        if (!first_witness_write_posted) {
-            first_witness_write_posted = true;
-            M61_POST(M61_POST_WITNESS_WRITE_BEFORE);
-        }
-        result = __real_boring_graphics_fill_rect(
-            surface, x, y, width, height, color);
-        ++first_witness_rectangles;
-        if (first_witness_rectangles == 8U) {
-            M61_POST(M61_POST_WITNESS_WRITE_AFTER);
-        }
-        return result;
-    }
-
-    if (acquire_71_72_active && trace_panel) {
-        if (!candidate_loop_posted) {
-            candidate_loop_posted = true;
-            M61_POST(M61_POST_CANDIDATE_LOOP_COMPLETED);
-        }
-        if (!selected_witness_posted) {
-            selected_witness_posted = true;
-            M61_POST(M61_POST_SELECTED_WITNESS_CONFIRMED);
-        }
-        if (!trace_writes_started) {
-            trace_writes_started = true;
-            M61_POST(M61_POST_TRACE_WRITES_BEFORE);
-        }
-    }
-
-    return __real_boring_graphics_fill_rect(
-        surface, x, y, width, height, color);
-}
-
-void __wrap_serial_write_string(const char *value) {
-    if (acquire_71_72_active &&
-        m61_post_string_equal(
-            value, "M61 FRAMEBUFFER TRACE SELECTED WITNESS FAILED\n") &&
-        !candidate_loop_posted) {
-        candidate_loop_posted = true;
-        M61_POST(M61_POST_CANDIDATE_LOOP_COMPLETED);
-    }
-
-    if (acquire_71_72_active && trace_writes_started &&
-        !trace_writes_completed &&
-        m61_post_string_equal(value, "M61 FRAMEBUFFER TRACE READY index=")) {
-        trace_writes_completed = true;
-        M61_POST(M61_POST_TRACE_WRITES_AFTER);
-    }
-
-    __real_serial_write_string(value);
-
-    if (acquire_71_72_active && trace_writes_completed && !qmp_hold_posted &&
-        m61_post_string_equal(
-            value, " x=4 y=4 width=64 height=16\n")) {
-        qmp_hold_posted = true;
-        M61_POST(M61_POST_QMP_HOLD_BEFORE);
-    }
 }
 '''
 replace_once(
     "\nEOF_POST_C\n\n# QEMU pc/q35 already owns port 0x80 as its built-in ioport80 compatibility",
     "\n" + extra + "EOF_POST_C\n\n# QEMU pc/q35 already owns port 0x80 as its built-in ioport80 compatibility",
-    "append 71-to-72 wrappers")
+    "append metadata-only 71-to-72 wrappers")
 
 replace_once(
     "--wrap=boring_framebuffer_boot_init --wrap=pmm_init",
     "--wrap=boring_framebuffer_boot_init --wrap=boring_m61_framebuffer_count "
     "--wrap=boring_framebuffer_surface_valid --wrap=boring_m61_framebuffer_get "
-    "--wrap=boring_graphics_fill_rect --wrap=serial_write_string --wrap=pmm_init",
-    "linker wrappers")
+    "--wrap=pmm_init",
+    "metadata-only linker wrappers")
 
 replace_once(
     "kernel/core/m61_physical_breadcrumbs.c kernel/core/m61_post80_generated.c",
@@ -300,10 +290,8 @@ replace_once(
     '    "__wrap_boring_framebuffer_boot_init": ("70", "71", "78", "79"),\n'
     '    "__wrap_boring_m61_framebuffer_count": ("80", "81"),\n'
     '    "__wrap_boring_framebuffer_surface_valid": ("84",),\n'
-    '    "__wrap_boring_m61_framebuffer_get": ("85", "86"),\n'
-    '    "__wrap_boring_graphics_fill_rect": ("87", "88", "89", "8a", "8b", "8c", "8d"),\n'
-    '    "__wrap_serial_write_string": ("8b", "8e", "8f"),\n',
-    "binary verifier boundaries")
+    '    "__wrap_boring_m61_framebuffer_get": ("85", "86", "87"),\n',
+    "binary verifier metadata boundaries")
 
 replace_once(
     '        if re.search(rf"\\$0x0*{code}\\b", body, re.IGNORECASE) is None:\n',
@@ -313,7 +301,7 @@ replace_once(
 old_binary_tail = (
     'if out_count < 27:\n'
     '    raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")\n')
-new_binary_tail = r'''if out_count < 42:
+new_binary_tail = r'''if out_count < 33:
     raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")
 
 nm_output = subprocess.check_output(["nm", "-n", "build/kernel.elf"], text=True)
@@ -328,9 +316,13 @@ for line in nm_output.splitlines():
         continue
     symbols.setdefault(fields[-1], []).append((address, fields[1]))
 
-for forbidden in ("__wrap_boring_framebuffer_get", "__real_boring_framebuffer_get"):
+for forbidden in (
+        "__wrap_boring_framebuffer_get", "__real_boring_framebuffer_get",
+        "__wrap_boring_graphics_fill_rect", "__real_boring_graphics_fill_rect",
+        "__wrap_serial_write_string", "__real_serial_write_string"):
     if forbidden in symbols:
-        raise RuntimeError(f"M61 linked kernel still contains forbidden getter wrapper symbol {forbidden}")
+        raise RuntimeError(
+            f"M61 linked kernel contains forbidden diagnostic wrapper symbol {forbidden}")
 
 getter_rows = symbols.get("boring_framebuffer_get", [])
 if len(getter_rows) != 1:
@@ -343,19 +335,12 @@ if getter_kind.lower() != "t":
 
 disasm = subprocess.check_output(["objdump", "-d", "build/kernel.elf"], text=True)
 disasm_reloc = subprocess.check_output(["objdump", "-dr", "build/kernel.elf"], text=True)
-for forbidden in ("__wrap_boring_framebuffer_get", "__real_boring_framebuffer_get"):
+for forbidden in (
+        "__wrap_boring_framebuffer_get", "__real_boring_framebuffer_get",
+        "__wrap_boring_graphics_fill_rect", "__wrap_serial_write_string"):
     if forbidden in disasm_reloc:
         raise RuntimeError(
-            f"M61 objdump -dr still exposes forbidden getter wrapper reference {forbidden}")
-
-getter_window = subprocess.check_output(
-    ["objdump", "-d", f"--start-address=0x{getter_address:x}",
-     f"--stop-address=0x{getter_address + 32:x}", "build/kernel.elf"],
-    text=True)
-if re.search(
-        rf"^\s*{getter_address:x}:\s+[0-9a-f]{{2}}",
-        getter_window, re.IGNORECASE | re.MULTILINE) is None:
-    raise RuntimeError("M61 boring_framebuffer_get symbol has no linked instruction code")
+            f"M61 objdump -dr exposes forbidden diagnostic wrapper reference {forbidden}")
 
 header_re = re.compile(r"^\s*([0-9a-f]+)\s+<([^>]+)>:$", re.IGNORECASE)
 instruction_re = re.compile(
@@ -444,29 +429,47 @@ if not (instructions[before_load][0] < instructions[before_out][0] < call_addres
         instructions[after_load][0] < instructions[after_out][0]):
     raise RuntimeError("M61 direct 82/getter/83 machine-code order is not preserved")
 
-acquire_symbols = sorted(
-    name for name in symbols
-    if (name == "acquire_framebuffers") or name.startswith("acquire_framebuffers."))
-acquire_symbol_state = ",".join(acquire_symbols) if acquire_symbols else "optimized-into-caller"
-print(f"M61 linked acquire_framebuffers symbol state: {acquire_symbol_state}")
+runtime_posts = {0x90: 0, 0x91: 0}
+for index, (_address, raw, _asm, _owner) in enumerate(instructions):
+    if not is_port80_out(raw):
+        continue
+    for load_index in range(max(0, index - 4), index):
+        for code in runtime_posts:
+            if loads_al_code(instructions[load_index][1], code):
+                runtime_posts[code] += 1
+if runtime_posts[0x90] < 1 or runtime_posts[0x91] < 1:
+    raise RuntimeError(
+        f"M61 linked kernel missing normal framebuffer POST 90/91 boundary: {runtime_posts}")
+if "m61_first_normal_framebuffer_store_pending" not in symbols:
+    raise RuntimeError("M61 linked kernel missing candidate-gated first normal framebuffer store state")
+
 print(f"M61 linked real getter E8 caller: {call_owner or 'unknown'}")
 print(f"M61 linked real getter address: 0x{getter_address:x}")
 print(f"M61 linked real getter call address: 0x{call_address:x}")
+print("M61 linked early diagnostic framebuffer writes: 0")
+print("M61 linked normal first framebuffer store boundary: 90 before / 91 after")
 '''
-replace_once(old_binary_tail, new_binary_tail, "linked real getter verifier")
+replace_once(old_binary_tail, new_binary_tail, "linked no-write/getter/runtime verifier")
 
 replace_once(
     'print("M61 POST 62-to-63 bisector: 70 71 72 73 74 75 76 77 78 79 7A 7B 7C 7D 7E 7F then 63")\n',
     'print("M61 POST 62-to-63 bisector: 70 71 72 73 74 75 76 77 78 79 7A 7B 7C 7D 7E 7F then 63")\n'
-    'print("M61 POST 71-to-72 bisector: 80 81 82 83 84 85 86 87 88 89 8A 8B 8C 8D 8E 8F then 72")\n'
+    'print("M61 POST 71-to-72 metadata-only: 80 81 82 83 84 85 86 87 then 72")\n'
     'print("M61 getter linker wrap removed: YES")\n'
     'print("M61 direct source 82/83 boundary: YES")\n'
     'print("M61 linked real getter E8 boundary: YES")\n'
-    'print("M61 first actual framebuffer memory write witness: 87 before / 88 after")\n',
+    'print("M61 diagnostic framebuffer writes bypassed: YES")\n'
+    'print("M61 early diagnostic framebuffer write count: 0")\n'
+    'print("M61 normal first framebuffer write: 90 before / 91 after")\n',
     "verifier report")
 
-if "--wrap=boring_framebuffer_get" in src:
-    raise RuntimeError("M61 getter linker wrap unexpectedly remains in generated link")
+for forbidden_link_arg in (
+        "--wrap=boring_framebuffer_get", "--wrap=boring_graphics_fill_rect",
+        "--wrap=serial_write_string"):
+    if forbidden_link_arg in src:
+        raise RuntimeError(
+            f"M61 forbidden linker wrapper unexpectedly remains: {forbidden_link_arg}")
+
 tmp.write_text(src)
 trace_tmp.write_text(trace_src)
 try:

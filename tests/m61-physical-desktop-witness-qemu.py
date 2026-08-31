@@ -18,7 +18,26 @@ def replace_once(text, old, new, label):
 def run():
     text = SOURCE.read_text()
     helper_anchor = "    def settled_capture(frame):\n"
-    helper = r'''    def capture_auto_terminal_wallpaper(frame, terminal_pid):
+    helper = r'''    def prove_diagnostic_write_bypass():
+        witness("M61 FRAMEBUFFER DIAGNOSTIC WRITES BYPASSED count=")
+        witness("M61 TRACE [01+] SERIAL PROBE")
+        current = text()
+        forbidden = (
+            "M61 FRAMEBUFFER TINY PROBE FAILED",
+            "M61 FRAMEBUFFER WITNESS index=",
+            "M61 FRAMEBUFFER TRACE SELECTED WITNESS FAILED",
+            "M61 FRAMEBUFFER TRACE READY index=",
+        )
+        present = [marker for marker in forbidden if marker in current]
+        if present:
+            raise RuntimeError(
+                f"diagnostic framebuffer write path unexpectedly executed: {present!r}")
+        (out / "physical-trace-proof.txt").write_text(
+            "DIAGNOSTIC_FRAMEBUFFER_WRITES_BYPASSED=YES\n"
+            "EARLY_DIAGNOSTIC_FRAMEBUFFER_WRITE_COUNT=0\n"
+            "capture=none; metadata-only acquire_framebuffers\n")
+
+    def capture_auto_terminal_wallpaper(frame, terminal_pid):
         geometry = re.search(r"boring-framebuffer: (\d+)x(\d+)x(?:24|32)", text())
         if geometry is None:
             raise RuntimeError("missing framebuffer geometry for automatic terminal witness")
@@ -95,6 +114,7 @@ def run():
                 "wm_frame_count=1\n"
                 f"terminal_tile_pid={tile['pid']}\n"
                 "WALLPAPER_PROVEN=YES\n"
+                "NORMAL_FRAMEBUFFER_RUNTIME_PROVEN=YES\n"
                 "wallpaper_composition=normal DISPLAY_PRESENT\n"
                 f"exact_wallpaper_margin={clean_margin}\n"
                 f"wallpaper_margin_sha256={clean_hash}\n"
@@ -105,12 +125,18 @@ def run():
 
 '''
     text = replace_once(text, helper_anchor, helper + helper_anchor,
-                        "automatic desktop screenshot helper")
+                        "no-write and automatic desktop helpers")
+
+    text = replace_once(
+        text,
+        "        trace_meta = capture_physical_trace()\n",
+        "        prove_diagnostic_write_bypass()\n",
+        "replace artificial framebuffer trace capture")
 
     after_retained = '''        capture_retained_trace(trace_meta)\n        current = text()\n'''
-    automatic = '''        capture_retained_trace(trace_meta)\n        automatic_match = wait(\n            lambda current: re.search(\n                r"M61 PHYSICAL: automatic terminal spawn pid=(\\d+)", current),\n            "automatic terminal spawn pid")\n        automatic_pid = int(automatic_match.group(1))\n        witness("boring-spawn: VFS executable source /bin/boring-terminal")\n        witness("boring-spawn: VFS executable source /bin/boring-shell")\n        automatic_frame = latest(1)\n        capture_auto_terminal_wallpaper(automatic_frame, automatic_pid)\n        current = text()\n'''
+    automatic = '''        automatic_match = wait(\n            lambda current: re.search(\n                r"M61 PHYSICAL: automatic terminal spawn pid=(\\d+)", current),\n            "automatic terminal spawn pid")\n        automatic_pid = int(automatic_match.group(1))\n        witness("boring-spawn: VFS executable source /bin/boring-terminal")\n        witness("boring-spawn: VFS executable source /bin/boring-shell")\n        automatic_frame = latest(1)\n        capture_auto_terminal_wallpaper(automatic_frame, automatic_pid)\n        current = text()\n'''
     text = replace_once(text, after_retained, automatic,
-                        "automatic terminal proof before input")
+                        "normal runtime desktop proof without retained diagnostic trace")
 
     manual = '''        key("ret", super_key=True)\n        witness("wm: Super+Return spawned /bin/boring-terminal")\n        witness("boring-spawn: VFS executable source /bin/boring-terminal")\n        witness("boring-spawn: VFS executable source /bin/boring-shell")\n        latest(1)\n\n'''
     text = replace_once(text, manual, "",

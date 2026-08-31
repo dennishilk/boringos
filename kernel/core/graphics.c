@@ -4,6 +4,16 @@
 
 #include <boring/framebuffer.h>
 #include <boring/graphics.h>
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+#include <boring/io.h>
+#endif
+
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+#define M61_NORMAL_FRAMEBUFFER_POST_PORT 0x80U
+#define M61_NORMAL_FRAMEBUFFER_PRE_POST 0x90U
+#define M61_NORMAL_FRAMEBUFFER_POST_POST 0x91U
+static bool m61_first_normal_framebuffer_store_pending = true;
+#endif
 
 static uint32_t boring_color_scale(uint8_t value, uint8_t bits) {
     uint32_t maximum;
@@ -41,11 +51,27 @@ static void boring_graphics_store_pixel(const struct boring_framebuffer *surface
     uint64_t offset = (y * surface->pitch) +
                       (x * (uint64_t)surface->bytes_per_pixel);
     uint8_t byte_index;
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    bool first_normal_store = false;
+
+    if (m61_first_normal_framebuffer_store_pending) {
+        m61_first_normal_framebuffer_store_pending = false;
+        first_normal_store = true;
+        x86_64_out8((uint16_t)M61_NORMAL_FRAMEBUFFER_POST_PORT,
+                    (uint8_t)M61_NORMAL_FRAMEBUFFER_PRE_POST);
+    }
+#endif
 
     for (byte_index = 0U; byte_index < surface->bytes_per_pixel; ++byte_index) {
         surface->address[offset + (uint64_t)byte_index] =
             (uint8_t)((color >> ((uint32_t)byte_index * 8U)) & 0xffU);
     }
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    if (first_normal_store) {
+        x86_64_out8((uint16_t)M61_NORMAL_FRAMEBUFFER_POST_PORT,
+                    (uint8_t)M61_NORMAL_FRAMEBUFFER_POST_POST);
+    }
+#endif
 }
 
 bool boring_graphics_put_pixel(const struct boring_framebuffer *surface,
