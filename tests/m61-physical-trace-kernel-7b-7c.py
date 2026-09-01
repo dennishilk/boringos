@@ -418,6 +418,18 @@ def return_reachable_after(graph, start: int, function_start: int,
     return returns[0]
 
 
+def returns_reachable_after(graph, start: int, function_start: int,
+                            function_end: int, label: str):
+    returns = [
+        address
+        for address, raw, _asm in rows_in_range(function_start, function_end)
+        if is_return(raw) and cfg_reachable(graph, start, address)
+    ]
+    if not returns:
+        raise RuntimeError(f"{label} expected at least one reachable return")
+    return returns
+
+
 def is_boolean_register_zero_test(raw: bytes, register: int) -> bool:
     # The result starts in AL. GCC may preserve it in CL/DL/BL before loading
     # the true-only POST immediate into AL, so verify the exact preserved byte.
@@ -690,7 +702,7 @@ require_cfg_sequence(
     "VMM real vmm_init result",
     required_post_site=vmm_7d,
 )
-vmm_false_return = return_reachable_after(
+vmm_false_returns = returns_reachable_after(
     vmm_post_cfg,
     vmm_false_start,
     vmm_post_start,
@@ -704,11 +716,12 @@ vmm_true_return = return_reachable_after(
     vmm_post_end,
     "VMM true-result shim",
 )
-require_cfg_sequence(
-    vmm_post_cfg,
-    [vmm_false_start, vmm_c0[1], vmm_false_return],
-    "VMM FALSE result -> C0 -> return",
-)
+for vmm_false_return in vmm_false_returns:
+    require_cfg_sequence(
+        vmm_post_cfg,
+        [vmm_false_start, vmm_c0[1], vmm_false_return],
+        f"VMM FALSE result -> C0 -> return 0x{vmm_false_return:x}",
+    )
 require_cfg_sequence(
     vmm_post_cfg,
     [vmm_true_start, vmm_c1[1], vmm_true_return],
