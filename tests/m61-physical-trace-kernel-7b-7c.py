@@ -420,7 +420,7 @@ def return_reachable_after(graph, start: int, function_start: int,
 
 def is_boolean_return_zero_test(raw: bytes) -> bool:
     # _Bool is returned in AL on x86_64 SysV. Require the linked PMM shim to
-    # test that exact return byte immediately after the real pmm_init call.
+    # test that exact return byte after at most one result-preserving copy.
     return raw in (
         bytes((0x84, 0xC0)),  # test %al,%al
         bytes((0x3C, 0x00)),  # cmp $0,%al
@@ -437,11 +437,26 @@ def require_boolean_result_split(graph, function_start: int, function_end: int,
     if call_index + 3 >= len(rows):
         raise RuntimeError(f"{label} has no complete result-test branch after call")
 
-    test_address, test_raw, _test_asm = rows[call_index + 1]
-    branch_address, branch_raw, _branch_asm = rows[call_index + 2]
+    result_index = call_index + 1
+    test_address, test_raw, _test_asm = rows[result_index]
+    # GCC may preserve the returned bool across later POST writes with one
+    # non-destructive `mov %eax, %r32`. Accept exactly that bounded handoff;
+    # EAX/AL and flags remain unchanged, so the following AL test is still the
+    # direct proof of the real pmm_init result.
+    if (
+        len(test_raw) == 2
+        and test_raw[0] == 0x89
+        and 0xC1 <= test_raw[1] <= 0xC7
+    ):
+        result_index += 1
+        if result_index + 2 >= len(rows):
+            raise RuntimeError(f"{label} has no complete result-test branch after preserved copy")
+        test_address, test_raw, _test_asm = rows[result_index]
+
+    branch_address, branch_raw, _branch_asm = rows[result_index + 1]
     if not is_boolean_return_zero_test(test_raw):
         raise RuntimeError(
-            f"{label} does not test the returned AL immediately after the call: "
+            f"{label} does not test the returned AL after the call/result-preserving copy: "
             f"0x{test_address:x} bytes={test_raw.hex()}"
         )
     decoded = decode_direct_transfer(branch_address, branch_raw)
@@ -452,7 +467,7 @@ def require_boolean_result_split(graph, function_start: int, function_end: int,
         )
 
     _kind, branch_target, condition = decoded
-    fallthrough = rows[call_index + 3][0]
+    fallthrough = rows[result_index + 2][0]
     if branch_target not in graph or fallthrough not in graph:
         raise RuntimeError(
             f"{label} result branch leaves linked function: "
