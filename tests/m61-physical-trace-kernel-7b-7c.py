@@ -431,7 +431,8 @@ def is_boolean_register_zero_test(raw: bytes, register: int) -> bool:
 
 
 def require_boolean_result_split(graph, function_start: int, function_end: int,
-                                 call_address: int, label: str):
+                                 call_address: int, label: str,
+                                 required_post_site=None):
     rows = rows_in_range(function_start, function_end)
     index_by_address = {row[0]: index for index, row in enumerate(rows)}
     if call_address not in index_by_address:
@@ -458,11 +459,27 @@ def require_boolean_result_split(graph, function_start: int, function_end: int,
             raise RuntimeError(f"{label} has no complete result-test branch after preserved copy")
         test_address, test_raw, _test_asm = rows[result_index]
 
+        if required_post_site is not None:
+            required_load, required_out = required_post_site
+            if (
+                test_address != required_load
+                or loaded_al_code(test_raw) is None
+                or result_index + 1 >= len(rows)
+                or rows[result_index + 1][0] != required_out
+                or not is_port80_out(rows[result_index + 1][1])
+            ):
+                raise RuntimeError(
+                    f"{label} does not preserve its required POST before result split"
+                )
+            result_index += 2
+            if result_index + 2 >= len(rows):
+                raise RuntimeError(f"{label} has no complete result-test branch after POST")
+            test_address, test_raw, _test_asm = rows[result_index]
         # GCC may hoist only the immediate load for the first true-path POST
         # ahead of the boolean split. It is not observable until the later OUT,
         # which the CFG proof below still requires to be true-only. Such a load
         # does overwrite AL, so only the preserved low-byte carrier remains.
-        if loaded_al_code(test_raw) == 0x7B:
+        elif loaded_al_code(test_raw) == 0x7B:
             result_registers.discard(0)
             result_index += 1
             if result_index + 2 >= len(rows):
@@ -607,6 +624,8 @@ pmm_7b = require_post_site(pmm_post_start, pmm_post_end, 0x7B, "PMM POST shim")
 pmm_92 = require_post_site(pmm_post_start, pmm_post_end, 0x92, "PMM POST shim")
 vmm_7c = require_post_site(vmm_post_start, vmm_post_end, 0x7C, "VMM POST shim")
 vmm_7d = require_post_site(vmm_post_start, vmm_post_end, 0x7D, "VMM POST shim")
+vmm_c0 = require_post_site(vmm_post_start, vmm_post_end, 0xC0, "VMM POST shim")
+vmm_c1 = require_post_site(vmm_post_start, vmm_post_end, 0xC1, "VMM POST shim")
 
 pmm_post_cfg = function_cfg(pmm_post_start, pmm_post_end)
 pmm_post_rows = rows_in_range(pmm_post_start, pmm_post_end)
@@ -652,14 +671,53 @@ for code, node in ((0x7B, pmm_7b[1]), (0x92, pmm_92[1])):
         )
 
 vmm_post_cfg = function_cfg(vmm_post_start, vmm_post_end)
-vmm_post_return = return_reachable_after(
-    vmm_post_cfg, vmm_7d[1], vmm_post_start, vmm_post_end, "VMM POST shim"
+require_cfg_sequence(
+    vmm_post_cfg,
+    [vmm_7c[1], vmm_post_to_real[0], vmm_7d[1]],
+    "VMM 7C -> real vmm_init -> 7D",
+)
+(
+    vmm_result_test,
+    vmm_result_branch,
+    vmm_result_condition,
+    vmm_true_start,
+    vmm_false_start,
+) = require_boolean_result_split(
+    vmm_post_cfg,
+    vmm_post_start,
+    vmm_post_end,
+    vmm_post_to_real[0],
+    "VMM real vmm_init result",
+    required_post_site=vmm_7d,
+)
+vmm_false_return = return_reachable_after(
+    vmm_post_cfg,
+    vmm_false_start,
+    vmm_post_start,
+    vmm_post_end,
+    "VMM false-result shim",
+)
+vmm_true_return = return_reachable_after(
+    vmm_post_cfg,
+    vmm_true_start,
+    vmm_post_start,
+    vmm_post_end,
+    "VMM true-result shim",
 )
 require_cfg_sequence(
     vmm_post_cfg,
-    [vmm_7c[1], vmm_post_to_real[0], vmm_7d[1], vmm_post_return],
-    "VMM 7C -> real vmm_init -> 7D",
+    [vmm_false_start, vmm_c0[1], vmm_false_return],
+    "VMM FALSE result -> C0 -> return",
 )
+require_cfg_sequence(
+    vmm_post_cfg,
+    [vmm_true_start, vmm_c1[1], vmm_true_return],
+    "VMM TRUE result -> C1 -> return",
+)
+if cfg_reachable(vmm_post_cfg, vmm_false_start, vmm_c1[1]):
+    raise RuntimeError("VMM FALSE result can incorrectly reach true-only POST C1")
+if cfg_reachable(vmm_post_cfg, vmm_true_start, vmm_c0[1]):
+    raise RuntimeError("VMM TRUE result can incorrectly reach false-only POST C0")
 
 for label, start, end, transfer in (
     ("PMM outer wrapper", pmm_wrap_start, pmm_wrap_end, pmm_wrap_to_post),

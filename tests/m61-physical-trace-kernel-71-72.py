@@ -53,8 +53,8 @@ for forbidden in (
             f"generated acquire_framebuffers still contains diagnostic framebuffer write path: {forbidden}")
 
 replace_once(
-    "    M61_POST_HEAP_INIT_AFTER = 0x7f\n};",
-    "    M61_POST_HEAP_INIT_AFTER = 0x7f,\n\n"
+    "    M61_POST_VMM_STATS_TRUE = 0xc3\n};",
+    "    M61_POST_VMM_STATS_TRUE = 0xc3,\n\n"
     "    M61_POST_ACQUIRE_RESUMED = 0x80,\n"
     "    M61_POST_FRAMEBUFFER_COUNT_RETURNED = 0x81,\n"
     "    M61_POST_FRAMEBUFFER_READY_CONFIRMED = 0x82,\n"
@@ -78,10 +78,11 @@ new_seq = old_seq + (
 replace_once(old_seq, new_seq, "71-to-72 no-write sequence marker")
 
 replace_once(
-    "static uint8_t framebuffer_boot_init_calls;\nstatic bool init_posted;",
+    "static uint8_t framebuffer_boot_init_calls;\n"
+    "static bool vmm_post_init_stats_pending;",
     "static uint8_t framebuffer_boot_init_calls;\n"
     "static bool acquire_71_72_active;\n"
-    "static bool init_posted;",
+    "static bool vmm_post_init_stats_pending;",
     "71-to-72 state")
 
 old_cpu = (
@@ -190,15 +191,19 @@ replace_once(
     '    "__wrap_boring_m61_framebuffer_get": ("85", "86", "87"),\n',
     "binary verifier metadata boundaries")
 
-replace_once(
-    '        if re.search(rf"\\$0x0*{code}\\b", body, re.IGNORECASE) is None:\n',
-    '        if re.search(rf"\\$0x(?:0*|f+){code}\\b", body, re.IGNORECASE) is None:\n',
-    "accept sign-extended POST immediates")
+if "def has_low_byte_immediate(body, code):" in src:
+    if "if (int(match.group(1), 16) & 0xff) == wanted:" not in src:
+        raise RuntimeError("low-byte POST immediate verifier is incomplete")
+else:
+    replace_once(
+        '        if re.search(rf"\\$0x0*{code}\\b", body, re.IGNORECASE) is None:\n',
+        '        if re.search(rf"\\$0x(?:0*|f+){code}\\b", body, re.IGNORECASE) is None:\n',
+        "accept sign-extended POST immediates")
 
 old_binary_tail = (
-    'if out_count < 27:\n'
+    'if out_count < 31:\n'
     '    raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")\n')
-new_binary_tail = r'''if out_count < 33:
+new_binary_tail = r'''if out_count < 37:
     raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")
 
 nm_output = subprocess.check_output(["nm", "-n", "build/kernel.elf"], text=True)
