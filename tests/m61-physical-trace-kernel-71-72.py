@@ -200,12 +200,13 @@ else:
         '        if re.search(rf"\\$0x(?:0*|f+){code}\\b", body, re.IGNORECASE) is None:\n',
         "accept sign-extended POST immediates")
 
+replace_once(
+    'if out_count < 32:\n',
+    'if out_count < 38:\n',
+    "derived POST output threshold")
 old_binary_tail = (
-    'if out_count < 32:\n'
     '    raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")\n')
-new_binary_tail = r'''if out_count < 38:
-    raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")
-
+new_binary_tail = old_binary_tail + r'''
 nm_output = subprocess.check_output(["nm", "-n", "build/kernel.elf"], text=True)
 symbols = {}
 for line in nm_output.splitlines():
