@@ -137,6 +137,7 @@ bool __real_vmm_init(const struct boring_limine_hhdm_response *,
                      const struct boring_limine_paging_mode_response *,
                      const struct boring_limine_memmap_response *);
 bool __real_vmm_get_stats(struct vmm_stats *stats);
+uint8_t boring_m61_vmm_failure_reason(void);
 bool __real_heap_init(void);
 bool __real_irq_init(void);
 bool __real_usb_mass_storage_init(struct xhci_state *state);
@@ -285,7 +286,13 @@ bool m61_post_vmm_init(
     result = __real_vmm_init(hhdm, paging, memmap);
     M61_POST(M61_POST_VMM_INIT_AFTER);
     if (!result) {
+        uint8_t failure_reason;
+
         M61_POST(M61_POST_VMM_INIT_FALSE);
+        failure_reason = boring_m61_vmm_failure_reason();
+        if (failure_reason != 0U) {
+            M61_POST(failure_reason);
+        }
         return result;
     }
     M61_POST(M61_POST_VMM_INIT_TRUE);
@@ -418,6 +425,7 @@ nm build/kernel.elf | grep -Fq 'boring_m61_physical_breadcrumbs_enabled'
 nm build/kernel.elf | grep -Fq 'boring_m61_post_port80_enabled'
 nm build/kernel.elf | grep -Fq 'boring_m61_post_sequence'
 nm build/kernel.elf | grep -Fq 'boring_m61_post_62_to_63_sequence'
+nm build/kernel.elf | grep -Fq 'boring_m61_vmm_failure_reason'
 
 python3 - <<'EOF_POST_VERIFY'
 import re
@@ -426,6 +434,7 @@ from pathlib import Path
 
 source = Path("kernel/core/m61_post80_generated.c").read_text()
 entry_source = Path("kernel/core/entry.c").read_text()
+vmm_source = Path("kernel/arch/x86_64/vmm.c").read_text()
 ordered = [
     "M61_POST(M61_POST_KERNEL_ENTRY)",
     "M61_POST(M61_POST_EARLY_CONTAINMENT_SERIAL)",
@@ -477,6 +486,8 @@ for required in (
     "result = __real_vmm_init(hhdm, paging, memmap);",
     "M61_POST(M61_POST_VMM_INIT_AFTER);",
     "M61_POST(M61_POST_VMM_INIT_FALSE);",
+    "failure_reason = boring_m61_vmm_failure_reason();",
+    "M61_POST(failure_reason);",
     "M61_POST(M61_POST_VMM_INIT_TRUE);",
     "vmm_post_init_stats_pending = true;",
 ):
@@ -486,13 +497,15 @@ if vmm_init_source.index("M61_POST(M61_POST_VMM_INIT_BEFORE);") > vmm_init_sourc
     raise RuntimeError("M61 VMM 7C is not before real vmm_init")
 if vmm_init_source.index("result = __real_vmm_init(hhdm, paging, memmap);") > vmm_init_source.index("M61_POST(M61_POST_VMM_INIT_AFTER);"):
     raise RuntimeError("M61 VMM 7D is not after real vmm_init")
-if not re.search(
-    r"if\s*\(\s*!result\s*\)\s*\{\s*"
-    r"M61_POST\(M61_POST_VMM_INIT_FALSE\);\s*return result;\s*\}\s*"
-    r"M61_POST\(M61_POST_VMM_INIT_TRUE\);",
-    vmm_init_source,
-):
-    raise RuntimeError("M61 VMM init result POST branches are not separated")
+false_post = vmm_init_source.index("M61_POST(M61_POST_VMM_INIT_FALSE);")
+reason_read = vmm_init_source.index("failure_reason = boring_m61_vmm_failure_reason();")
+reason_post = vmm_init_source.index("M61_POST(failure_reason);")
+false_return = vmm_init_source.index("return result;", reason_post)
+true_post = vmm_init_source.index("M61_POST(M61_POST_VMM_INIT_TRUE);")
+if not (false_post < reason_read < reason_post < false_return < true_post):
+    raise RuntimeError("M61 VMM false reason is not replayed after C0 and before false return")
+if "failure_reason" in vmm_init_source[true_post:]:
+    raise RuntimeError("M61 VMM true path replays a false reason")
 for required in (
     "const bool result = __real_vmm_get_stats(stats);",
     "if (!vmm_post_init_stats_pending)",
@@ -516,6 +529,38 @@ if not re.search(
     entry_source,
 ):
     raise RuntimeError("normal VMM short-circuit gate changed")
+
+reason_codes = [*range(0xD0, 0xE0), *range(0xE0, 0xE7)]
+reason_literals = [f"0x{code:02X}U" for code in reason_codes]
+if len(reason_codes) != 23 or len(set(reason_codes)) != 23:
+    raise RuntimeError("M61 VMM reason inventory is not exactly 23 unique codes")
+for literal in reason_literals:
+    if vmm_source.count(f"VMM_M61_REJECT({literal})") != 1:
+        raise RuntimeError(f"M61 VMM reason missing or duplicated: {literal}")
+for code in reason_codes:
+    if not (0xD0 <= code <= 0xDF or 0xE0 <= code <= 0xE6):
+        raise RuntimeError(f"M61 VMM reason outside audited range: 0x{code:02X}")
+if "VMM_M61_CLEAR_FAILURE();\n    vmm_reset_state();" not in vmm_source:
+    raise RuntimeError("M61 VMM reason state is not cleared at vmm_init entry")
+if not re.search(
+    r"#ifdef BORING_M61_PHYSICAL_BREADCRUMBS[\s\S]*?"
+    r"static uint8_t vmm_m61_failure_reason;[\s\S]*?"
+    r"uint8_t boring_m61_vmm_failure_reason\(void\)[\s\S]*?"
+    r"#else[\s\S]*?#define VMM_M61_CLEAR_FAILURE\(\) do \{ \} while \(0\)",
+    vmm_source,
+):
+    raise RuntimeError("M61 VMM failure state/accessor is not candidate-gated")
+for required in (
+    "if (!vmm_validate_memory_map(memory_map)) {\n        return false;\n    }",
+    "if (!vmm_test_region_clear_of_hhdm()) {\n        vmm_reset_state();\n        return false;\n    }",
+    "vmm_initialized = true;\n    return true;",
+):
+    if required not in vmm_source:
+        raise RuntimeError(f"M61 VMM original result path changed: {required}")
+if "#define VMM_MAX_MEMORY_MAP_ENTRIES 256ULL" not in vmm_source:
+    raise RuntimeError("M61 VMM diagnostic changed the VMM memory-map cap")
+if any(token in vmm_source for token in ("serial_write", "framebuffer")):
+    raise RuntimeError("M61 VMM failure classification gained serial/framebuffer dependency")
 
 functions = {
     "boring_kernel_entry": ("61",),
@@ -548,7 +593,8 @@ for name, codes in functions.items():
         ["objdump", "-d", "--disassemble=" + name, "build/kernel.elf"],
         text=True)
     outputs = len(re.findall(r"\bout\b", body))
-    if outputs < len(codes):
+    minimum_outputs = len(codes) + (1 if name == "m61_post_vmm_init" else 0)
+    if outputs < minimum_outputs:
         raise RuntimeError(
             f"M61 POST binary hook {name} has only {outputs} out instructions")
     if "$0x80" not in body:
@@ -557,13 +603,16 @@ for name, codes in functions.items():
         if not has_low_byte_immediate(body, code):
             raise RuntimeError(
                 f"M61 POST binary hook {name} missing code 0x{code.upper()}")
+    if name == "m61_post_vmm_init" and "boring_m61_vmm_failure_reason" not in body:
+        raise RuntimeError("M61 VMM binary hook does not call the failure-reason accessor")
     out_count += outputs
-if out_count < 31:
+if out_count < 32:
     raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")
 print("M61 POST port 0x80 binary acceptance: PASS")
 print("M61 POST existing sequence preserved: 61 62 63 64 65 66 67 68 69 6A 6F")
 print("M61 POST 62-to-63 bisector: 70 71 72 73 74 75 76 77 78 79 7A 7B 7C 7D 7E 7F then 63")
 print("M61 VMM result bisector: C0 init-false C1 init-true C2 stats-false C3 stats-true")
+print("M61 VMM false reasons: D0-DF E0-E6, replayed after C0")
 print("M61 VMM short-circuit source gate: PRESERVED")
 print("M61 QEMU port 0x80 observer: SKIPPED (pc/q35 owns ioport80 sink)")
 EOF_POST_VERIFY

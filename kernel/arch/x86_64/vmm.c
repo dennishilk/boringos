@@ -50,6 +50,29 @@ static uint64_t vmm_owned_table_count;
 static bool vmm_hhdm_ready;
 static bool vmm_initialized;
 
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+static uint8_t vmm_m61_failure_reason;
+
+#define VMM_M61_CLEAR_FAILURE() \
+    do { vmm_m61_failure_reason = 0U; } while (0)
+#define VMM_M61_REJECT(code) \
+    do { \
+        vmm_m61_failure_reason = (uint8_t)(code); \
+        return false; \
+    } while (0)
+
+uint8_t boring_m61_vmm_failure_reason(void) {
+    return vmm_m61_failure_reason;
+}
+#else
+#define VMM_M61_CLEAR_FAILURE() do { } while (0)
+#define VMM_M61_REJECT(code) \
+    do { \
+        (void)sizeof(code); \
+        return false; \
+    } while (0)
+#endif
+
 static void vmm_reset_state(void) {
     uint64_t index;
 
@@ -393,17 +416,35 @@ static bool vmm_validate_memory_map(
     const struct boring_limine_memmap_response *memory_map) {
     uint64_t index;
 
-    if ((memory_map == NULL) || (memory_map->entries == NULL) ||
-        (memory_map->entry_count == 0ULL) ||
-        (memory_map->entry_count > VMM_MAX_MEMORY_MAP_ENTRIES)) {
-        return false;
+    if (memory_map == NULL) {
+        VMM_M61_REJECT(0xD3U);
+    }
+    if (memory_map->entries == NULL) {
+        VMM_M61_REJECT(0xD4U);
+    }
+    if (memory_map->entry_count == 0ULL) {
+        VMM_M61_REJECT(0xD5U);
+    }
+    if (memory_map->entry_count > VMM_MAX_MEMORY_MAP_ENTRIES) {
+        VMM_M61_REJECT(0xD6U);
     }
 
     for (index = 0ULL; index < memory_map->entry_count; ++index) {
         uint64_t end;
+        const struct boring_limine_memmap_entry *entry =
+            memory_map->entries[index];
 
-        if (!vmm_memory_entry_end(memory_map->entries[index], &end)) {
-            return false;
+        if (entry == NULL) {
+            VMM_M61_REJECT(0xD7U);
+        }
+        if (entry->length == 0ULL) {
+            VMM_M61_REJECT(0xD8U);
+        }
+        if (entry->base > (UINT64_MAX - entry->length)) {
+            VMM_M61_REJECT(0xD9U);
+        }
+        if (!vmm_memory_entry_end(entry, &end)) {
+            VMM_M61_REJECT(0xDAU);
         }
     }
 
@@ -418,14 +459,18 @@ static bool vmm_test_region_clear_of_hhdm(void) {
 
     if (VMM_TEST_REGION_BASE >
         (UINT64_MAX - VMM_TEST_REGION_SIZE)) {
-        return false;
+        VMM_M61_REJECT(0xDDU);
     }
     test_end = VMM_TEST_REGION_BASE + VMM_TEST_REGION_SIZE;
 
-    if (!vmm_is_canonical_4level(VMM_TEST_REGION_BASE) ||
-        !vmm_is_canonical_4level(test_end - 1ULL) ||
-        (test_end > VMM_KERNEL_HIGHER_HALF_MIN)) {
-        return false;
+    if (!vmm_is_canonical_4level(VMM_TEST_REGION_BASE)) {
+        VMM_M61_REJECT(0xDEU);
+    }
+    if (!vmm_is_canonical_4level(test_end - 1ULL)) {
+        VMM_M61_REJECT(0xDFU);
+    }
+    if (test_end > VMM_KERNEL_HIGHER_HALF_MIN) {
+        VMM_M61_REJECT(0xE0U);
     }
 
     for (index = 0ULL; index < vmm_memory_map->entry_count; ++index) {
@@ -437,22 +482,27 @@ static bool vmm_test_region_clear_of_hhdm(void) {
             continue;
         }
         if (!vmm_memory_entry_end(entry, &entry_end)) {
-            return false;
+            VMM_M61_REJECT(0xE1U);
         }
         if (entry_end > highest_mapped_physical_end) {
             highest_mapped_physical_end = entry_end;
         }
     }
 
-    if ((highest_mapped_physical_end == 0ULL) ||
-        (highest_mapped_physical_end >
-         (UINT64_MAX - vmm_hhdm_offset))) {
-        return false;
+    if (highest_mapped_physical_end == 0ULL) {
+        VMM_M61_REJECT(0xE2U);
+    }
+    if (highest_mapped_physical_end >
+        (UINT64_MAX - vmm_hhdm_offset)) {
+        VMM_M61_REJECT(0xE3U);
     }
     hhdm_end = vmm_hhdm_offset + highest_mapped_physical_end;
 
-    return !((VMM_TEST_REGION_BASE < hhdm_end) &&
-             (vmm_hhdm_offset < test_end));
+    if ((VMM_TEST_REGION_BASE < hhdm_end) &&
+        (vmm_hhdm_offset < test_end)) {
+        VMM_M61_REJECT(0xE4U);
+    }
+    return true;
 }
 
 bool vmm_init(const struct boring_limine_hhdm_response *hhdm,
@@ -460,14 +510,26 @@ bool vmm_init(const struct boring_limine_hhdm_response *hhdm,
               const struct boring_limine_memmap_response *memory_map) {
     uint64_t cr3;
 
+    VMM_M61_CLEAR_FAILURE();
     vmm_reset_state();
 
-    if ((hhdm == NULL) || (paging_mode == NULL) ||
-        (paging_mode->mode != BORING_LIMINE_PAGING_MODE_X86_64_4LVL) ||
-        !vmm_validate_memory_map(memory_map) ||
-        !vmm_is_page_aligned(hhdm->offset) ||
-        !vmm_is_canonical_4level(hhdm->offset)) {
+    if (hhdm == NULL) {
+        VMM_M61_REJECT(0xD0U);
+    }
+    if (paging_mode == NULL) {
+        VMM_M61_REJECT(0xD1U);
+    }
+    if (paging_mode->mode != BORING_LIMINE_PAGING_MODE_X86_64_4LVL) {
+        VMM_M61_REJECT(0xD2U);
+    }
+    if (!vmm_validate_memory_map(memory_map)) {
         return false;
+    }
+    if (!vmm_is_page_aligned(hhdm->offset)) {
+        VMM_M61_REJECT(0xDBU);
+    }
+    if (!vmm_is_canonical_4level(hhdm->offset)) {
+        VMM_M61_REJECT(0xDCU);
     }
 
     vmm_hhdm_offset = hhdm->offset;
@@ -481,10 +543,13 @@ bool vmm_init(const struct boring_limine_hhdm_response *hhdm,
 
     cr3 = x86_64_read_cr3();
     vmm_root_physical = cr3 & VMM_ENTRY_ADDRESS_MASK;
-    if ((vmm_root_physical == 0ULL) ||
-        !vmm_table_from_physical(vmm_root_physical, &vmm_root_table)) {
+    if (vmm_root_physical == 0ULL) {
         vmm_reset_state();
-        return false;
+        VMM_M61_REJECT(0xE5U);
+    }
+    if (!vmm_table_from_physical(vmm_root_physical, &vmm_root_table)) {
+        vmm_reset_state();
+        VMM_M61_REJECT(0xE6U);
     }
 
     vmm_initialized = true;
