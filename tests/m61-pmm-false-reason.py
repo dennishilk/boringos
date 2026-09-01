@@ -136,9 +136,29 @@ require_once(
     "M61 false-path 7B suppression",
 )
 
+commit = subprocess.check_output(
+    ["git", "cat-file", "-p", "HEAD"], cwd=root, text=True
+)
+parents = [
+    line.split()[1] for line in commit.splitlines() if line.startswith("parent ")
+]
+if not parents:
+    raise RuntimeError("current commit has no parent for M61 runtime scope audit")
+parent = parents[0]
+if subprocess.run(
+    ["git", "cat-file", "-e", f"{parent}^{{commit}}"],
+    cwd=root,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+).returncode != 0:
+    subprocess.run(
+        ["git", "fetch", "--no-tags", "--depth=1", "origin", parent],
+        cwd=root,
+        check=True,
+    )
 changed = set(
     subprocess.check_output(
-        ["git", "diff", "--name-only", "HEAD^", "HEAD"], cwd=root, text=True
+        ["git", "diff", "--name-only", parent, "HEAD"], cwd=root, text=True
     ).splitlines()
 )
 if "kernel/include/boring/io.h" in changed:
