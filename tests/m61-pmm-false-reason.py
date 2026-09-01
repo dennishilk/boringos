@@ -310,12 +310,72 @@ for code in reason_blocks:
         raise RuntimeError(f"linked pmm_init missing reason POST 0x{code:02X}")
 
 shim_dis = subprocess.check_output(
-    ["objdump", "-d", "--disassemble=m61_post_pmm_init", str(elf)],
+    ["objdump", "-d", "--insn-width=16", "--disassemble=m61_post_pmm_init", str(elf)],
     cwd=root, text=True,
 )
+shim_instructions = []
+for line in shim_dis.splitlines():
+    match = re.match(
+        r"^\s*([0-9a-f]+):\s*((?:[0-9a-f]{2}\s+)+)\s*(.*?)\s*$",
+        line,
+        re.IGNORECASE,
+    )
+    if match is None:
+        continue
+    try:
+        raw = bytes.fromhex(match.group(2))
+    except ValueError:
+        continue
+    shim_instructions.append((int(match.group(1), 16), raw, match.group(3)))
+
+
+def is_port80_out(raw: bytes) -> bool:
+    return len(raw) == 2 and raw[0] == 0xE6 and raw[1] == 0x80
+
+
+def loaded_al_code(raw: bytes):
+    if len(raw) == 2 and raw[0] == 0xB0:
+        return raw[1]
+    if len(raw) == 5 and raw[0] == 0xB8:
+        return raw[1]
+    if len(raw) == 3 and raw[0] == 0xC6 and raw[1] == 0xC0:
+        return raw[2]
+    if len(raw) == 6 and raw[0] == 0xC7 and raw[1] == 0xC0:
+        return raw[2]
+    if (
+        len(raw) == 7
+        and raw[0] == 0x48
+        and raw[1] == 0xC7
+        and raw[2] == 0xC0
+    ):
+        return raw[3]
+    return None
+
+
+def shim_post_sites(code: int):
+    found = []
+    for out_index, (out_address, raw, _asm) in enumerate(shim_instructions):
+        if not is_port80_out(raw):
+            continue
+        lower = max(0, out_index - 5)
+        for load_index in range(out_index - 1, lower - 1, -1):
+            load_address, load_raw, _load_asm = shim_instructions[load_index]
+            loaded = loaded_al_code(load_raw)
+            if loaded is not None:
+                if loaded == code:
+                    found.append((load_address, out_address))
+                break
+            if is_port80_out(load_raw):
+                break
+    return found
+
+
 for code in (0x7A, 0x7B, 0x92):
-    if re.search(rf"\$0x0*{code:02x}\b", shim_dis, re.IGNORECASE) is None:
-        raise RuntimeError(f"linked PMM shim missing POST 0x{code:02X}")
+    sites = shim_post_sites(code)
+    if len(sites) != 1:
+        raise RuntimeError(
+            f"linked PMM shim expected one decoded POST 0x{code:02X}, found {sites}"
+        )
 
 entry_dis = subprocess.check_output(
     ["objdump", "-d", "--disassemble=m61_post_real_boring_kernel_entry", str(elf)],
