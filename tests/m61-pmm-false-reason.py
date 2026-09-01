@@ -382,9 +382,9 @@ entry_dis = subprocess.check_output(
     cwd=root, text=True,
 )
 for code in (0x93, 0x94, 0x95, 0x96, 0x97, 0x99):
-    if re.search(rf"\$0x0*{code:02x}\b", entry_dis, re.IGNORECASE) is None:
+    if re.search(rf"\$0x(?:0*|f+){code:02x}\b", entry_dis, re.IGNORECASE) is None:
         raise RuntimeError(f"linked caller missing POST 0x{code:02X}")
-if re.search(r"\$0x0*98\b", entry_dis, re.IGNORECASE) is not None:
+if re.search(r"\$0x(?:0*|f+)98\b", entry_dis, re.IGNORECASE) is not None:
     raise RuntimeError("linked caller still contains PMM-false POST 98")
 
 print("M61 PMM direct A0-AB false-reason mapping: PASS")
