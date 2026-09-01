@@ -201,9 +201,9 @@ else:
         "accept sign-extended POST immediates")
 
 old_binary_tail = (
-    'if out_count < 31:\n'
+    'if out_count < 32:\n'
     '    raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")\n')
-new_binary_tail = r'''if out_count < 37:
+new_binary_tail = r'''if out_count < 38:
     raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")
 
 nm_output = subprocess.check_output(["nm", "-n", "build/kernel.elf"], text=True)
