@@ -418,13 +418,16 @@ def return_reachable_after(graph, start: int, function_start: int,
     return returns[0]
 
 
-def is_boolean_return_zero_test(raw: bytes) -> bool:
-    # _Bool is returned in AL on x86_64 SysV. Require the linked PMM shim to
-    # test that exact return byte after at most one result-preserving copy.
-    return raw in (
-        bytes((0x84, 0xC0)),  # test %al,%al
-        bytes((0x3C, 0x00)),  # cmp $0,%al
-    )
+def is_boolean_register_zero_test(raw: bytes, register: int) -> bool:
+    # The result starts in AL. GCC may preserve it in CL/DL/BL before loading
+    # the true-only POST immediate into AL, so verify the exact preserved byte.
+    if register not in range(4):
+        return False
+    if raw == bytes((0x84, 0xC0 | (register << 3) | register)):
+        return True
+    if raw == bytes((0x80, 0xF8 | register, 0x00)):
+        return True
+    return register == 0 and raw == bytes((0x3C, 0x00))
 
 
 def require_boolean_result_split(graph, function_start: int, function_end: int,
@@ -434,30 +437,39 @@ def require_boolean_result_split(graph, function_start: int, function_end: int,
     if call_address not in index_by_address:
         raise RuntimeError(f"{label} call 0x{call_address:x} is outside its function")
     call_index = index_by_address[call_address]
-    if call_index + 3 >= len(rows):
+    if call_index + 5 >= len(rows):
         raise RuntimeError(f"{label} has no complete result-test branch after call")
 
     result_index = call_index + 1
+    result_register = 0
     test_address, test_raw, _test_asm = rows[result_index]
-    # GCC may preserve the returned bool across later POST writes with one
-    # non-destructive `mov %eax, %r32`. Accept exactly that bounded handoff;
-    # EAX/AL and flags remain unchanged, so the following AL test is still the
-    # direct proof of the real pmm_init result.
+    # Accept one exact result-preserving `mov %eax,%ecx|%edx|%ebx`. The real
+    # return value then lives in the corresponding low byte register.
     if (
         len(test_raw) == 2
         and test_raw[0] == 0x89
-        and 0xC1 <= test_raw[1] <= 0xC7
+        and 0xC1 <= test_raw[1] <= 0xC3
     ):
+        result_register = test_raw[1] & 0x07
         result_index += 1
-        if result_index + 2 >= len(rows):
+        if result_index + 3 >= len(rows):
             raise RuntimeError(f"{label} has no complete result-test branch after preserved copy")
         test_address, test_raw, _test_asm = rows[result_index]
 
+        # GCC may hoist only the immediate load for the first true-path POST
+        # ahead of the boolean split. It is not observable until the later OUT,
+        # which the CFG proof below still requires to be true-only.
+        if loaded_al_code(test_raw) == 0x7B:
+            result_index += 1
+            if result_index + 2 >= len(rows):
+                raise RuntimeError(f"{label} has no complete result-test branch after POST preload")
+            test_address, test_raw, _test_asm = rows[result_index]
+
     branch_address, branch_raw, _branch_asm = rows[result_index + 1]
-    if not is_boolean_return_zero_test(test_raw):
+    if not is_boolean_register_zero_test(test_raw, result_register):
         raise RuntimeError(
-            f"{label} does not test the returned AL after the call/result-preserving copy: "
-            f"0x{test_address:x} bytes={test_raw.hex()}"
+            f"{label} does not test the returned/preserved boolean byte: "
+            f"register={result_register} 0x{test_address:x} bytes={test_raw.hex()}"
         )
     decoded = decode_direct_transfer(branch_address, branch_raw)
     if decoded is None or decoded[0] != "branch" or decoded[2] not in (0x4, 0x5):
