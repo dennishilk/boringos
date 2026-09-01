@@ -65,6 +65,7 @@ cat > "$POST_SOURCE" <<'EOF_POST_C'
 #include <boring/irq.h>
 #include <boring/process.h>
 #include <boring/usb_mass_storage.h>
+#include <boring/vmm.h>
 
 #ifndef BORING_M61_PHYSICAL_BREADCRUMBS
 #error "M61 POST-port witness must stay candidate-build gated"
@@ -103,7 +104,12 @@ enum m61_post_code {
     M61_POST_VMM_INIT_BEFORE = 0x7c,
     M61_POST_VMM_INIT_AFTER = 0x7d,
     M61_POST_HEAP_INIT_BEFORE = 0x7e,
-    M61_POST_HEAP_INIT_AFTER = 0x7f
+    M61_POST_HEAP_INIT_AFTER = 0x7f,
+
+    M61_POST_VMM_INIT_FALSE = 0xc0,
+    M61_POST_VMM_INIT_TRUE = 0xc1,
+    M61_POST_VMM_STATS_FALSE = 0xc2,
+    M61_POST_VMM_STATS_TRUE = 0xc3
 };
 
 const char boring_m61_post_port80_enabled[] =
@@ -130,6 +136,7 @@ bool __real_pmm_init(const struct boring_limine_memmap_response *);
 bool __real_vmm_init(const struct boring_limine_hhdm_response *,
                      const struct boring_limine_paging_mode_response *,
                      const struct boring_limine_memmap_response *);
+bool __real_vmm_get_stats(struct vmm_stats *stats);
 bool __real_heap_init(void);
 bool __real_irq_init(void);
 bool __real_usb_mass_storage_init(struct xhci_state *state);
@@ -151,6 +158,7 @@ bool m61_post_pmm_init(const struct boring_limine_memmap_response *);
 bool m61_post_vmm_init(const struct boring_limine_hhdm_response *,
                        const struct boring_limine_paging_mode_response *,
                        const struct boring_limine_memmap_response *);
+bool __wrap_vmm_get_stats(struct vmm_stats *stats);
 bool m61_post_heap_init(void);
 bool m61_post_irq_init(void);
 bool m61_post_usb_mass_storage_init(struct xhci_state *state);
@@ -162,6 +170,7 @@ enum boring_framebuffer_user_result m61_post_boring_framebuffer_user_present(
     struct process *process, uint32_t handle);
 
 static uint8_t framebuffer_boot_init_calls;
+static bool vmm_post_init_stats_pending;
 static bool init_posted;
 static bool display_posted;
 static bool wm_posted;
@@ -275,6 +284,27 @@ bool m61_post_vmm_init(
     M61_POST(M61_POST_VMM_INIT_BEFORE);
     result = __real_vmm_init(hhdm, paging, memmap);
     M61_POST(M61_POST_VMM_INIT_AFTER);
+    if (!result) {
+        M61_POST(M61_POST_VMM_INIT_FALSE);
+        return result;
+    }
+    M61_POST(M61_POST_VMM_INIT_TRUE);
+    vmm_post_init_stats_pending = true;
+    return result;
+}
+
+bool __wrap_vmm_get_stats(struct vmm_stats *stats) {
+    const bool result = __real_vmm_get_stats(stats);
+
+    if (!vmm_post_init_stats_pending) {
+        return result;
+    }
+    vmm_post_init_stats_pending = false;
+    if (!result) {
+        M61_POST(M61_POST_VMM_STATS_FALSE);
+        return result;
+    }
+    M61_POST(M61_POST_VMM_STATS_TRUE);
     return result;
 }
 
@@ -375,7 +405,7 @@ rm -f build/kernel.elf build/boringos.iso build/.test-mode
 make TEST_MODE=m36-desktop \
     TEST_CPPFLAGS="$CPPFLAGS" \
     TEST_HARNESS_C='kernel/core/m61_desktop_test.c kernel/core/m37_desktop_test_adapter.c kernel/core/block_slice.c kernel/core/xhci_mixed.c kernel/arch/x86_64/xhci_mixed.c kernel/core/usb_mass_storage.c kernel/core/m61_physical_breadcrumbs.c kernel/core/m61_post80_generated.c' \
-    LD='ld --wrap=serial_init --wrap=boring_cpu_inventory_init --wrap=boring_pci_inventory_init --wrap=boring_smbios_boot_init --wrap=boring_framebuffer_boot_init --wrap=pmm_init --wrap=vmm_init --wrap=heap_init --wrap=exception_init --wrap=syscall_test_run --wrap=boring_input_init --wrap=irq_init --wrap=timer_init --wrap=xhci_init --wrap=xhci_address_connected --wrap=xhci_discover_descriptors --wrap=xhci_configure_hid_devices_mixed --wrap=usb_mass_storage_init --wrap=boringfs_vfs_create_writable --wrap=process_set_name --wrap=boring_framebuffer_user_claim --wrap=boring_framebuffer_user_present --wrap=boring_ipc_service_register --wrap=x86_64_exception_dispatch' \
+    LD='ld --wrap=serial_init --wrap=boring_cpu_inventory_init --wrap=boring_pci_inventory_init --wrap=boring_smbios_boot_init --wrap=boring_framebuffer_boot_init --wrap=pmm_init --wrap=vmm_init --wrap=vmm_get_stats --wrap=heap_init --wrap=exception_init --wrap=syscall_test_run --wrap=boring_input_init --wrap=irq_init --wrap=timer_init --wrap=xhci_init --wrap=xhci_address_connected --wrap=xhci_discover_descriptors --wrap=xhci_configure_hid_devices_mixed --wrap=usb_mass_storage_init --wrap=boringfs_vfs_create_writable --wrap=process_set_name --wrap=boring_framebuffer_user_claim --wrap=boring_framebuffer_user_present --wrap=boring_ipc_service_register --wrap=x86_64_exception_dispatch' \
     BOOT_USER_ELF=build/user/boring-init-desktop.elf \
     BOOT_USER_NAME=boring-init.elf \
     BOOT_EXTRA_USER_ELF= BOOT_EXTRA_USER_NAME= \
@@ -395,6 +425,7 @@ import subprocess
 from pathlib import Path
 
 source = Path("kernel/core/m61_post80_generated.c").read_text()
+entry_source = Path("kernel/core/entry.c").read_text()
 ordered = [
     "M61_POST(M61_POST_KERNEL_ENTRY)",
     "M61_POST(M61_POST_EARLY_CONTAINMENT_SERIAL)",
@@ -412,6 +443,44 @@ positions = [source.find(item) for item in ordered]
 if any(position < 0 for position in positions) or positions != sorted(positions):
     raise RuntimeError("M61 POST source milestone sequence is incomplete or reordered")
 
+vmm_init_start = source.index("bool m61_post_vmm_init(")
+vmm_stats_start = source.index("bool __wrap_vmm_get_stats(", vmm_init_start)
+heap_start = source.index("bool m61_post_heap_init(", vmm_stats_start)
+vmm_init_source = source[vmm_init_start:vmm_stats_start]
+vmm_stats_source = source[vmm_stats_start:heap_start]
+for required in (
+    "M61_POST(M61_POST_VMM_INIT_BEFORE);",
+    "result = __real_vmm_init(hhdm, paging, memmap);",
+    "M61_POST(M61_POST_VMM_INIT_AFTER);",
+    "M61_POST(M61_POST_VMM_INIT_FALSE);",
+    "M61_POST(M61_POST_VMM_INIT_TRUE);",
+    "vmm_post_init_stats_pending = true;",
+):
+    if required not in vmm_init_source:
+        raise RuntimeError(f"M61 VMM init source missing: {required}")
+if vmm_init_source.index("M61_POST(M61_POST_VMM_INIT_BEFORE);") > vmm_init_source.index("result = __real_vmm_init(hhdm, paging, memmap);"):
+    raise RuntimeError("M61 VMM 7C is not before real vmm_init")
+if vmm_init_source.index("result = __real_vmm_init(hhdm, paging, memmap);") > vmm_init_source.index("M61_POST(M61_POST_VMM_INIT_AFTER);"):
+    raise RuntimeError("M61 VMM 7D is not after real vmm_init")
+if vmm_init_source.index("M61_POST(M61_POST_VMM_INIT_FALSE);") > vmm_init_source.index("M61_POST(M61_POST_VMM_INIT_TRUE);"):
+    raise RuntimeError("M61 VMM init result branch source is reordered")
+for required in (
+    "const bool result = __real_vmm_get_stats(stats);",
+    "if (!vmm_post_init_stats_pending)",
+    "vmm_post_init_stats_pending = false;",
+    "M61_POST(M61_POST_VMM_STATS_FALSE);",
+    "M61_POST(M61_POST_VMM_STATS_TRUE);",
+):
+    if required not in vmm_stats_source:
+        raise RuntimeError(f"M61 VMM stats source missing: {required}")
+if "framebuffer" in vmm_init_source or "framebuffer" in vmm_stats_source:
+    raise RuntimeError("M61 VMM result bisector gained framebuffer dependency")
+if not re.search(
+    r"if\s*\(\s*!vmm_init\([\s\S]*?\)\s*\|\|\s*!vmm_get_stats\(&vmm_stats\)\s*\)",
+    entry_source,
+):
+    raise RuntimeError("normal VMM short-circuit gate changed")
+
 functions = {
     "boring_kernel_entry": ("61",),
     "m61_post_serial_init": ("62",),
@@ -420,7 +489,8 @@ functions = {
     "m61_post_boring_pci_inventory_init": ("74", "75"),
     "m61_post_boring_smbios_boot_init": ("76", "77"),
     "m61_post_pmm_init": ("7a", "7b"),
-    "m61_post_vmm_init": ("7c", "7d"),
+    "m61_post_vmm_init": ("7c", "7d", "c0", "c1"),
+    "__wrap_vmm_get_stats": ("c2", "c3"),
     "m61_post_heap_init": ("7e", "7f", "63"),
     "m61_post_irq_init": ("64",),
     "m61_post_usb_mass_storage_init": ("65",),
@@ -428,6 +498,14 @@ functions = {
     "m61_post_process_set_name": ("67", "68", "69", "6a"),
     "m61_post_boring_framebuffer_user_present": ("6f",),
 }
+
+def has_low_byte_immediate(body, code):
+    wanted = int(code, 16)
+    for match in re.finditer(r"\$0x([0-9a-f]+)\b", body, re.IGNORECASE):
+        if (int(match.group(1), 16) & 0xff) == wanted:
+            return True
+    return False
+
 out_count = 0
 for name, codes in functions.items():
     body = subprocess.check_output(
@@ -440,15 +518,17 @@ for name, codes in functions.items():
     if "$0x80" not in body:
         raise RuntimeError(f"M61 POST binary hook {name} does not target port 0x80")
     for code in codes:
-        if re.search(rf"\$0x0*{code}\b", body, re.IGNORECASE) is None:
+        if not has_low_byte_immediate(body, code):
             raise RuntimeError(
                 f"M61 POST binary hook {name} missing code 0x{code.upper()}")
     out_count += outputs
-if out_count < 27:
+if out_count < 31:
     raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")
 print("M61 POST port 0x80 binary acceptance: PASS")
 print("M61 POST existing sequence preserved: 61 62 63 64 65 66 67 68 69 6A 6F")
 print("M61 POST 62-to-63 bisector: 70 71 72 73 74 75 76 77 78 79 7A 7B 7C 7D 7E 7F then 63")
+print("M61 VMM result bisector: C0 init-false C1 init-true C2 stats-false C3 stats-true")
+print("M61 VMM short-circuit source gate: PRESERVED")
 print("M61 QEMU port 0x80 observer: SKIPPED (pc/q35 owns ioport80 sink)")
 EOF_POST_VERIFY
 
