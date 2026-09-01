@@ -443,11 +443,35 @@ positions = [source.find(item) for item in ordered]
 if any(position < 0 for position in positions) or positions != sorted(positions):
     raise RuntimeError("M61 POST source milestone sequence is incomplete or reordered")
 
-vmm_init_start = source.index("bool m61_post_vmm_init(")
-vmm_stats_start = source.index("bool __wrap_vmm_get_stats(", vmm_init_start)
-heap_start = source.index("bool m61_post_heap_init(", vmm_stats_start)
-vmm_init_source = source[vmm_init_start:vmm_stats_start]
-vmm_stats_source = source[vmm_stats_start:heap_start]
+def function_definition(name):
+    signature = re.compile(rf"\bbool\s+{re.escape(name)}\s*\(")
+    for match in signature.finditer(source):
+        position = match.end()
+        depth = 1
+        while position < len(source) and depth:
+            if source[position] == "(":
+                depth += 1
+            elif source[position] == ")":
+                depth -= 1
+            position += 1
+        if depth or source[position:].lstrip()[:1] != "{":
+            continue
+        body_start = source.index("{", position)
+        position = body_start + 1
+        depth = 1
+        while position < len(source) and depth:
+            if source[position] == "{":
+                depth += 1
+            elif source[position] == "}":
+                depth -= 1
+            position += 1
+        if depth:
+            raise RuntimeError(f"M61 function definition is incomplete: {name}")
+        return source[match.start():position]
+    raise RuntimeError(f"M61 function definition missing: {name}")
+
+vmm_init_source = function_definition("m61_post_vmm_init")
+vmm_stats_source = function_definition("__wrap_vmm_get_stats")
 for required in (
     "M61_POST(M61_POST_VMM_INIT_BEFORE);",
     "result = __real_vmm_init(hhdm, paging, memmap);",
@@ -462,8 +486,13 @@ if vmm_init_source.index("M61_POST(M61_POST_VMM_INIT_BEFORE);") > vmm_init_sourc
     raise RuntimeError("M61 VMM 7C is not before real vmm_init")
 if vmm_init_source.index("result = __real_vmm_init(hhdm, paging, memmap);") > vmm_init_source.index("M61_POST(M61_POST_VMM_INIT_AFTER);"):
     raise RuntimeError("M61 VMM 7D is not after real vmm_init")
-if vmm_init_source.index("M61_POST(M61_POST_VMM_INIT_FALSE);") > vmm_init_source.index("M61_POST(M61_POST_VMM_INIT_TRUE);"):
-    raise RuntimeError("M61 VMM init result branch source is reordered")
+if not re.search(
+    r"if\s*\(\s*!result\s*\)\s*\{\s*"
+    r"M61_POST\(M61_POST_VMM_INIT_FALSE\);\s*return result;\s*\}\s*"
+    r"M61_POST\(M61_POST_VMM_INIT_TRUE\);",
+    vmm_init_source,
+):
+    raise RuntimeError("M61 VMM init result POST branches are not separated")
 for required in (
     "const bool result = __real_vmm_get_stats(stats);",
     "if (!vmm_post_init_stats_pending)",
@@ -473,6 +502,13 @@ for required in (
 ):
     if required not in vmm_stats_source:
         raise RuntimeError(f"M61 VMM stats source missing: {required}")
+if not re.search(
+    r"if\s*\(\s*!result\s*\)\s*\{\s*"
+    r"M61_POST\(M61_POST_VMM_STATS_FALSE\);\s*return result;\s*\}\s*"
+    r"M61_POST\(M61_POST_VMM_STATS_TRUE\);",
+    vmm_stats_source,
+):
+    raise RuntimeError("M61 VMM stats result POST branches are not separated")
 if "framebuffer" in vmm_init_source or "framebuffer" in vmm_stats_source:
     raise RuntimeError("M61 VMM result bisector gained framebuffer dependency")
 if not re.search(
