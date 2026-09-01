@@ -441,16 +441,18 @@ def require_boolean_result_split(graph, function_start: int, function_end: int,
         raise RuntimeError(f"{label} has no complete result-test branch after call")
 
     result_index = call_index + 1
-    result_register = 0
+    result_registers = {0}
     test_address, test_raw, _test_asm = rows[result_index]
-    # Accept one exact result-preserving `mov %eax,%ecx|%edx|%ebx`. The real
-    # return value then lives in the corresponding low byte register.
+    # Accept one exact result-preserving `mov %eax,%ecx|%edx|%ebx`. The copy
+    # creates a second valid low-byte carrier; AL remains the returned boolean
+    # until an instruction below explicitly overwrites AL/EAX.
     if (
         len(test_raw) == 2
         and test_raw[0] == 0x89
         and 0xC1 <= test_raw[1] <= 0xC3
     ):
-        result_register = test_raw[1] & 0x07
+        preserved_register = test_raw[1] & 0x07
+        result_registers.add(preserved_register)
         result_index += 1
         if result_index + 3 >= len(rows):
             raise RuntimeError(f"{label} has no complete result-test branch after preserved copy")
@@ -458,18 +460,24 @@ def require_boolean_result_split(graph, function_start: int, function_end: int,
 
         # GCC may hoist only the immediate load for the first true-path POST
         # ahead of the boolean split. It is not observable until the later OUT,
-        # which the CFG proof below still requires to be true-only.
+        # which the CFG proof below still requires to be true-only. Such a load
+        # does overwrite AL, so only the preserved low-byte carrier remains.
         if loaded_al_code(test_raw) == 0x7B:
+            result_registers.discard(0)
             result_index += 1
             if result_index + 2 >= len(rows):
                 raise RuntimeError(f"{label} has no complete result-test branch after POST preload")
             test_address, test_raw, _test_asm = rows[result_index]
 
     branch_address, branch_raw, _branch_asm = rows[result_index + 1]
-    if not is_boolean_register_zero_test(test_raw, result_register):
+    if not any(
+        is_boolean_register_zero_test(test_raw, register)
+        for register in result_registers
+    ):
         raise RuntimeError(
             f"{label} does not test the returned/preserved boolean byte: "
-            f"register={result_register} 0x{test_address:x} bytes={test_raw.hex()}"
+            f"registers={sorted(result_registers)} 0x{test_address:x} "
+            f"bytes={test_raw.hex()}"
         )
     decoded = decode_direct_transfer(branch_address, branch_raw)
     if decoded is None or decoded[0] != "branch" or decoded[2] not in (0x4, 0x5):
