@@ -28,6 +28,10 @@ bool vmm_translate(uintptr_t virtual_address, uint64_t *physical_address);
 bool vmm_get_stats(struct vmm_stats *stats);
 uintptr_t vmm_test_virtual_address(void);
 
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+uint8_t boring_m61_vmm_failure_reason(void);
+#endif
+
 /*
  * Explicit PCI-MMIO path. Unlike vmm_map_page(), the physical pages mapped by
  * this interface are not PMM-owned RAM. The mapper uses a bounded dedicated
