@@ -286,9 +286,28 @@ pmm_dis = subprocess.check_output(
 )
 if "out" not in pmm_dis or "$0x80" not in pmm_dis:
     raise RuntimeError("linked pmm_init has no direct port-0x80 reason output")
+
+pmm_instructions = []
+for line in pmm_dis.splitlines():
+    match = re.match(
+        r"^\s*[0-9a-f]+:\s+(?:[0-9a-f]{2}\s+)+\s*(.*)$", line, re.IGNORECASE
+    )
+    if match is not None:
+        pmm_instructions.append(match.group(1).strip())
+linked_reason_codes = set()
+for previous_instruction, instruction in zip(pmm_instructions, pmm_instructions[1:]):
+    if re.search(r"\bout\s+%al,\$0x80\b", instruction, re.IGNORECASE) is None:
+        continue
+    immediate = re.search(
+        r"\bmov(?:abs)?\s+\$0x([0-9a-f]+),%(?:eax|rax|al)\b",
+        previous_instruction,
+        re.IGNORECASE,
+    )
+    if immediate is not None:
+        linked_reason_codes.add(int(immediate.group(1), 16) & 0xFF)
 for code in reason_blocks:
-    if re.search(rf"\$0x0*{code:02x}\b", pmm_dis, re.IGNORECASE) is None:
-        raise RuntimeError(f"linked pmm_init missing reason immediate 0x{code:02X}")
+    if code not in linked_reason_codes:
+        raise RuntimeError(f"linked pmm_init missing reason POST 0x{code:02X}")
 
 shim_dis = subprocess.check_output(
     ["objdump", "-d", "--disassemble=m61_post_pmm_init", str(elf)],
