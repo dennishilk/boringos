@@ -4,6 +4,11 @@
 #include <boring/usb_mass_storage.h>
 #include <boring/xhci.h>
 
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+#include <boring/io.h>
+uint8_t boring_m61_usb_mass_storage_failure_reason(void);
+#endif
+
 bool usb_mass_storage_init_legacy(struct xhci_state *state);
 
 #define USB_MASS_STORAGE_RUNTIME 1
