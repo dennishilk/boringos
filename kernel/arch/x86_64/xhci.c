@@ -13,6 +13,31 @@
 #include <boring/io.h>
 
 enum xhci_m61_post_code {
+    XHCI_M61_RINGS_FALSE_SCRATCHPAD_UNSUPPORTED = 0x40,
+    XHCI_M61_RINGS_FALSE_DCBAA_PMM = 0x41,
+    XHCI_M61_RINGS_FALSE_DCBAA_HHDM = 0x42,
+    XHCI_M61_RINGS_FALSE_COMMAND_RING_PMM = 0x43,
+    XHCI_M61_RINGS_FALSE_COMMAND_RING_HHDM = 0x44,
+    XHCI_M61_RINGS_FALSE_EVENT_RING_PMM = 0x45,
+    XHCI_M61_RINGS_FALSE_EVENT_RING_HHDM = 0x46,
+    XHCI_M61_RINGS_FALSE_ERST_PMM = 0x47,
+    XHCI_M61_RINGS_FALSE_ERST_HHDM = 0x48,
+    XHCI_M61_RINGS_FALSE_DCBAAP_READBACK = 0x49,
+    XHCI_M61_RINGS_PROGRESS_DCBAA_ALLOCATION = 0x4a,
+    XHCI_M61_RINGS_PROGRESS_COMMAND_RING_ALLOCATION = 0x4b,
+    XHCI_M61_RINGS_PROGRESS_EVENT_RING_ALLOCATION = 0x4c,
+    XHCI_M61_RINGS_PROGRESS_ERST_ALLOCATION = 0x4d,
+    XHCI_M61_RINGS_PROGRESS_SOFTWARE_INITIALIZATION = 0x4e,
+    XHCI_M61_RINGS_PROGRESS_DCBAAP_WRITE = 0x4f,
+    XHCI_M61_RINGS_PROGRESS_CRCR_WRITE = 0x50,
+    XHCI_M61_RINGS_PROGRESS_CONFIG_WRITE = 0x51,
+    XHCI_M61_RINGS_PROGRESS_IMAN_WRITE = 0x52,
+    XHCI_M61_RINGS_PROGRESS_ERSTSZ_WRITE = 0x53,
+    XHCI_M61_RINGS_PROGRESS_ERSTBA_WRITE = 0x54,
+    XHCI_M61_RINGS_PROGRESS_ERDP_WRITE = 0x55,
+    XHCI_M61_RINGS_PROGRESS_DCBAAP_READBACK = 0x56,
+    XHCI_M61_RINGS_SUCCESS = 0x57,
+
     XHCI_M61_PROGRESS_CONTROLLER_DISCOVERY = 0x88,
     XHCI_M61_PROGRESS_BAR_VALIDATION = 0x89,
     XHCI_M61_PROGRESS_PCI_ENABLE = 0x8a,
@@ -43,7 +68,14 @@ enum xhci_m61_post_code {
     XHCI_M61_FALSE_START = 0xbe
 };
 
+enum xhci_m61_frame_alloc_failure {
+    XHCI_M61_FRAME_ALLOC_NONE = 0,
+    XHCI_M61_FRAME_ALLOC_PMM,
+    XHCI_M61_FRAME_ALLOC_HHDM
+};
+
 static uint8_t xhci_m61_failure_reason;
+static enum xhci_m61_frame_alloc_failure xhci_m61_frame_alloc_failure;
 
 #define XHCI_M61_BEGIN() \
     do { xhci_m61_failure_reason = 0U; } while (0)
@@ -55,11 +87,23 @@ static uint8_t xhci_m61_failure_reason;
         XHCI_M61_PROGRESS(code); \
         goto out; \
     } while (0)
+#define XHCI_M61_FAIL_PRESERVING_REASON(code) \
+    do { \
+        XHCI_M61_PROGRESS(code); \
+        goto out; \
+    } while (0)
 #define XHCI_M61_RETURN_FALSE(code) \
     do { \
         xhci_m61_failure_reason = (uint8_t)(code); \
         XHCI_M61_PROGRESS(code); \
         return false; \
+    } while (0)
+#define XHCI_M61_RINGS_ALLOC_RETURN_FALSE(pmm_code, hhdm_code) \
+    do { \
+        XHCI_M61_RETURN_FALSE( \
+            xhci_m61_frame_alloc_failure == XHCI_M61_FRAME_ALLOC_PMM \
+                ? (pmm_code) \
+                : (hhdm_code)); \
     } while (0)
 
 uint8_t boring_m61_xhci_failure_reason(void) {
@@ -70,7 +114,11 @@ uint8_t boring_m61_xhci_failure_reason(void) {
 #define XHCI_M61_PROGRESS(code) do { } while (0)
 #define XHCI_M61_FAIL(code) \
     do { goto out; } while (0)
+#define XHCI_M61_FAIL_PRESERVING_REASON(code) \
+    do { goto out; } while (0)
 #define XHCI_M61_RETURN_FALSE(code) \
+    do { return false; } while (0)
+#define XHCI_M61_RINGS_ALLOC_RETURN_FALSE(pmm_code, hhdm_code) \
     do { return false; } while (0)
 #endif
 
@@ -247,10 +295,19 @@ static bool wait_mask(volatile uint8_t *base, uint32_t offset,
 static bool frame_alloc_zero(uint64_t *physical, void **virtual_address) {
     size_t index;
     uint8_t *bytes;
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    xhci_m61_frame_alloc_failure = XHCI_M61_FRAME_ALLOC_NONE;
+#endif
     if (!pmm_alloc_frame_in_range(0ULL, XHCI_DMA_32BIT_LIMIT, physical)) {
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        xhci_m61_frame_alloc_failure = XHCI_M61_FRAME_ALLOC_PMM;
+#endif
         return false;
     }
     if (!vmm_pmm_frame_to_hhdm(*physical, virtual_address)) {
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        xhci_m61_frame_alloc_failure = XHCI_M61_FRAME_ALLOC_HHDM;
+#endif
         (void)pmm_free_frame(*physical);
         *physical = 0ULL;
         return false;
@@ -277,13 +334,42 @@ static bool rings_initialize(volatile uint8_t *base,
     const uint32_t interrupter = capabilities->runtime_offset +
                                  XHCI_RUNTIME_INTERRUPTER0;
 
-    if (capabilities->scratchpad_count != 0U) { return false; }
+    if (capabilities->scratchpad_count != 0U) {
+        XHCI_M61_RETURN_FALSE(
+            XHCI_M61_RINGS_FALSE_SCRATCHPAD_UNSUPPORTED);
+    }
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_DCBAA_ALLOCATION);
+    if (!frame_alloc_zero(&state->dcbaa_physical, &dcbaa_virtual)) {
+        XHCI_M61_RINGS_ALLOC_RETURN_FALSE(XHCI_M61_RINGS_FALSE_DCBAA_PMM,
+                                          XHCI_M61_RINGS_FALSE_DCBAA_HHDM);
+    }
+    XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_COMMAND_RING_ALLOCATION);
+    if (!frame_alloc_zero(&state->command_ring_physical, &command_virtual)) {
+        XHCI_M61_RINGS_ALLOC_RETURN_FALSE(
+            XHCI_M61_RINGS_FALSE_COMMAND_RING_PMM,
+            XHCI_M61_RINGS_FALSE_COMMAND_RING_HHDM);
+    }
+    XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_EVENT_RING_ALLOCATION);
+    if (!frame_alloc_zero(&state->event_ring_physical, &event_virtual)) {
+        XHCI_M61_RINGS_ALLOC_RETURN_FALSE(
+            XHCI_M61_RINGS_FALSE_EVENT_RING_PMM,
+            XHCI_M61_RINGS_FALSE_EVENT_RING_HHDM);
+    }
+    XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_ERST_ALLOCATION);
+    if (!frame_alloc_zero(&state->erst_physical, &erst_virtual)) {
+        XHCI_M61_RINGS_ALLOC_RETURN_FALSE(XHCI_M61_RINGS_FALSE_ERST_PMM,
+                                          XHCI_M61_RINGS_FALSE_ERST_HHDM);
+    }
+    XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_SOFTWARE_INITIALIZATION);
+#else
     if (!frame_alloc_zero(&state->dcbaa_physical, &dcbaa_virtual) ||
         !frame_alloc_zero(&state->command_ring_physical, &command_virtual) ||
         !frame_alloc_zero(&state->event_ring_physical, &event_virtual) ||
         !frame_alloc_zero(&state->erst_physical, &erst_virtual)) {
         return false;
     }
+#endif
     (void)dcbaa_virtual;
     (void)event_virtual;
     command = (struct xhci_trb *)command_virtual;
@@ -299,14 +385,21 @@ static bool rings_initialize(volatile uint8_t *base,
     erst->reserved = 0U;
     memory_barrier();
 
+    XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_DCBAAP_WRITE);
     mmio_write64(base, operational + 0x30U, state->dcbaa_physical);
+    XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_CRCR_WRITE);
     mmio_write64(base, operational + 0x18U,
                  state->command_ring_physical | XHCI_TRB_CYCLE);
+    XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_CONFIG_WRITE);
     mmio_write32(base, operational + 0x38U,
                  (uint32_t)capabilities->max_slots);
+    XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_IMAN_WRITE);
     mmio_write32(base, interrupter + 0x00U, 0U);
+    XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_ERSTSZ_WRITE);
     mmio_write32(base, interrupter + 0x08U, 1U);
+    XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_ERSTBA_WRITE);
     mmio_write64(base, interrupter + 0x10U, state->erst_physical);
+    XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_ERDP_WRITE);
     mmio_write64(base, interrupter + 0x18U, state->event_ring_physical);
     memory_barrier();
     runtime_state.mmio = base;
@@ -320,8 +413,17 @@ static bool rings_initialize(volatile uint8_t *base,
     runtime_state.event_cycle = true;
     runtime_state.command_outstanding = false;
     runtime_state.outstanding_command_physical = 0ULL;
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_DCBAAP_READBACK);
+    if (mmio_read64(base, operational + 0x30U) != state->dcbaa_physical) {
+        XHCI_M61_RETURN_FALSE(XHCI_M61_RINGS_FALSE_DCBAAP_READBACK);
+    }
+    XHCI_M61_PROGRESS(XHCI_M61_RINGS_SUCCESS);
+    return true;
+#else
     return (mmio_read64(base, operational + 0x30U) ==
             state->dcbaa_physical);
+#endif
 }
 
 static void state_clear(struct xhci_state *state) {
@@ -1064,7 +1166,7 @@ bool xhci_init(struct xhci_state *state) {
     }
     XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_RINGS_SETUP);
     if (!rings_initialize(base, &active_state.capabilities, &active_state)) {
-        XHCI_M61_FAIL(XHCI_M61_FALSE_RINGS_SETUP);
+        XHCI_M61_FAIL_PRESERVING_REASON(XHCI_M61_FALSE_RINGS_SETUP);
     }
 #else
     if (!wait_mask(base, operational + 0x00U, XHCI_USBCMD_RESET, false) ||
