@@ -201,8 +201,8 @@ else:
         "accept sign-extended POST immediates")
 
 replace_once(
-    'if out_count < 32:\n',
-    'if out_count < 38:\n',
+    'if out_count < 55:\n',
+    'if out_count < 61:\n',
     "derived POST output threshold")
 old_binary_tail = (
     '    raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")\n')
