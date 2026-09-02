@@ -43,6 +43,21 @@ cat > "$POST_SOURCE" <<'EOF_POST_C'
 #ifdef __real_irq_init
 #undef __real_irq_init
 #endif
+#ifdef __real_timer_init
+#undef __real_timer_init
+#endif
+#ifdef __real_xhci_init
+#undef __real_xhci_init
+#endif
+#ifdef __real_xhci_address_connected
+#undef __real_xhci_address_connected
+#endif
+#ifdef __real_xhci_discover_descriptors
+#undef __real_xhci_discover_descriptors
+#endif
+#ifdef __real_xhci_configure_hid_devices_mixed
+#undef __real_xhci_configure_hid_devices_mixed
+#endif
 #ifdef __real_usb_mass_storage_init
 #undef __real_usb_mass_storage_init
 #endif
@@ -56,6 +71,7 @@ cat > "$POST_SOURCE" <<'EOF_POST_C'
 #undef __real_boring_framebuffer_user_present
 #endif
 
+#include <boring/block_device.h>
 #include <boring/boot_protocol.h>
 #include <boring/boringfs_vfs.h>
 #include <boring/framebuffer.h>
@@ -64,8 +80,11 @@ cat > "$POST_SOURCE" <<'EOF_POST_C'
 #include <boring/io.h>
 #include <boring/irq.h>
 #include <boring/process.h>
+#include <boring/timer.h>
 #include <boring/usb_mass_storage.h>
 #include <boring/vmm.h>
+#include <boring/xhci.h>
+#include <boring/xhci_mixed.h>
 
 #ifndef BORING_M61_PHYSICAL_BREADCRUMBS
 #error "M61 POST-port witness must stay candidate-build gated"
@@ -109,6 +128,31 @@ enum m61_post_code {
     M61_POST_VMM_INIT_FALSE = 0xc0,
     M61_POST_VMM_INIT_TRUE = 0xc1,
     M61_POST_VMM_STATS_FALSE = 0xc2,
+
+    M61_POST_AFTER_IRQ_SUCCESS = 0xe7,
+    M61_POST_TIMER_CALL = 0xe8,
+    M61_POST_XHCI_INIT_CALL = 0xe9,
+    M61_POST_XHCI_ADDRESS_CALL = 0xea,
+    M61_POST_XHCI_DESCRIPTORS_CALL = 0xeb,
+    M61_POST_XHCI_HID_CONFIG_CALL = 0xec,
+    M61_POST_XHCI_HID_CONFIG_TRUE = 0xed,
+    M61_POST_BLOCK_DEVICE_INIT_CALL = 0xee,
+    M61_POST_BLOCK_DEVICE_INIT_RETURNED = 0xef,
+    M61_POST_USB_CALL_ENTRY = 0xf0,
+    M61_POST_USB_IMPL_ENTRY = 0xf1,
+    M61_POST_USB_STATE_ACCEPTED = 0xf2,
+    M61_POST_USB_DISCOVERY_MMIO = 0xf3,
+    M61_POST_USB_TRANSPORT_CONFIG = 0xf4,
+    M61_POST_USB_SCSI_INIT = 0xf5,
+    M61_POST_USB_BLOCK_REGISTER = 0xf6,
+    M61_POST_USB_RETURNED_TRUE = 0xf7,
+    M61_POST_USB_RETURNED_FALSE = 0xf8,
+    M61_POST_USB_FALSE_STATE = 0xf9,
+    M61_POST_USB_FALSE_DISCOVERY_MMIO = 0xfa,
+    M61_POST_USB_FALSE_TRANSPORT_CONFIG = 0xfb,
+    M61_POST_USB_FALSE_SCSI_INIT = 0xfc,
+    M61_POST_USB_FALSE_BLOCK_REGISTER = 0xfd,
+
     M61_POST_VMM_STATS_TRUE = 0xc3
 };
 
@@ -140,7 +184,14 @@ bool __real_vmm_get_stats(struct vmm_stats *stats);
 uint8_t boring_m61_vmm_failure_reason(void);
 bool __real_heap_init(void);
 bool __real_irq_init(void);
+bool __real_timer_init(uint32_t frequency_hz);
+bool __real_xhci_init(struct xhci_state *state);
+bool __real_xhci_address_connected(struct xhci_state *state);
+bool __real_xhci_discover_descriptors(struct xhci_state *state);
+bool __real_xhci_configure_hid_devices_mixed(struct xhci_state *state);
+void __real_block_device_init(void);
 bool __real_usb_mass_storage_init(struct xhci_state *state);
+uint8_t boring_m61_usb_mass_storage_failure_reason(void);
 enum vfs_result __real_boringfs_vfs_create_writable(
     const struct block_device *device, uint64_t id,
     struct boringfs_vfs **out, struct boringfs_validation_error *error);
@@ -162,6 +213,12 @@ bool m61_post_vmm_init(const struct boring_limine_hhdm_response *,
 bool __wrap_vmm_get_stats(struct vmm_stats *stats);
 bool m61_post_heap_init(void);
 bool m61_post_irq_init(void);
+bool m61_post_timer_init(uint32_t frequency_hz);
+bool m61_post_xhci_init(struct xhci_state *state);
+bool m61_post_xhci_address_connected(struct xhci_state *state);
+bool m61_post_xhci_discover_descriptors(struct xhci_state *state);
+bool m61_post_xhci_configure_hid_devices_mixed(struct xhci_state *state);
+void __wrap_block_device_init(void);
 bool m61_post_usb_mass_storage_init(struct xhci_state *state);
 enum vfs_result m61_post_boringfs_vfs_create_writable(
     const struct block_device *device, uint64_t id,
@@ -332,19 +389,68 @@ bool m61_post_irq_init(void) {
     const bool result = __real_irq_init();
 
     if (result) {
-        /* Normal exception setup precedes the runtime IRQ foundation. */
+        /* Preserve 64, then prove execution resumed beyond that exact point. */
         M61_POST(M61_POST_EXCEPTION_IRQ);
+        M61_POST(M61_POST_AFTER_IRQ_SUCCESS);
     }
     return result;
 }
 
-bool m61_post_usb_mass_storage_init(struct xhci_state *state) {
-    const bool result = __real_usb_mass_storage_init(state);
+bool m61_post_timer_init(uint32_t frequency_hz) {
+    M61_POST(M61_POST_TIMER_CALL);
+    return __real_timer_init(frequency_hz);
+}
 
+bool m61_post_xhci_init(struct xhci_state *state) {
+    M61_POST(M61_POST_XHCI_INIT_CALL);
+    return __real_xhci_init(state);
+}
+
+bool m61_post_xhci_address_connected(struct xhci_state *state) {
+    M61_POST(M61_POST_XHCI_ADDRESS_CALL);
+    return __real_xhci_address_connected(state);
+}
+
+bool m61_post_xhci_discover_descriptors(struct xhci_state *state) {
+    M61_POST(M61_POST_XHCI_DESCRIPTORS_CALL);
+    return __real_xhci_discover_descriptors(state);
+}
+
+bool m61_post_xhci_configure_hid_devices_mixed(struct xhci_state *state) {
+    bool result;
+
+    M61_POST(M61_POST_XHCI_HID_CONFIG_CALL);
+    result = __real_xhci_configure_hid_devices_mixed(state);
     if (result) {
-        /* xHCI discovery/configuration precedes successful USB storage. */
-        M61_POST(M61_POST_USB_STORAGE);
+        M61_POST(M61_POST_XHCI_HID_CONFIG_TRUE);
     }
+    return result;
+}
+
+void __wrap_block_device_init(void) {
+    M61_POST(M61_POST_BLOCK_DEVICE_INIT_CALL);
+    __real_block_device_init();
+    M61_POST(M61_POST_BLOCK_DEVICE_INIT_RETURNED);
+}
+
+bool m61_post_usb_mass_storage_init(struct xhci_state *state) {
+    bool result;
+
+    M61_POST(M61_POST_USB_CALL_ENTRY);
+    result = __real_usb_mass_storage_init(state);
+    if (!result) {
+        uint8_t failure_reason;
+
+        M61_POST(M61_POST_USB_RETURNED_FALSE);
+        failure_reason = boring_m61_usb_mass_storage_failure_reason();
+        if (failure_reason != 0U) {
+            M61_POST(failure_reason);
+        }
+        return result;
+    }
+    M61_POST(M61_POST_USB_RETURNED_TRUE);
+    /* Preserve 65 exclusively as successful USB mass-storage initialization. */
+    M61_POST(M61_POST_USB_STORAGE);
     return result;
 }
 
@@ -401,7 +507,7 @@ EOF_POST_C
 # observer. Keep the established QEMU runtime acceptance unchanged and prove
 # here that the exact diagnostic kernel contains the real out instructions at
 # every intended call boundary. Physical hardware remains the port-0x80 oracle.
-POST_CPPFLAGS='-Dboring_kernel_entry=m61_post_real_boring_kernel_entry -D__real_serial_init=m61_post_serial_init -D__real_boring_cpu_inventory_init=m61_post_boring_cpu_inventory_init -D__real_boring_pci_inventory_init=m61_post_boring_pci_inventory_init -D__real_boring_smbios_boot_init=m61_post_boring_smbios_boot_init -D__real_pmm_init=m61_post_pmm_init -D__real_vmm_init=m61_post_vmm_init -D__real_heap_init=m61_post_heap_init -D__real_irq_init=m61_post_irq_init -D__real_usb_mass_storage_init=m61_post_usb_mass_storage_init -D__real_boringfs_vfs_create_writable=m61_post_boringfs_vfs_create_writable -D__real_process_set_name=m61_post_process_set_name -D__real_boring_framebuffer_user_present=m61_post_boring_framebuffer_user_present'
+POST_CPPFLAGS='-Dboring_kernel_entry=m61_post_real_boring_kernel_entry -D__real_serial_init=m61_post_serial_init -D__real_boring_cpu_inventory_init=m61_post_boring_cpu_inventory_init -D__real_boring_pci_inventory_init=m61_post_boring_pci_inventory_init -D__real_boring_smbios_boot_init=m61_post_boring_smbios_boot_init -D__real_pmm_init=m61_post_pmm_init -D__real_vmm_init=m61_post_vmm_init -D__real_heap_init=m61_post_heap_init -D__real_irq_init=m61_post_irq_init -D__real_timer_init=m61_post_timer_init -D__real_xhci_init=m61_post_xhci_init -D__real_xhci_address_connected=m61_post_xhci_address_connected -D__real_xhci_discover_descriptors=m61_post_xhci_discover_descriptors -D__real_xhci_configure_hid_devices_mixed=m61_post_xhci_configure_hid_devices_mixed -D__real_usb_mass_storage_init=m61_post_usb_mass_storage_init -D__real_boringfs_vfs_create_writable=m61_post_boringfs_vfs_create_writable -D__real_process_set_name=m61_post_process_set_name -D__real_boring_framebuffer_user_present=m61_post_boring_framebuffer_user_present'
 CPPFLAGS="-DBORING_M36_DESKTOP_ACCEPTANCE=1 -DBORING_M37_DESKTOP_ACCEPTANCE=1 -DBORING_M54_USB_ONLY_DESKTOP=1 -DBORING_M61_PHYSICAL_BREADCRUMBS=1 $POST_CPPFLAGS"
 if [ "${M61_EARLY_FAULT_TEST:-0}" = 1 ]; then
     CPPFLAGS="$CPPFLAGS -DBORING_M61_EARLY_FAULT_TEST=1"
@@ -412,7 +518,7 @@ rm -f build/kernel.elf build/boringos.iso build/.test-mode
 make TEST_MODE=m36-desktop \
     TEST_CPPFLAGS="$CPPFLAGS" \
     TEST_HARNESS_C='kernel/core/m61_desktop_test.c kernel/core/m37_desktop_test_adapter.c kernel/core/block_slice.c kernel/core/xhci_mixed.c kernel/arch/x86_64/xhci_mixed.c kernel/core/usb_mass_storage.c kernel/core/m61_physical_breadcrumbs.c kernel/core/m61_post80_generated.c' \
-    LD='ld --wrap=serial_init --wrap=boring_cpu_inventory_init --wrap=boring_pci_inventory_init --wrap=boring_smbios_boot_init --wrap=boring_framebuffer_boot_init --wrap=pmm_init --wrap=vmm_init --wrap=vmm_get_stats --wrap=heap_init --wrap=exception_init --wrap=syscall_test_run --wrap=boring_input_init --wrap=irq_init --wrap=timer_init --wrap=xhci_init --wrap=xhci_address_connected --wrap=xhci_discover_descriptors --wrap=xhci_configure_hid_devices_mixed --wrap=usb_mass_storage_init --wrap=boringfs_vfs_create_writable --wrap=process_set_name --wrap=boring_framebuffer_user_claim --wrap=boring_framebuffer_user_present --wrap=boring_ipc_service_register --wrap=x86_64_exception_dispatch' \
+    LD='ld --wrap=serial_init --wrap=boring_cpu_inventory_init --wrap=boring_pci_inventory_init --wrap=boring_smbios_boot_init --wrap=boring_framebuffer_boot_init --wrap=pmm_init --wrap=vmm_init --wrap=vmm_get_stats --wrap=heap_init --wrap=exception_init --wrap=syscall_test_run --wrap=boring_input_init --wrap=irq_init --wrap=timer_init --wrap=xhci_init --wrap=xhci_address_connected --wrap=xhci_discover_descriptors --wrap=xhci_configure_hid_devices_mixed --wrap=block_device_init --wrap=usb_mass_storage_init --wrap=boringfs_vfs_create_writable --wrap=process_set_name --wrap=boring_framebuffer_user_claim --wrap=boring_framebuffer_user_present --wrap=boring_ipc_service_register --wrap=x86_64_exception_dispatch' \
     BOOT_USER_ELF=build/user/boring-init-desktop.elf \
     BOOT_USER_NAME=boring-init.elf \
     BOOT_EXTRA_USER_ELF= BOOT_EXTRA_USER_NAME= \
@@ -426,6 +532,7 @@ nm build/kernel.elf | grep -Fq 'boring_m61_post_port80_enabled'
 nm build/kernel.elf | grep -Fq 'boring_m61_post_sequence'
 nm build/kernel.elf | grep -Fq 'boring_m61_post_62_to_63_sequence'
 nm build/kernel.elf | grep -Fq 'boring_m61_vmm_failure_reason'
+nm build/kernel.elf | grep -Fq 'boring_m61_usb_mass_storage_failure_reason'
 
 python3 - <<'EOF_POST_VERIFY'
 import re
@@ -435,6 +542,9 @@ from pathlib import Path
 source = Path("kernel/core/m61_post80_generated.c").read_text()
 entry_source = Path("kernel/core/entry.c").read_text()
 vmm_source = Path("kernel/arch/x86_64/vmm.c").read_text()
+usb_source = Path("kernel/core/usb_mass_storage_impl.inc").read_text()
+m37_source = Path("kernel/core/m37_desktop_test.c").read_text()
+m61_source = Path("kernel/core/m61_desktop_test.c").read_text()
 ordered = [
     "M61_POST(M61_POST_KERNEL_ENTRY)",
     "M61_POST(M61_POST_EARLY_CONTAINMENT_SERIAL)",
@@ -452,31 +562,31 @@ positions = [source.find(item) for item in ordered]
 if any(position < 0 for position in positions) or positions != sorted(positions):
     raise RuntimeError("M61 POST source milestone sequence is incomplete or reordered")
 
-def function_definition(name):
+def function_definition(name, text=source):
     signature = re.compile(rf"\bbool\s+{re.escape(name)}\s*\(")
-    for match in signature.finditer(source):
+    for match in signature.finditer(text):
         position = match.end()
         depth = 1
-        while position < len(source) and depth:
-            if source[position] == "(":
+        while position < len(text) and depth:
+            if text[position] == "(":
                 depth += 1
-            elif source[position] == ")":
+            elif text[position] == ")":
                 depth -= 1
             position += 1
-        if depth or source[position:].lstrip()[:1] != "{":
+        if depth or text[position:].lstrip()[:1] != "{":
             continue
-        body_start = source.index("{", position)
+        body_start = text.index("{", position)
         position = body_start + 1
         depth = 1
-        while position < len(source) and depth:
-            if source[position] == "{":
+        while position < len(text) and depth:
+            if text[position] == "{":
                 depth += 1
-            elif source[position] == "}":
+            elif text[position] == "}":
                 depth -= 1
             position += 1
         if depth:
             raise RuntimeError(f"M61 function definition is incomplete: {name}")
-        return source[match.start():position]
+        return text[match.start():position]
     raise RuntimeError(f"M61 function definition missing: {name}")
 
 vmm_init_source = function_definition("m61_post_vmm_init")
@@ -580,6 +690,109 @@ if not (4097 > vmm_memory_map_cap):
 if any(token in vmm_source for token in ("serial_write", "framebuffer")):
     raise RuntimeError("M61 VMM failure classification gained serial/framebuffer dependency")
 
+# Audit the exact post-64 path inherited by M61 from the M37/M54 desktop.
+input_hardware = function_definition("input_hardware_init", m37_source)
+pre_usb_calls = (
+    "irq_init()", "timer_init(100U)", "xhci_init(&state)",
+    "xhci_address_connected(&state)", "xhci_discover_descriptors(&state)",
+    "xhci_configure_hid_devices(&state)", "m54_hid_protocols_ready(&state)",
+)
+pre_usb_positions = [input_hardware.find(call) for call in pre_usb_calls]
+if any(position < 0 for position in pre_usb_positions) or pre_usb_positions != sorted(pre_usb_positions):
+    raise RuntimeError("M61 real IRQ-to-xHCI pre-USB call order changed")
+mount_root = function_definition("mount_root", m37_source)
+if mount_root.find("block_device_init();") < 0 or mount_root.find("virtio_blk_init()") < 0 or mount_root.find("block_device_init();") > mount_root.find("virtio_blk_init()"):
+    raise RuntimeError("M61 block-device initialization no longer precedes USB-root init")
+root_state = m61_source.find("const struct xhci_state *published = xhci_get_state();")
+root_usb = m61_source.find("usb_mass_storage_init(&state)")
+if root_state < 0 or root_usb < 0 or root_state > root_usb:
+    raise RuntimeError("M61 root no longer obtains published xHCI state before USB storage")
+
+new_post_codes = list(range(0xE7, 0xFE))
+if len(new_post_codes) != 23 or len(set(new_post_codes)) != 23:
+    raise RuntimeError("M61 USB bisector code inventory is not exactly E7-FD")
+if set(new_post_codes) & set(reason_codes):
+    raise RuntimeError("M61 USB bisector overlaps the VMM D0-E6 reason namespace")
+for code in new_post_codes:
+    literal = f"0x{code:02x}"
+    if len(re.findall(rf"=\s*{re.escape(literal)}\b", source, re.IGNORECASE)) != 1:
+        raise RuntimeError(f"M61 USB bisector enum code missing/duplicated: 0x{code:02X}")
+
+usb_init_source = function_definition("usb_mass_storage_init", usb_source)
+progress_codes = [f"0x{code:02X}U" for code in range(0xF1, 0xF7)]
+progress_positions = [usb_init_source.find(f"MSC_M61_PROGRESS({code})") for code in progress_codes]
+if any(position < 0 for position in progress_positions) or progress_positions != sorted(progress_positions):
+    raise RuntimeError("M61 USB major progress breadcrumbs are incomplete or reordered")
+usb_reason_codes = [f"0x{code:02X}U" for code in range(0xF9, 0xFE)]
+reason_matches = list(re.finditer(r"MSC_M61_FAILURE\((0xF[9A-D]U)\);", usb_init_source))
+false_matches = list(re.finditer(r"\breturn\s+false\s*;", usb_init_source))
+if [match.group(1) for match in reason_matches] != usb_reason_codes:
+    raise RuntimeError("M61 USB false reason map is incomplete or reordered")
+if len(false_matches) != 5 or len(reason_matches) != len(false_matches):
+    raise RuntimeError("M61 USB top-level false exits are not exactly five classified paths")
+previous_false = 0
+for reason_match, false_match in zip(reason_matches, false_matches):
+    if not (previous_false <= reason_match.start() < false_match.start()):
+        raise RuntimeError("M61 USB false exit does not have a preceding reason")
+    between = usb_init_source[previous_false:false_match.start()]
+    if len(re.findall(r"MSC_M61_FAILURE\(0xF[9A-D]U\);", between)) != 1:
+        raise RuntimeError("M61 USB false exit is not classified exactly once")
+    previous_false = false_match.end()
+for code in usb_reason_codes[1:]:
+    reason_position = usb_init_source.find(f"MSC_M61_FAILURE({code})")
+    next_false = usb_init_source.find("return false;", reason_position)
+    cleanup = usb_init_source.find("usb_mass_storage_cleanup();", reason_position)
+    if not (reason_position < cleanup < next_false):
+        raise RuntimeError(f"M61 USB reason {code} is not retained before cleanup/false return")
+if not re.search(
+    r"#if USB_MASS_STORAGE_RUNTIME && defined\(BORING_M61_PHYSICAL_BREADCRUMBS\)"
+    r"[\s\S]*?static uint8_t msc_m61_failure_reason;"
+    r"[\s\S]*?uint8_t boring_m61_usb_mass_storage_failure_reason\(void\)"
+    r"[\s\S]*?#else"
+    r"[\s\S]*?#define MSC_M61_BEGIN\(\) do \{ \} while \(0\)"
+    r"[\s\S]*?#define MSC_M61_PROGRESS\(code\) do \{ \} while \(0\)"
+    r"[\s\S]*?#define MSC_M61_FAILURE\(code\) do \{ \} while \(0\)",
+    usb_source,
+):
+    raise RuntimeError("M61 USB diagnostics are not fully candidate-gated/no-op outside M61")
+if any(token in usb_source for token in ("serial_write", "framebuffer")):
+    raise RuntimeError("M61 USB diagnostics gained serial/framebuffer dependency")
+
+irq_source = function_definition("m61_post_irq_init")
+hid_source = function_definition("m61_post_xhci_configure_hid_devices_mixed")
+usb_post_source = function_definition("m61_post_usb_mass_storage_init")
+if irq_source.find("M61_POST(M61_POST_EXCEPTION_IRQ);") < 0 or irq_source.find("M61_POST(M61_POST_AFTER_IRQ_SUCCESS);") < irq_source.find("M61_POST(M61_POST_EXCEPTION_IRQ);"):
+    raise RuntimeError("M61 64 meaning/order changed")
+hid_call_post = hid_source.find("M61_POST(M61_POST_XHCI_HID_CONFIG_CALL);")
+hid_real_call = hid_source.find("result = __real_xhci_configure_hid_devices_mixed(state);")
+hid_true_post = hid_source.find("M61_POST(M61_POST_XHCI_HID_CONFIG_TRUE);")
+if not (0 <= hid_call_post < hid_real_call < hid_true_post):
+    raise RuntimeError("M61 xHCI HID stage does not preserve hard-hang observability")
+for required in (
+    "M61_POST(M61_POST_USB_CALL_ENTRY);",
+    "result = __real_usb_mass_storage_init(state);",
+    "M61_POST(M61_POST_USB_RETURNED_FALSE);",
+    "failure_reason = boring_m61_usb_mass_storage_failure_reason();",
+    "M61_POST(failure_reason);",
+    "M61_POST(M61_POST_USB_RETURNED_TRUE);",
+    "M61_POST(M61_POST_USB_STORAGE);",
+):
+    if required not in usb_post_source:
+        raise RuntimeError(f"M61 USB wrapper source missing: {required}")
+usb_call = usb_post_source.index("result = __real_usb_mass_storage_init(state);")
+usb_false = usb_post_source.index("M61_POST(M61_POST_USB_RETURNED_FALSE);")
+usb_reason_read = usb_post_source.index("failure_reason = boring_m61_usb_mass_storage_failure_reason();")
+usb_reason_replay = usb_post_source.index("M61_POST(failure_reason);")
+usb_false_return = usb_post_source.index("return result;", usb_reason_replay)
+usb_true = usb_post_source.index("M61_POST(M61_POST_USB_RETURNED_TRUE);")
+usb_65 = usb_post_source.index("M61_POST(M61_POST_USB_STORAGE);")
+if not (usb_call < usb_false < usb_reason_read < usb_reason_replay < usb_false_return < usb_true < usb_65):
+    raise RuntimeError("M61 USB false replay/true/65 control-flow ordering changed")
+if "failure_reason" in usb_post_source[usb_true:]:
+    raise RuntimeError("M61 USB true path replays a failure reason")
+if usb_post_source.count("M61_POST(M61_POST_USB_STORAGE);") != 1:
+    raise RuntimeError("M61 65 success meaning is not unique")
+
 functions = {
     "boring_kernel_entry": ("61",),
     "m61_post_serial_init": ("62",),
@@ -591,8 +804,15 @@ functions = {
     "m61_post_vmm_init": ("7c", "7d", "c0", "c1"),
     "__wrap_vmm_get_stats": ("c2", "c3"),
     "m61_post_heap_init": ("7e", "7f", "63"),
-    "m61_post_irq_init": ("64",),
-    "m61_post_usb_mass_storage_init": ("65",),
+    "m61_post_irq_init": ("64", "e7"),
+    "m61_post_timer_init": ("e8",),
+    "m61_post_xhci_init": ("e9",),
+    "m61_post_xhci_address_connected": ("ea",),
+    "m61_post_xhci_discover_descriptors": ("eb",),
+    "m61_post_xhci_configure_hid_devices_mixed": ("ec", "ed"),
+    "__wrap_block_device_init": ("ee", "ef"),
+    "m61_post_usb_mass_storage_init": ("f0", "f7", "f8", "65"),
+    "usb_mass_storage_init": ("f1", "f2", "f3", "f4", "f5", "f6", "f9", "fa", "fb", "fc", "fd"),
     "m61_post_boringfs_vfs_create_writable": ("66",),
     "m61_post_process_set_name": ("67", "68", "69", "6a"),
     "m61_post_boring_framebuffer_user_present": ("6f",),
@@ -611,7 +831,8 @@ for name, codes in functions.items():
         ["objdump", "-d", "--disassemble=" + name, "build/kernel.elf"],
         text=True)
     outputs = len(re.findall(r"\bout\b", body))
-    minimum_outputs = len(codes) + (1 if name == "m61_post_vmm_init" else 0)
+    dynamic_output = name in ("m61_post_vmm_init", "m61_post_usb_mass_storage_init")
+    minimum_outputs = len(codes) + (1 if dynamic_output else 0)
     if outputs < minimum_outputs:
         raise RuntimeError(
             f"M61 POST binary hook {name} has only {outputs} out instructions")
@@ -623,14 +844,18 @@ for name, codes in functions.items():
                 f"M61 POST binary hook {name} missing code 0x{code.upper()}")
     if name == "m61_post_vmm_init" and "boring_m61_vmm_failure_reason" not in body:
         raise RuntimeError("M61 VMM binary hook does not call the failure-reason accessor")
+    if name == "m61_post_usb_mass_storage_init" and "boring_m61_usb_mass_storage_failure_reason" not in body:
+        raise RuntimeError("M61 USB binary hook does not call the failure-reason accessor")
     out_count += outputs
-if out_count < 32:
+if out_count < 55:
     raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")
 print("M61 POST port 0x80 binary acceptance: PASS")
 print("M61 POST existing sequence preserved: 61 62 63 64 65 66 67 68 69 6A 6F")
 print("M61 POST 62-to-63 bisector: 70 71 72 73 74 75 76 77 78 79 7A 7B 7C 7D 7E 7F then 63")
 print("M61 VMM result bisector: C0 init-false C1 init-true C2 stats-false C3 stats-true")
 print("M61 VMM false reasons: D0-DF E0-E6, replayed after C0")
+print("M61 64-to-65 USB progress: E7 E8 E9 EA EB EC ED EE EF F0 F1 F2 F3 F4 F5 F6 F7 then 65")
+print("M61 USB false: F8 returned-false; reasons F9-FD replayed last")
 print("M61 VMM short-circuit source gate: PRESERVED")
 print("M61 QEMU port 0x80 observer: SKIPPED (pc/q35 owns ioport80 sink)")
 EOF_POST_VERIFY

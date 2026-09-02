@@ -69,6 +69,30 @@ struct usb_msc_runtime {
 
 static struct usb_msc_runtime msc_runtime;
 
+#if USB_MASS_STORAGE_RUNTIME && defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+static uint8_t msc_m61_failure_reason;
+
+#define MSC_M61_POST(code) \
+    x86_64_out8((uint16_t)0x80U, (uint8_t)(code))
+#define MSC_M61_BEGIN() \
+    do { msc_m61_failure_reason = 0U; } while (0)
+#define MSC_M61_PROGRESS(code) \
+    do { MSC_M61_POST(code); } while (0)
+#define MSC_M61_FAILURE(code) \
+    do { \
+        msc_m61_failure_reason = (uint8_t)(code); \
+        MSC_M61_POST(code); \
+    } while (0)
+
+uint8_t boring_m61_usb_mass_storage_failure_reason(void) {
+    return msc_m61_failure_reason;
+}
+#else
+#define MSC_M61_BEGIN() do { } while (0)
+#define MSC_M61_PROGRESS(code) do { } while (0)
+#define MSC_M61_FAILURE(code) do { } while (0)
+#endif
+
 static enum block_device_result msc_backend_read(void *context,
                                                   uint64_t first_block,
                                                   uint32_t block_count,
@@ -971,24 +995,35 @@ static bool find_mass_storage_device(void) {
 bool usb_mass_storage_init(struct xhci_state *state) {
     volatile void *mapping = NULL;
     enum block_device_result registration;
+
+    MSC_M61_BEGIN();
+    MSC_M61_PROGRESS(0xF1U); /* real USB mass-storage function entered */
     if ((state == NULL) || !state->controller_running ||
         (state->addressed_count == 0U) || msc_runtime.initialized) {
+        MSC_M61_FAILURE(0xF9U); /* invalid/unready controller runtime */
         return false;
     }
+    MSC_M61_PROGRESS(0xF2U); /* controller state accepted */
     bytes_zero(&msc_runtime, sizeof(msc_runtime));
     msc_runtime.state = state;
+
+    MSC_M61_PROGRESS(0xF3U); /* storage discovery + MMIO mapping */
     if (!find_mass_storage_device() || (msc_runtime.device == NULL) ||
         msc_runtime.device->device_configured ||
         !vmm_map_mmio_region(state->mmio_physical, XHCI_MMIO_WINDOW_SIZE,
                              &mapping)) {
+        MSC_M61_FAILURE(0xFAU); /* storage discovery/MMIO failed */
         usb_mass_storage_cleanup();
         return false;
     }
     msc_runtime.mmio = (volatile uint8_t *)mapping;
+
+    MSC_M61_PROGRESS(0xF4U); /* transport + USB config + bulk endpoints */
     if (!allocate_transport() ||
         !set_configuration(msc_runtime.device,
                            msc_runtime.configuration.configuration_value) ||
         !configure_bulk_endpoints()) {
+        MSC_M61_FAILURE(0xFBU); /* transport/config/bulk setup failed */
         usb_mass_storage_cleanup();
         return false;
     }
@@ -1001,7 +1036,9 @@ bool usb_mass_storage_init(struct xhci_state *state) {
     msc_runtime.stats.configured = true;
     msc_runtime.initialized = true;
 
+    MSC_M61_PROGRESS(0xF5U); /* SCSI inquiry/TUR/capacity */
     if (!scsi_inquiry() || !scsi_test_unit_ready() || !scsi_read_capacity()) {
+        MSC_M61_FAILURE(0xFCU); /* SCSI initialization failed */
         usb_mass_storage_cleanup();
         return false;
     }
@@ -1012,8 +1049,11 @@ bool usb_mass_storage_init(struct xhci_state *state) {
     msc_runtime.block_device.read_only = false;
     msc_runtime.block_device.context = &msc_runtime;
     msc_runtime.block_device.ops = &msc_block_ops;
+
+    MSC_M61_PROGRESS(0xF6U); /* expose usb0 through block-device layer */
     registration = block_device_register(&msc_runtime.block_device);
     if (registration != BLOCK_DEVICE_RESULT_OK) {
+        MSC_M61_FAILURE(0xFDU); /* usb0 registration failed */
         usb_mass_storage_cleanup();
         return false;
     }
