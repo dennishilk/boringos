@@ -241,7 +241,8 @@ static bool input_hardware_init(void) {
         !xhci_address_connected(&state) ||
         !xhci_discover_descriptors(&state) ||
         !xhci_configure_hid_devices(&state) ||
-        !BORING_M54_HID_READY_POLICY(&state)) {
+        !(m54_hid_protocols_ready(&state),
+          BORING_M54_HID_READY_POLICY(&state))) {
         return false;
     }
     serial_write_string(
