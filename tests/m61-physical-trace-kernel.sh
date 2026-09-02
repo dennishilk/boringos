@@ -445,6 +445,8 @@ bool m61_post_usb_mass_storage_init(struct xhci_state *state) {
         failure_reason = boring_m61_usb_mass_storage_failure_reason();
         if (failure_reason != 0U) {
             M61_POST(failure_reason);
+            /* Keep the dynamic reason POST as a distinct binary witness. */
+            __asm__ volatile ("" ::: "memory");
         }
         return result;
     }
@@ -812,7 +814,7 @@ functions = {
     "m61_post_xhci_configure_hid_devices_mixed": ("ec", "ed"),
     "__wrap_block_device_init": ("ee", "ef"),
     "m61_post_usb_mass_storage_init": ("f0", "f7", "f8", "65"),
-    "usb_mass_storage_init": ("f1", "f2", "f3", "f4", "f5", "f6", "f9", "fa", "fb", "fc", "fd"),
+    "usb_mass_storage_init_legacy": ("f1", "f2", "f3", "f4", "f5", "f6", "f9", "fa", "fb", "fc", "fd"),
     "m61_post_boringfs_vfs_create_writable": ("66",),
     "m61_post_process_set_name": ("67", "68", "69", "6a"),
     "m61_post_boring_framebuffer_user_present": ("6f",),
