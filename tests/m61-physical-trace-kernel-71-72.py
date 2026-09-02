@@ -53,7 +53,7 @@ for forbidden in (
             f"generated acquire_framebuffers still contains diagnostic framebuffer write path: {forbidden}")
 
 replace_once(
-    "    M61_POST_VMM_STATS_TRUE = 0xc3\n};",
+    "    M61_POST_VMM_STATS_TRUE = 0xc3,\n",
     "    M61_POST_VMM_STATS_TRUE = 0xc3,\n\n"
     "    M61_POST_ACQUIRE_RESUMED = 0x80,\n"
     "    M61_POST_FRAMEBUFFER_COUNT_RETURNED = 0x81,\n"
@@ -62,8 +62,7 @@ replace_once(
     "    M61_POST_SELECTED_FRAMEBUFFER_VALID = 0x84,\n"
     "    M61_POST_CANDIDATE_ENUM_ENTERED = 0x85,\n"
     "    M61_POST_FIRST_CANDIDATE_METADATA = 0x86,\n"
-    "    M61_POST_DIAGNOSTIC_WRITES_BYPASSED = 0x87\n"
-    "};",
+    "    M61_POST_DIAGNOSTIC_WRITES_BYPASSED = 0x87,\n",
     "71-to-72 no-write enum")
 
 old_seq = (
@@ -201,8 +200,8 @@ else:
         "accept sign-extended POST immediates")
 
 replace_once(
-    'if out_count < 55:\n',
-    'if out_count < 61:\n',
+    'if out_count < 84:\n',
+    'if out_count < 90:\n',
     "derived POST output threshold")
 old_binary_tail = (
     '    raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")\n')
