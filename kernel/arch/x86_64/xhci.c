@@ -37,6 +37,12 @@ enum xhci_m61_post_code {
     XHCI_M61_RINGS_PROGRESS_ERDP_WRITE = 0x55,
     XHCI_M61_RINGS_PROGRESS_DCBAAP_READBACK = 0x56,
     XHCI_M61_RINGS_SUCCESS = 0x57,
+    XHCI_M61_RINGS_FALSE_SCRATCHPAD_COUNT_BOUND = 0x58,
+    XHCI_M61_RINGS_FALSE_SCRATCHPAD_PAGE_SIZE = 0x59,
+    XHCI_M61_RINGS_FALSE_SCRATCHPAD_ARRAY_PMM = 0x5a,
+    XHCI_M61_RINGS_FALSE_SCRATCHPAD_ARRAY_HHDM = 0x5b,
+    XHCI_M61_RINGS_FALSE_SCRATCHPAD_BUFFER_PMM = 0x5c,
+    XHCI_M61_RINGS_FALSE_SCRATCHPAD_BUFFER_HHDM = 0x5d,
 
     XHCI_M61_PROGRESS_CONTROLLER_DISCOVERY = 0x88,
     XHCI_M61_PROGRESS_BAR_VALIDATION = 0x89,
@@ -149,6 +155,11 @@ uint8_t boring_m61_xhci_failure_reason(void) {
 #define XHCI_COMMAND_SLOT_SHIFT 24U
 #define XHCI_EVENT_WAIT_LIMIT 10000000U
 #define XHCI_DMA_32BIT_LIMIT 0x100000000ULL
+#define XHCI_PAGESIZE_4K (1U << 0)
+#define XHCI_SCRATCHPAD_MAX_SUPPORTED 512U
+_Static_assert((XHCI_SCRATCHPAD_MAX_SUPPORTED * sizeof(uint64_t)) <=
+               PMM_PAGE_SIZE,
+               "xHCI scratchpad array must fit one DMA page");
 #define XHCI_PORTSC_CCS (1U << 0)
 #define XHCI_PORTSC_PED (1U << 1)
 #define XHCI_PORTSC_PR (1U << 4)
@@ -171,7 +182,10 @@ struct xhci_runtime {
     volatile uint64_t *dcbaa;
     volatile struct xhci_trb *command_ring;
     volatile struct xhci_trb *event_ring;
+    uint64_t scratchpad_array_physical;
+    uint64_t scratchpad_buffer_physical[XHCI_SCRATCHPAD_MAX_SUPPORTED];
     uint64_t outstanding_command_physical;
+    uint16_t scratchpad_count;
     uint16_t command_index;
     uint16_t event_index;
     bool command_cycle;
@@ -321,6 +335,77 @@ static void frame_release(uint64_t physical) {
     if (physical != 0ULL) { (void)pmm_free_frame(physical); }
 }
 
+static void scratchpads_release(void) {
+    uint16_t index;
+    if ((runtime_state.dcbaa != NULL) &&
+        (runtime_state.scratchpad_array_physical != 0ULL)) {
+        runtime_state.dcbaa[0] = 0ULL;
+        memory_barrier();
+    }
+    for (index = 0U; index < runtime_state.scratchpad_count; ++index) {
+        frame_release(runtime_state.scratchpad_buffer_physical[index]);
+        runtime_state.scratchpad_buffer_physical[index] = 0ULL;
+    }
+    frame_release(runtime_state.scratchpad_array_physical);
+    runtime_state.scratchpad_array_physical = 0ULL;
+    runtime_state.scratchpad_count = 0U;
+}
+
+static bool scratchpads_initialize(
+    volatile uint8_t *base, uint32_t operational,
+    const struct xhci_capabilities *capabilities) {
+    void *array_virtual = NULL;
+    volatile uint64_t *array;
+    uint16_t index;
+
+    if (capabilities->scratchpad_count == 0U) { return true; }
+    if (capabilities->scratchpad_count > XHCI_SCRATCHPAD_MAX_SUPPORTED) {
+        XHCI_M61_RETURN_FALSE(XHCI_M61_RINGS_FALSE_SCRATCHPAD_COUNT_BOUND);
+    }
+    if ((mmio_read32(base, operational + 0x08U) & XHCI_PAGESIZE_4K) == 0U) {
+        XHCI_M61_RETURN_FALSE(XHCI_M61_RINGS_FALSE_SCRATCHPAD_PAGE_SIZE);
+    }
+    runtime_state.scratchpad_count = capabilities->scratchpad_count;
+    if (!frame_alloc_zero(&runtime_state.scratchpad_array_physical,
+                          &array_virtual)) {
+        XHCI_M61_RINGS_ALLOC_RETURN_FALSE(
+            XHCI_M61_RINGS_FALSE_SCRATCHPAD_ARRAY_PMM,
+            XHCI_M61_RINGS_FALSE_SCRATCHPAD_ARRAY_HHDM);
+    }
+    array = (volatile uint64_t *)array_virtual;
+    for (index = 0U; index < runtime_state.scratchpad_count; ++index) {
+        void *buffer_virtual = NULL;
+        if (!frame_alloc_zero(&runtime_state.scratchpad_buffer_physical[index],
+                              &buffer_virtual)) {
+            XHCI_M61_RINGS_ALLOC_RETURN_FALSE(
+                XHCI_M61_RINGS_FALSE_SCRATCHPAD_BUFFER_PMM,
+                XHCI_M61_RINGS_FALSE_SCRATCHPAD_BUFFER_HHDM);
+        }
+        (void)buffer_virtual;
+        array[index] = runtime_state.scratchpad_buffer_physical[index];
+    }
+    memory_barrier();
+    runtime_state.dcbaa[0] = runtime_state.scratchpad_array_physical;
+    memory_barrier();
+    return true;
+}
+
+static void rings_release(struct xhci_state *state) {
+    if (state == NULL) { return; }
+    scratchpads_release();
+    frame_release(state->erst_physical);
+    state->erst_physical = 0ULL;
+    frame_release(state->event_ring_physical);
+    state->event_ring_physical = 0ULL;
+    frame_release(state->command_ring_physical);
+    state->command_ring_physical = 0ULL;
+    frame_release(state->dcbaa_physical);
+    state->dcbaa_physical = 0ULL;
+    runtime_state.dcbaa = NULL;
+    runtime_state.command_ring = NULL;
+    runtime_state.event_ring = NULL;
+}
+
 static bool rings_initialize(volatile uint8_t *base,
                              const struct xhci_capabilities *capabilities,
                              struct xhci_state *state) {
@@ -334,15 +419,15 @@ static bool rings_initialize(volatile uint8_t *base,
     const uint32_t interrupter = capabilities->runtime_offset +
                                  XHCI_RUNTIME_INTERRUPTER0;
 
-    if (capabilities->scratchpad_count != 0U) {
-        XHCI_M61_RETURN_FALSE(
-            XHCI_M61_RINGS_FALSE_SCRATCHPAD_UNSUPPORTED);
-    }
 #ifdef BORING_M61_PHYSICAL_BREADCRUMBS
     XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_DCBAA_ALLOCATION);
     if (!frame_alloc_zero(&state->dcbaa_physical, &dcbaa_virtual)) {
         XHCI_M61_RINGS_ALLOC_RETURN_FALSE(XHCI_M61_RINGS_FALSE_DCBAA_PMM,
                                           XHCI_M61_RINGS_FALSE_DCBAA_HHDM);
+    }
+    runtime_state.dcbaa = (volatile uint64_t *)dcbaa_virtual;
+    if (!scratchpads_initialize(base, operational, capabilities)) {
+        return false;
     }
     XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_COMMAND_RING_ALLOCATION);
     if (!frame_alloc_zero(&state->command_ring_physical, &command_virtual)) {
@@ -363,8 +448,14 @@ static bool rings_initialize(volatile uint8_t *base,
     }
     XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_SOFTWARE_INITIALIZATION);
 #else
-    if (!frame_alloc_zero(&state->dcbaa_physical, &dcbaa_virtual) ||
-        !frame_alloc_zero(&state->command_ring_physical, &command_virtual) ||
+    if (!frame_alloc_zero(&state->dcbaa_physical, &dcbaa_virtual)) {
+        return false;
+    }
+    runtime_state.dcbaa = (volatile uint64_t *)dcbaa_virtual;
+    if (!scratchpads_initialize(base, operational, capabilities)) {
+        return false;
+    }
+    if (!frame_alloc_zero(&state->command_ring_physical, &command_virtual) ||
         !frame_alloc_zero(&state->event_ring_physical, &event_virtual) ||
         !frame_alloc_zero(&state->erst_physical, &erst_virtual)) {
         return false;
@@ -403,7 +494,6 @@ static bool rings_initialize(volatile uint8_t *base,
     mmio_write64(base, interrupter + 0x18U, state->event_ring_physical);
     memory_barrier();
     runtime_state.mmio = base;
-    runtime_state.dcbaa = (volatile uint64_t *)dcbaa_virtual;
     runtime_state.command_ring =
         (volatile struct xhci_trb *)command_virtual;
     runtime_state.event_ring = (volatile struct xhci_trb *)event_virtual;
@@ -1197,10 +1287,7 @@ out:
         (void)vmm_unmap_mmio_region(mapping, XHCI_MMIO_WINDOW_SIZE);
     }
     if (!success) {
-        frame_release(active_state.erst_physical);
-        frame_release(active_state.event_ring_physical);
-        frame_release(active_state.command_ring_physical);
-        frame_release(active_state.dcbaa_physical);
+        rings_release(&active_state);
         state_clear(&active_state);
         runtime_clear();
     }

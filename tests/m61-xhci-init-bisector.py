@@ -87,6 +87,12 @@ ring_reasons = {
     "XHCI_M61_RINGS_FALSE_ERST_PMM": 0x47,
     "XHCI_M61_RINGS_FALSE_ERST_HHDM": 0x48,
     "XHCI_M61_RINGS_FALSE_DCBAAP_READBACK": 0x49,
+    "XHCI_M61_RINGS_FALSE_SCRATCHPAD_COUNT_BOUND": 0x58,
+    "XHCI_M61_RINGS_FALSE_SCRATCHPAD_PAGE_SIZE": 0x59,
+    "XHCI_M61_RINGS_FALSE_SCRATCHPAD_ARRAY_PMM": 0x5A,
+    "XHCI_M61_RINGS_FALSE_SCRATCHPAD_ARRAY_HHDM": 0x5B,
+    "XHCI_M61_RINGS_FALSE_SCRATCHPAD_BUFFER_PMM": 0x5C,
+    "XHCI_M61_RINGS_FALSE_SCRATCHPAD_BUFFER_HHDM": 0x5D,
 }
 ring_progress = {
     "XHCI_M61_RINGS_PROGRESS_DCBAA_ALLOCATION": 0x4A,
@@ -121,7 +127,7 @@ claimed = (
     set(range(0xD0, 0xE7)) |
     set(range(0xE7, 0xFE))
 )
-if len(new_codes) != 53 or new_codes & claimed:
+if len(new_codes) != 59 or new_codes & claimed:
     raise RuntimeError("new xHCI POST namespace is not unique and unclaimed")
 
 assignments = {
@@ -306,13 +312,28 @@ for index, field in enumerate(allocation_fields):
             "XHCI_M61_RINGS_ALLOC_RETURN_FALSE" not in allocation_failure):
         raise RuntimeError(f"ring allocation is not exactly classified: {field}")
 
-if not re.search(
+if re.search(
     r"scratchpad_count\s*!=\s*0U\)\s*\{\s*"
     r"XHCI_M61_RETURN_FALSE\(\s*"
     r"XHCI_M61_RINGS_FALSE_SCRATCHPAD_UNSUPPORTED\);",
     rings,
 ):
-    raise RuntimeError("non-zero scratchpad failure is not exactly classified")
+    raise RuntimeError("legacy non-zero scratchpad rejection still exists")
+for witness in (
+    "#define XHCI_SCRATCHPAD_MAX_SUPPORTED 512U",
+    "XHCI_PAGESIZE_4K",
+    "scratchpad_array_physical",
+    "scratchpad_buffer_physical[XHCI_SCRATCHPAD_MAX_SUPPORTED]",
+    "scratchpads_initialize(base, operational, capabilities)",
+    "runtime_state.dcbaa[0] = runtime_state.scratchpad_array_physical;",
+    "scratchpads_release();",
+):
+    if witness not in xhci_source:
+        raise RuntimeError(f"scratchpad implementation witness missing: {witness}")
+if "XHCI_M61_RINGS_FALSE_SCRATCHPAD_UNSUPPORTED = 0x40" not in xhci_source:
+    raise RuntimeError("frozen scratchpad-unsupported POST meaning 40 was removed")
+if "pmm_alloc_frame_in_range(0ULL, XHCI_DMA_32BIT_LIMIT, physical)" not in frame_alloc:
+    raise RuntimeError("scratchpad DMA path no longer inherits the 32-bit frame policy")
 
 software_events = (
     "XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_SOFTWARE_INITIALIZATION);",
@@ -372,13 +393,28 @@ if "XHCI_M61_FAIL_PRESERVING_REASON(XHCI_M61_FALSE_RINGS_SETUP);" not in xhci_in
     raise RuntimeError("generic BD no longer preserves the exact ring reason")
 
 cleanup_events = (
-    "frame_release(active_state.erst_physical);",
-    "frame_release(active_state.event_ring_physical);",
-    "frame_release(active_state.command_ring_physical);",
-    "frame_release(active_state.dcbaa_physical);",
+    "rings_release(&active_state);",
     "state_clear(&active_state);",
     "runtime_clear();",
 )
+ring_release_start = xhci_source.find("static void rings_release(struct xhci_state *state)")
+ring_release_end = xhci_source.find("static bool rings_initialize", ring_release_start)
+if min(ring_release_start, ring_release_end) < 0:
+    raise RuntimeError("central xHCI ring release helper is missing")
+ring_release = xhci_source[ring_release_start:ring_release_end]
+release_events = (
+    "scratchpads_release();",
+    "frame_release(state->erst_physical);",
+    "frame_release(state->event_ring_physical);",
+    "frame_release(state->command_ring_physical);",
+    "frame_release(state->dcbaa_physical);",
+    "runtime_state.dcbaa = NULL;",
+    "runtime_state.command_ring = NULL;",
+    "runtime_state.event_ring = NULL;",
+)
+release_positions = [ring_release.find(item) for item in release_events]
+if any(position < 0 for position in release_positions) or release_positions != sorted(release_positions):
+    raise RuntimeError("scratchpad/ring cleanup order is incomplete or reordered")
 cleanup_start = xhci_init.rfind("if (!success) {")
 cleanup_source = xhci_init[cleanup_start:]
 cleanup_positions = [cleanup_source.find(item) for item in cleanup_events]
@@ -444,10 +480,306 @@ with tempfile.TemporaryDirectory(prefix="m61-xhci-bisector-") as tmp:
     if len(re.findall(r"\bout\b", candidate_disassembly)) < 47:
         raise RuntimeError("M61 xHCI binary lacks ring progress/reason outputs")
 
+
+# Execute the real static ring/scratchpad implementation against a bounded
+# fake PMM/HHDM/MMIO model. This covers zero/one/multiple scratchpads,
+# alignment/DMA bounds, partial failures, later ring failures, and cleanup.
+harness_source = r"""
+#include <assert.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
+#include "kernel/arch/x86_64/xhci.c"
+
+#define MOCK_FRAMES 600U
+_Alignas(4096) static uint8_t mock_pages[MOCK_FRAMES][4096];
+static bool mock_used[MOCK_FRAMES];
+static uint32_t mock_alloc_calls;
+static uint32_t mock_hhdm_calls;
+static uint32_t mock_fail_alloc_call;
+static uint32_t mock_fail_hhdm_call;
+
+static uint32_t frame_index(uint64_t physical) {
+    assert((physical & 0xfffULL) == 0ULL);
+    assert(physical >= 0x1000ULL);
+    assert(physical < XHCI_DMA_32BIT_LIMIT);
+    return (uint32_t)(physical / 0x1000ULL) - 1U;
+}
+
+bool pmm_alloc_frame_in_range(uint64_t minimum_physical_address,
+                              uint64_t maximum_physical_address_exclusive,
+                              uint64_t *physical_address) {
+    uint32_t index;
+    assert(minimum_physical_address == 0ULL);
+    assert(maximum_physical_address_exclusive == XHCI_DMA_32BIT_LIMIT);
+    assert(physical_address != NULL);
+    ++mock_alloc_calls;
+    if ((mock_fail_alloc_call != 0U) &&
+        (mock_alloc_calls == mock_fail_alloc_call)) {
+        return false;
+    }
+    for (index = 0U; index < MOCK_FRAMES; ++index) {
+        if (!mock_used[index]) {
+            mock_used[index] = true;
+            *physical_address = ((uint64_t)index + 1ULL) * 0x1000ULL;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool pmm_free_frame(uint64_t physical_address) {
+    const uint32_t index = frame_index(physical_address);
+    assert(index < MOCK_FRAMES);
+    assert(mock_used[index]);
+    mock_used[index] = false;
+    return true;
+}
+
+bool vmm_pmm_frame_to_hhdm(uint64_t physical_address, void **virtual_address) {
+    const uint32_t index = frame_index(physical_address);
+    ++mock_hhdm_calls;
+    if ((mock_fail_hhdm_call != 0U) &&
+        (mock_hhdm_calls == mock_fail_hhdm_call)) {
+        return false;
+    }
+    assert(index < MOCK_FRAMES);
+    assert(mock_used[index]);
+    *virtual_address = mock_pages[index];
+    return true;
+}
+
+static void *mock_virtual(uint64_t physical) {
+    const uint32_t index = frame_index(physical);
+    assert(index < MOCK_FRAMES);
+    assert(mock_used[index]);
+    return mock_pages[index];
+}
+
+static uint32_t live_frames(void) {
+    uint32_t index;
+    uint32_t live = 0U;
+    for (index = 0U; index < MOCK_FRAMES; ++index) {
+        if (mock_used[index]) { ++live; }
+    }
+    return live;
+}
+
+static void reset_model(void) {
+    memset(mock_pages, 0, sizeof(mock_pages));
+    memset(mock_used, 0, sizeof(mock_used));
+    mock_alloc_calls = 0U;
+    mock_hhdm_calls = 0U;
+    mock_fail_alloc_call = 0U;
+    mock_fail_hhdm_call = 0U;
+    state_clear(&active_state);
+    runtime_clear();
+}
+
+static void setup_caps(struct xhci_capabilities *caps, uint16_t scratchpads) {
+    memset(caps, 0, sizeof(*caps));
+    caps->capability_length = 0x40U;
+    caps->runtime_offset = 0x1000U;
+    caps->max_slots = 8U;
+    caps->scratchpad_count = scratchpads;
+}
+
+static void put32(uint8_t *base, uint32_t offset, uint32_t value) {
+    memcpy(base + offset, &value, sizeof(value));
+}
+
+static uint64_t get64(const uint8_t *base, uint32_t offset) {
+    uint64_t value;
+    memcpy(&value, base + offset, sizeof(value));
+    return value;
+}
+
+static void assert_dma_frame(uint64_t physical) {
+    assert(physical != 0ULL);
+    assert((physical & (PMM_PAGE_SIZE - 1ULL)) == 0ULL);
+    assert(physical < XHCI_DMA_32BIT_LIMIT);
+}
+
+static void release_and_assert_clean(struct xhci_state *state) {
+    rings_release(state);
+    assert(live_frames() == 0U);
+    assert(state->dcbaa_physical == 0ULL);
+    assert(state->command_ring_physical == 0ULL);
+    assert(state->event_ring_physical == 0ULL);
+    assert(state->erst_physical == 0ULL);
+    assert(runtime_state.scratchpad_array_physical == 0ULL);
+    assert(runtime_state.scratchpad_count == 0U);
+    assert(runtime_state.dcbaa == NULL);
+}
+
+static void test_zero_scratchpads(void) {
+    _Alignas(8) uint8_t mmio[XHCI_MMIO_WINDOW_SIZE] = {0U};
+    struct xhci_capabilities caps;
+    struct xhci_state state;
+    struct xhci_trb *command;
+    struct xhci_erst_entry *erst;
+    reset_model();
+    state_clear(&state);
+    setup_caps(&caps, 0U);
+    /* PAGESIZE deliberately remains zero: zero-scratchpad behavior must not
+       gain a new controller-page-size dependency. */
+    assert(rings_initialize(mmio, &caps, &state));
+    assert(mock_alloc_calls == 4U);
+    assert(((uint64_t *)mock_virtual(state.dcbaa_physical))[0] == 0ULL);
+    assert(runtime_state.scratchpad_count == 0U);
+    assert(runtime_state.scratchpad_array_physical == 0ULL);
+    command = (struct xhci_trb *)mock_virtual(state.command_ring_physical);
+    assert(command[XHCI_COMMAND_RING_USABLE].parameter == state.command_ring_physical);
+    assert((command[XHCI_COMMAND_RING_USABLE].control & XHCI_TRB_TYPE_SHIFT) != 0U);
+    erst = (struct xhci_erst_entry *)mock_virtual(state.erst_physical);
+    assert(erst->ring_base == state.event_ring_physical);
+    assert(erst->ring_size == XHCI_EVENT_RING_TRBS);
+    assert(get64(mmio, 0x40U + 0x30U) == state.dcbaa_physical);
+    release_and_assert_clean(&state);
+}
+
+static void test_scratchpads(uint16_t count) {
+    _Alignas(8) uint8_t mmio[XHCI_MMIO_WINDOW_SIZE] = {0U};
+    struct xhci_capabilities caps;
+    struct xhci_state state;
+    uint64_t *dcbaa;
+    uint64_t *array;
+    uint16_t index;
+    reset_model();
+    state_clear(&state);
+    setup_caps(&caps, count);
+    put32(mmio, 0x40U + 0x08U, XHCI_PAGESIZE_4K);
+    assert(rings_initialize(mmio, &caps, &state));
+    assert(runtime_state.scratchpad_count == count);
+    assert_dma_frame(runtime_state.scratchpad_array_physical);
+    dcbaa = (uint64_t *)mock_virtual(state.dcbaa_physical);
+    assert(dcbaa[0] == runtime_state.scratchpad_array_physical);
+    array = (uint64_t *)mock_virtual(runtime_state.scratchpad_array_physical);
+    for (index = 0U; index < count; ++index) {
+        uint16_t previous;
+        assert_dma_frame(array[index]);
+        assert(array[index] == runtime_state.scratchpad_buffer_physical[index]);
+        for (previous = 0U; previous < index; ++previous) {
+            assert(array[index] != array[previous]);
+        }
+    }
+    assert(get64(mmio, 0x40U + 0x30U) == state.dcbaa_physical);
+    release_and_assert_clean(&state);
+}
+
+static void test_over_bound(void) {
+    _Alignas(8) uint8_t mmio[XHCI_MMIO_WINDOW_SIZE] = {0U};
+    struct xhci_capabilities caps;
+    struct xhci_state state;
+    reset_model();
+    state_clear(&state);
+    setup_caps(&caps, (uint16_t)(XHCI_SCRATCHPAD_MAX_SUPPORTED + 1U));
+    put32(mmio, 0x40U + 0x08U, XHCI_PAGESIZE_4K);
+    assert(!rings_initialize(mmio, &caps, &state));
+    assert(mock_alloc_calls == 1U);
+    release_and_assert_clean(&state);
+}
+
+static void test_page_size_fail_closed(void) {
+    _Alignas(8) uint8_t mmio[XHCI_MMIO_WINDOW_SIZE] = {0U};
+    struct xhci_capabilities caps;
+    struct xhci_state state;
+    reset_model();
+    state_clear(&state);
+    setup_caps(&caps, 1U);
+    assert(!rings_initialize(mmio, &caps, &state));
+    assert(mock_alloc_calls == 1U);
+    release_and_assert_clean(&state);
+}
+
+static void test_array_allocation_failure(void) {
+    _Alignas(8) uint8_t mmio[XHCI_MMIO_WINDOW_SIZE] = {0U};
+    struct xhci_capabilities caps;
+    struct xhci_state state;
+    reset_model();
+    state_clear(&state);
+    setup_caps(&caps, 2U);
+    put32(mmio, 0x40U + 0x08U, XHCI_PAGESIZE_4K);
+    mock_fail_alloc_call = 2U;
+    assert(!rings_initialize(mmio, &caps, &state));
+    release_and_assert_clean(&state);
+}
+
+static void test_buffer_partial_failure(void) {
+    _Alignas(8) uint8_t mmio[XHCI_MMIO_WINDOW_SIZE] = {0U};
+    struct xhci_capabilities caps;
+    struct xhci_state state;
+    reset_model();
+    state_clear(&state);
+    setup_caps(&caps, 3U);
+    put32(mmio, 0x40U + 0x08U, XHCI_PAGESIZE_4K);
+    mock_fail_alloc_call = 4U;
+    assert(!rings_initialize(mmio, &caps, &state));
+    release_and_assert_clean(&state);
+}
+
+static void test_buffer_hhdm_failure(void) {
+    _Alignas(8) uint8_t mmio[XHCI_MMIO_WINDOW_SIZE] = {0U};
+    struct xhci_capabilities caps;
+    struct xhci_state state;
+    reset_model();
+    state_clear(&state);
+    setup_caps(&caps, 2U);
+    put32(mmio, 0x40U + 0x08U, XHCI_PAGESIZE_4K);
+    /* HHDM calls: DCBAA=1, array=2, buffer0=3, buffer1=4. */
+    mock_fail_hhdm_call = 4U;
+    assert(!rings_initialize(mmio, &caps, &state));
+    release_and_assert_clean(&state);
+}
+
+static void test_late_ring_failure(void) {
+    _Alignas(8) uint8_t mmio[XHCI_MMIO_WINDOW_SIZE] = {0U};
+    struct xhci_capabilities caps;
+    struct xhci_state state;
+    reset_model();
+    state_clear(&state);
+    setup_caps(&caps, 2U);
+    put32(mmio, 0x40U + 0x08U, XHCI_PAGESIZE_4K);
+    /* Allocations: DCBAA, array, two buffers, command, event. */
+    mock_fail_alloc_call = 6U;
+    assert(!rings_initialize(mmio, &caps, &state));
+    release_and_assert_clean(&state);
+}
+
+int main(void) {
+    test_zero_scratchpads();
+    test_scratchpads(1U);
+    test_scratchpads(4U);
+    test_over_bound();
+    test_page_size_fail_closed();
+    test_array_allocation_failure();
+    test_buffer_partial_failure();
+    test_buffer_hhdm_failure();
+    test_late_ring_failure();
+    return 0;
+}
+"""
+with tempfile.TemporaryDirectory(prefix="m61-xhci-scratchpad-") as tmp:
+    tmp_path = Path(tmp)
+    harness = tmp_path / "scratchpad-host.c"
+    binary = tmp_path / "scratchpad-host"
+    harness.write_text(harness_source)
+    subprocess.run(
+        ["cc", "-I.", "-Ikernel/include", "-Ilibs/boringfs/include",
+         "-std=c11", "-ffunction-sections", "-fdata-sections", "-fno-pie",
+         str(harness), "-Wl,--gc-sections", "-no-pie", "-o", str(binary)],
+        cwd=ROOT,
+        check=True,
+    )
+    subprocess.run([str(binary)], cwd=ROOT, check=True)
+
 print("M61 xHCI init bisector source/codegen acceptance: PASS")
 print("M61 xHCI progress: 88-8F AC-B2")
 print("M61 xHCI false reasons: B3-BE; BF returned-false; FE returned-true")
 print("M61 xHCI ring progress/success: 4A-57")
-print("M61 xHCI ring false reasons: 40-49")
+print("M61 xHCI ring false reasons: 40-49 58-5D")
+print("M61 xHCI scratchpad DMA/allocation/cleanup acceptance: PASS")
 print("M61 xHCI ring allocation PMM/HHDM subreasons: YES")
 print("M61 xHCI ring exact reason final-stable after BD/BF: YES")
