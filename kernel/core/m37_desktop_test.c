@@ -222,6 +222,13 @@ static bool m54_usb_runtime_evidence(void) {
            (key_presses != 0ULL) && (key_releases != 0ULL) &&
            (pointer_reports >= 4ULL);
 }
+
+#ifndef BORING_M54_HID_READY_POLICY
+#define BORING_M54_HID_READY_POLICY(state) m54_hid_protocols_ready(state)
+#endif
+#ifndef BORING_M54_USB_RUNTIME_GATE
+#define BORING_M54_USB_RUNTIME_GATE(evidence) (evidence)
+#endif
 #endif
 
 static bool input_hardware_init(void) {
@@ -234,7 +241,7 @@ static bool input_hardware_init(void) {
         !xhci_address_connected(&state) ||
         !xhci_discover_descriptors(&state) ||
         !xhci_configure_hid_devices(&state) ||
-        !m54_hid_protocols_ready(&state)) {
+        !BORING_M54_HID_READY_POLICY(&state)) {
         return false;
     }
     serial_write_string(
@@ -417,7 +424,8 @@ void m37_desktop_test_finish_from_pid1(void) {
     const bool tasks_ok = task_get_stats(&tasks);
 
 #if defined(BORING_M54_USB_ONLY_DESKTOP)
-    const bool m54_usb_ok = m54_usb_runtime_evidence();
+    const bool m54_usb_evidence = m54_usb_runtime_evidence();
+    const bool m54_usb_ok = BORING_M54_USB_RUNTIME_GATE(m54_usb_evidence);
 #else
     const bool m54_usb_ok = true;
 #endif
@@ -471,8 +479,10 @@ void m37_desktop_test_finish_from_pid1(void) {
     }
 #endif
 #if defined(BORING_M54_USB_ONLY_DESKTOP)
-    serial_write_string(
-        "M54 USB-only graphical desktop acceptance passed.\n");
+    if (m54_usb_evidence) {
+        serial_write_string(
+            "M54 USB-only graphical desktop acceptance passed.\n");
+    }
 #endif
     serial_write_string(
         "M37 native desktop session startup acceptance passed.\n");

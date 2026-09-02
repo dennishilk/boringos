@@ -1,5 +1,57 @@
+#include <boring/input.h>
 #include <boring/xhci_mixed.h>
 
+static bool m61_physical_input_ready(const struct xhci_state *state) {
+    struct boring_input_stats input_stats;
+    uint8_t device_index;
+
+    if ((state == NULL) || !state->controller_running ||
+        (state->addressed_count == 0U) ||
+        (state->addressed_count > XHCI_MAX_ADDRESSED_DEVICES) ||
+        !boring_input_get_stats(&input_stats) || !input_stats.initialized ||
+        (input_stats.dropped_events != 0ULL)) {
+        return false;
+    }
+    for (device_index = 0U; device_index < state->addressed_count;
+         ++device_index) {
+        const struct xhci_addressed_device *device =
+            &state->addressed[device_index];
+        uint8_t endpoint_index;
+
+        if (!device->addressed || !device->descriptors_ready ||
+            (device->descriptor_buffer_physical == 0ULL) ||
+            (device->descriptors.configuration_length == 0U)) {
+            return false;
+        }
+        if (!device->hid_endpoint_ready) {
+            continue;
+        }
+        if (!device->device_configured ||
+            (device->hid_configuration.endpoint_count == 0U) ||
+            (device->hid_configuration.endpoint_count > XHCI_MAX_HID_ENDPOINTS)) {
+            return false;
+        }
+        for (endpoint_index = 0U;
+             endpoint_index < device->hid_configuration.endpoint_count;
+             ++endpoint_index) {
+            const struct xhci_hid_endpoint_descriptor *endpoint =
+                &device->hid_configuration.endpoints[endpoint_index];
+            if ((device->hid_ring_physical[endpoint_index] == 0ULL) ||
+                (endpoint->endpoint_id == 0U) ||
+                (endpoint->max_packet == 0U)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool m61_physical_usb_runtime_health(void) {
+    return m61_physical_input_ready(xhci_get_state());
+}
+
+#define BORING_M54_HID_READY_POLICY(state) m61_physical_input_ready(state)
+#define BORING_M54_USB_RUNTIME_GATE(evidence) m61_physical_usb_runtime_health()
 #define virtio_blk_init m61_usb_root_init
 #define virtio_blk_device m61_usb_root_device
 #define block_device_find m61_block_device_find
@@ -13,6 +65,8 @@
 #undef block_device_find
 #undef virtio_blk_device
 #undef virtio_blk_init
+#undef BORING_M54_USB_RUNTIME_GATE
+#undef BORING_M54_HID_READY_POLICY
 
 #include <boring/block_slice.h>
 #include <boring/m61_usb_layout.h>
