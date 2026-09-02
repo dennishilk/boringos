@@ -6,9 +6,11 @@
 
 bool usb_mass_storage_init_legacy(struct xhci_state *state);
 
+#define USB_MASS_STORAGE_RUNTIME 1
 #define usb_mass_storage_init usb_mass_storage_init_legacy
 #include "usb_mass_storage_impl.inc"
 #undef usb_mass_storage_init
+#undef USB_MASS_STORAGE_RUNTIME
 
 static bool m60_same_xhci_topology(const struct xhci_state *caller,
                                    const struct xhci_state *active) {
