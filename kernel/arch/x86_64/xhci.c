@@ -9,6 +9,71 @@
 #include <boring/vmm.h>
 #include <boring/xhci.h>
 
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+#include <boring/io.h>
+
+enum xhci_m61_post_code {
+    XHCI_M61_PROGRESS_CONTROLLER_DISCOVERY = 0x88,
+    XHCI_M61_PROGRESS_BAR_VALIDATION = 0x89,
+    XHCI_M61_PROGRESS_PCI_ENABLE = 0x8a,
+    XHCI_M61_PROGRESS_MMIO_MAP = 0x8b,
+    XHCI_M61_PROGRESS_CAPABILITY_PARSE = 0x8c,
+    XHCI_M61_PROGRESS_LEGACY_HANDOFF = 0x8d,
+    XHCI_M61_PROGRESS_HALT_COMMAND = 0x8e,
+    XHCI_M61_PROGRESS_HALT_WAIT = 0x8f,
+    XHCI_M61_PROGRESS_RESET_COMMAND = 0xac,
+    XHCI_M61_PROGRESS_RESET_WAIT = 0xad,
+    XHCI_M61_PROGRESS_CONTROLLER_READY_WAIT = 0xae,
+    XHCI_M61_PROGRESS_RINGS_SETUP = 0xaf,
+    XHCI_M61_PROGRESS_START_COMMAND = 0xb0,
+    XHCI_M61_PROGRESS_START_WAIT = 0xb1,
+    XHCI_M61_PROGRESS_PORT_SCAN = 0xb2,
+
+    XHCI_M61_FALSE_INVALID_STATE = 0xb3,
+    XHCI_M61_FALSE_NO_CONTROLLER = 0xb4,
+    XHCI_M61_FALSE_INVALID_BAR = 0xb5,
+    XHCI_M61_FALSE_PCI_ENABLE = 0xb6,
+    XHCI_M61_FALSE_MMIO_MAP = 0xb7,
+    XHCI_M61_FALSE_CAPABILITIES = 0xb8,
+    XHCI_M61_FALSE_LEGACY_HANDOFF = 0xb9,
+    XHCI_M61_FALSE_HALT = 0xba,
+    XHCI_M61_FALSE_RESET = 0xbb,
+    XHCI_M61_FALSE_CONTROLLER_NOT_READY = 0xbc,
+    XHCI_M61_FALSE_RINGS_SETUP = 0xbd,
+    XHCI_M61_FALSE_START = 0xbe
+};
+
+static uint8_t xhci_m61_failure_reason;
+
+#define XHCI_M61_BEGIN() \
+    do { xhci_m61_failure_reason = 0U; } while (0)
+#define XHCI_M61_PROGRESS(code) \
+    x86_64_out8((uint16_t)0x80U, (uint8_t)(code))
+#define XHCI_M61_FAIL(code) \
+    do { \
+        xhci_m61_failure_reason = (uint8_t)(code); \
+        XHCI_M61_PROGRESS(code); \
+        goto out; \
+    } while (0)
+#define XHCI_M61_RETURN_FALSE(code) \
+    do { \
+        xhci_m61_failure_reason = (uint8_t)(code); \
+        XHCI_M61_PROGRESS(code); \
+        return false; \
+    } while (0)
+
+uint8_t boring_m61_xhci_failure_reason(void) {
+    return xhci_m61_failure_reason;
+}
+#else
+#define XHCI_M61_BEGIN() do { } while (0)
+#define XHCI_M61_PROGRESS(code) do { } while (0)
+#define XHCI_M61_FAIL(code) \
+    do { goto out; } while (0)
+#define XHCI_M61_RETURN_FALSE(code) \
+    do { return false; } while (0)
+#endif
+
 #define XHCI_CLASS_SERIAL_BUS 0x0cU
 #define XHCI_SUBCLASS_USB 0x03U
 #define XHCI_PROG_IF 0x30U
@@ -925,42 +990,98 @@ bool xhci_init(struct xhci_state *state) {
     uint8_t port;
     bool success = false;
 
-    if ((state == NULL) || active_state.controller_running) { return false; }
+    XHCI_M61_BEGIN();
+    if ((state == NULL) || active_state.controller_running) {
+        XHCI_M61_RETURN_FALSE(XHCI_M61_FALSE_INVALID_STATE);
+    }
     state_clear(&active_state);
     runtime_clear();
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_CONTROLLER_DISCOVERY);
+    if (!find_controller(&active_state.device)) {
+        XHCI_M61_FAIL(XHCI_M61_FALSE_NO_CONTROLLER);
+    }
+    XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_BAR_VALIDATION);
+    if (!pci_get_bar(&active_state.device, 0U, &bar) || !bar.memory) {
+        XHCI_M61_FAIL(XHCI_M61_FALSE_INVALID_BAR);
+    }
+    XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_PCI_ENABLE);
+    if (!pci_enable_memory_bus_master(&active_state.device)) {
+        XHCI_M61_FAIL(XHCI_M61_FALSE_PCI_ENABLE);
+    }
+    XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_MMIO_MAP);
+    if (!vmm_map_mmio_region(bar.base, XHCI_MMIO_WINDOW_SIZE, &mapping)) {
+        XHCI_M61_FAIL(XHCI_M61_FALSE_MMIO_MAP);
+    }
+#else
     if (!find_controller(&active_state.device) ||
         !pci_get_bar(&active_state.device, 0U, &bar) ||
         !bar.memory || !pci_enable_memory_bus_master(&active_state.device) ||
         !vmm_map_mmio_region(bar.base, XHCI_MMIO_WINDOW_SIZE, &mapping)) {
         goto out;
     }
+#endif
     base = (volatile uint8_t *)mapping;
     active_state.mmio_physical = bar.base;
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_CAPABILITY_PARSE);
+    if (!xhci_parse_capabilities(base, XHCI_MMIO_WINDOW_SIZE,
+                                 &active_state.capabilities)) {
+        XHCI_M61_FAIL(XHCI_M61_FALSE_CAPABILITIES);
+    }
+    XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_LEGACY_HANDOFF);
+    if (!legacy_handoff(base, &active_state.capabilities,
+                        &active_state.legacy_handoff_complete)) {
+        XHCI_M61_FAIL(XHCI_M61_FALSE_LEGACY_HANDOFF);
+    }
+#else
     if (!xhci_parse_capabilities(base, XHCI_MMIO_WINDOW_SIZE,
                                  &active_state.capabilities) ||
         !legacy_handoff(base, &active_state.capabilities,
                         &active_state.legacy_handoff_complete)) {
         goto out;
     }
+#endif
     operational = active_state.capabilities.capability_length;
+    XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_HALT_COMMAND);
     mmio_write32(base, operational + 0x00U,
                  mmio_read32(base, operational + 0x00U) & ~XHCI_USBCMD_RUN);
+    XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_HALT_WAIT);
     if (!wait_mask(base, operational + 0x04U, XHCI_USBSTS_HALTED, true)) {
-        goto out;
+        XHCI_M61_FAIL(XHCI_M61_FALSE_HALT);
     }
+    XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_RESET_COMMAND);
     mmio_write32(base, operational + 0x00U,
                  mmio_read32(base, operational + 0x00U) | XHCI_USBCMD_RESET);
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_RESET_WAIT);
+    if (!wait_mask(base, operational + 0x00U, XHCI_USBCMD_RESET, false)) {
+        XHCI_M61_FAIL(XHCI_M61_FALSE_RESET);
+    }
+    XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_CONTROLLER_READY_WAIT);
+    if (!wait_mask(base, operational + 0x04U, XHCI_USBSTS_NOT_READY, false)) {
+        XHCI_M61_FAIL(XHCI_M61_FALSE_CONTROLLER_NOT_READY);
+    }
+    XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_RINGS_SETUP);
+    if (!rings_initialize(base, &active_state.capabilities, &active_state)) {
+        XHCI_M61_FAIL(XHCI_M61_FALSE_RINGS_SETUP);
+    }
+#else
     if (!wait_mask(base, operational + 0x00U, XHCI_USBCMD_RESET, false) ||
         !wait_mask(base, operational + 0x04U, XHCI_USBSTS_NOT_READY, false) ||
         !rings_initialize(base, &active_state.capabilities, &active_state)) {
         goto out;
     }
+#endif
+    XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_START_COMMAND);
     mmio_write32(base, operational + 0x00U,
                  mmio_read32(base, operational + 0x00U) | XHCI_USBCMD_RUN);
+    XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_START_WAIT);
     if (!wait_mask(base, operational + 0x04U, XHCI_USBSTS_HALTED, false)) {
-        goto out;
+        XHCI_M61_FAIL(XHCI_M61_FALSE_START);
     }
     active_state.controller_running = true;
+    XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_PORT_SCAN);
     for (port = 0U; port < active_state.capabilities.max_ports; ++port) {
         const uint32_t portsc = mmio_read32(
             base, operational + XHCI_PORT_BASE +

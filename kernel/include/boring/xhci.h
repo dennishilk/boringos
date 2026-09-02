@@ -271,6 +271,9 @@ bool xhci_classify_shared_transfer_event(
 
 /* Initializes one segment-zero xHCI controller through PCI BAR0. */
 bool xhci_init(struct xhci_state *state);
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+uint8_t boring_m61_xhci_failure_reason(void);
+#endif
 bool xhci_address_connected(struct xhci_state *state);
 bool xhci_discover_descriptors(struct xhci_state *state);
 bool xhci_configure_hid_devices(struct xhci_state *state);

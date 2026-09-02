@@ -10,6 +10,8 @@ cd "$ROOT"
 # build. It does not add a normal BoringOS POST subsystem or change non-M61
 # runtime behavior.
 POST_SOURCE=kernel/core/m61_post80_generated.c
+
+python3 tests/m61-xhci-init-bisector.py
 cat > "$POST_SOURCE" <<'EOF_POST_C'
 #include <stdbool.h>
 #include <stddef.h>
@@ -153,7 +155,9 @@ enum m61_post_code {
     M61_POST_USB_FALSE_SCSI_INIT = 0xfc,
     M61_POST_USB_FALSE_BLOCK_REGISTER = 0xfd,
 
-    M61_POST_VMM_STATS_TRUE = 0xc3
+    M61_POST_VMM_STATS_TRUE = 0xc3,
+    M61_POST_XHCI_INIT_RETURNED_FALSE = 0xbf,
+    M61_POST_XHCI_INIT_RETURNED_TRUE = 0xfe
 };
 
 const char boring_m61_post_port80_enabled[] =
@@ -402,8 +406,22 @@ bool m61_post_timer_init(uint32_t frequency_hz) {
 }
 
 bool m61_post_xhci_init(struct xhci_state *state) {
+    bool result;
+
     M61_POST(M61_POST_XHCI_INIT_CALL);
-    return __real_xhci_init(state);
+    result = __real_xhci_init(state);
+    if (!result) {
+        uint8_t failure_reason;
+
+        M61_POST(M61_POST_XHCI_INIT_RETURNED_FALSE);
+        failure_reason = boring_m61_xhci_failure_reason();
+        if (failure_reason != 0U) {
+            M61_POST(failure_reason);
+        }
+        return result;
+    }
+    M61_POST(M61_POST_XHCI_INIT_RETURNED_TRUE);
+    return result;
 }
 
 bool m61_post_xhci_address_connected(struct xhci_state *state) {
@@ -534,6 +552,7 @@ nm build/kernel.elf | grep -Fq 'boring_m61_post_port80_enabled'
 nm build/kernel.elf | grep -Fq 'boring_m61_post_sequence'
 nm build/kernel.elf | grep -Fq 'boring_m61_post_62_to_63_sequence'
 nm build/kernel.elf | grep -Fq 'boring_m61_vmm_failure_reason'
+nm build/kernel.elf | grep -Fq 'boring_m61_xhci_failure_reason'
 nm build/kernel.elf | grep -Fq 'boring_m61_usb_mass_storage_failure_reason'
 
 python3 - <<'EOF_POST_VERIFY'
@@ -545,6 +564,7 @@ source = Path("kernel/core/m61_post80_generated.c").read_text()
 entry_source = Path("kernel/core/entry.c").read_text()
 vmm_source = Path("kernel/arch/x86_64/vmm.c").read_text()
 usb_source = Path("kernel/core/usb_mass_storage_impl.inc").read_text()
+xhci_source = Path("kernel/arch/x86_64/xhci.c").read_text()
 m37_source = Path("kernel/core/m37_desktop_test.c").read_text()
 m61_source = Path("kernel/core/m61_desktop_test.c").read_text()
 ordered = [
@@ -761,10 +781,26 @@ if any(token in usb_source for token in ("serial_write", "framebuffer")):
     raise RuntimeError("M61 USB diagnostics gained serial/framebuffer dependency")
 
 irq_source = function_definition("m61_post_irq_init")
+xhci_post_source = function_definition("m61_post_xhci_init")
 hid_source = function_definition("m61_post_xhci_configure_hid_devices_mixed")
 usb_post_source = function_definition("m61_post_usb_mass_storage_init")
 if irq_source.find("M61_POST(M61_POST_EXCEPTION_IRQ);") < 0 or irq_source.find("M61_POST(M61_POST_AFTER_IRQ_SUCCESS);") < irq_source.find("M61_POST(M61_POST_EXCEPTION_IRQ);"):
     raise RuntimeError("M61 64 meaning/order changed")
+xhci_call_post = xhci_post_source.index("M61_POST(M61_POST_XHCI_INIT_CALL);")
+xhci_real_call = xhci_post_source.index("result = __real_xhci_init(state);")
+xhci_false = xhci_post_source.index("M61_POST(M61_POST_XHCI_INIT_RETURNED_FALSE);")
+xhci_reason_read = xhci_post_source.index("failure_reason = boring_m61_xhci_failure_reason();")
+xhci_reason_replay = xhci_post_source.index("M61_POST(failure_reason);")
+xhci_false_return = xhci_post_source.index("return result;", xhci_reason_replay)
+xhci_true = xhci_post_source.index("M61_POST(M61_POST_XHCI_INIT_RETURNED_TRUE);")
+if not (xhci_call_post < xhci_real_call < xhci_false < xhci_reason_read < xhci_reason_replay < xhci_false_return < xhci_true):
+    raise RuntimeError("M61 xHCI init false replay/true control-flow ordering changed")
+if "failure_reason" in xhci_post_source[xhci_true:]:
+    raise RuntimeError("M61 xHCI init true path replays a failure reason")
+if xhci_post_source.count("M61_POST(M61_POST_XHCI_INIT_CALL);") != 1:
+    raise RuntimeError("M61 E9 xHCI init call meaning is not unique")
+if source.count("M61_POST(M61_POST_XHCI_ADDRESS_CALL);") != 1:
+    raise RuntimeError("M61 EA xHCI address call meaning is not unique")
 hid_call_post = hid_source.find("M61_POST(M61_POST_XHCI_HID_CONFIG_CALL);")
 hid_real_call = hid_source.find("result = __real_xhci_configure_hid_devices_mixed(state);")
 hid_true_post = hid_source.find("M61_POST(M61_POST_XHCI_HID_CONFIG_TRUE);")
@@ -808,7 +844,9 @@ functions = {
     "m61_post_heap_init": ("7e", "7f", "63"),
     "m61_post_irq_init": ("64", "e7"),
     "m61_post_timer_init": ("e8",),
-    "m61_post_xhci_init": ("e9",),
+    "m61_post_xhci_init": ("e9", "bf", "fe"),
+    "xhci_init": tuple(f"{code:02x}" for code in (
+        *range(0x88, 0x90), *range(0xac, 0xbf))),
     "m61_post_xhci_address_connected": ("ea",),
     "m61_post_xhci_discover_descriptors": ("eb",),
     "m61_post_xhci_configure_hid_devices_mixed": ("ec", "ed"),
@@ -833,7 +871,8 @@ for name, codes in functions.items():
         ["objdump", "-d", "--disassemble=" + name, "build/kernel.elf"],
         text=True)
     outputs = len(re.findall(r"\bout\b", body))
-    dynamic_output = name in ("m61_post_vmm_init", "m61_post_usb_mass_storage_init")
+    dynamic_output = name in (
+        "m61_post_vmm_init", "m61_post_usb_mass_storage_init")
     minimum_outputs = len(codes) + (1 if dynamic_output else 0)
     if outputs < minimum_outputs:
         raise RuntimeError(
@@ -846,10 +885,12 @@ for name, codes in functions.items():
                 f"M61 POST binary hook {name} missing code 0x{code.upper()}")
     if name == "m61_post_vmm_init" and "boring_m61_vmm_failure_reason" not in body:
         raise RuntimeError("M61 VMM binary hook does not call the failure-reason accessor")
+    if name == "m61_post_xhci_init" and "boring_m61_xhci_failure_reason" not in body:
+        raise RuntimeError("M61 xHCI binary hook does not call the failure-reason accessor")
     if name == "m61_post_usb_mass_storage_init" and "boring_m61_usb_mass_storage_failure_reason" not in body:
         raise RuntimeError("M61 USB binary hook does not call the failure-reason accessor")
     out_count += outputs
-if out_count < 55:
+if out_count < 84:
     raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")
 print("M61 POST port 0x80 binary acceptance: PASS")
 print("M61 POST existing sequence preserved: 61 62 63 64 65 66 67 68 69 6A 6F")
@@ -857,6 +898,7 @@ print("M61 POST 62-to-63 bisector: 70 71 72 73 74 75 76 77 78 79 7A 7B 7C 7D 7E 
 print("M61 VMM result bisector: C0 init-false C1 init-true C2 stats-false C3 stats-true")
 print("M61 VMM false reasons: D0-DF E0-E6, replayed after C0")
 print("M61 64-to-65 USB progress: E7 E8 E9 EA EB EC ED EE EF F0 F1 F2 F3 F4 F5 F6 F7 then 65")
+print("M61 xHCI init progress: 88-8F AC-B2; false reasons B3-BE replayed after BF; FE returned-true")
 print("M61 USB false: F8 returned-false; reasons F9-FD replayed last")
 print("M61 VMM short-circuit source gate: PRESERVED")
 print("M61 QEMU port 0x80 observer: SKIPPED (pc/q35 owns ioport80 sink)")
