@@ -557,8 +557,26 @@ for required in (
 ):
     if required not in vmm_source:
         raise RuntimeError(f"M61 VMM original result path changed: {required}")
-if "#define VMM_MAX_MEMORY_MAP_ENTRIES 256ULL" not in vmm_source:
-    raise RuntimeError("M61 VMM diagnostic changed the VMM memory-map cap")
+cap_match = re.search(
+    r"^#define VMM_MAX_MEMORY_MAP_ENTRIES ([0-9]+)ULL$",
+    vmm_source,
+    re.MULTILINE,
+)
+if cap_match is None or int(cap_match.group(1), 10) != 4096:
+    raise RuntimeError("M61 VMM memory-map cap is not the intended 4096-entry limit")
+if vmm_source.count("VMM_MAX_MEMORY_MAP_ENTRIES") != 2:
+    raise RuntimeError("M61 VMM memory-map cap gained unexpected dependent use or storage")
+if (
+    "if (memory_map->entry_count > VMM_MAX_MEMORY_MAP_ENTRIES) {\n"
+    "        VMM_M61_REJECT(0xD6U);\n"
+    "    }"
+) not in vmm_source:
+    raise RuntimeError("M61 VMM D6 memory-map cap rejection changed")
+vmm_memory_map_cap = int(cap_match.group(1), 10)
+if 4096 > vmm_memory_map_cap:
+    raise RuntimeError("M61 VMM entry_count == 4096 is not accepted by the cap")
+if not (4097 > vmm_memory_map_cap):
+    raise RuntimeError("M61 VMM entry_count == 4097 is not rejected by the cap")
 if any(token in vmm_source for token in ("serial_write", "framebuffer")):
     raise RuntimeError("M61 VMM failure classification gained serial/framebuffer dependency")
 
