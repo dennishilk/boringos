@@ -36,7 +36,7 @@ static void capabilities_test(void) {
 
     mmio[0] = 0x40U;
     put32(mmio, 4U, 32U | (4U << 8U) | (8U << 24U));
-    put32(mmio, 8U, (1U << 27U) | (2U << 21U));
+    put32(mmio, 8U, (1U << 21U) | (2U << 27U));
     put32(mmio, 0x10U, (0x20U << 16U) | (1U << 2U));
     put32(mmio, 0x14U, 0x1003U);
     put32(mmio, 0x18U, 0x2021U);
@@ -49,6 +49,22 @@ static void capabilities_test(void) {
     check((cap.doorbell_offset == 0x1000U) &&
           (cap.runtime_offset == 0x2020U) &&
           (cap.extended_capability_offset == 0x80U), "offset masking");
+
+    put32(mmio, 8U, 0U);
+    check(xhci_parse_capabilities(mmio, sizeof(mmio), &cap) &&
+          (cap.scratchpad_count == 0U), "scratchpad count zero");
+    put32(mmio, 8U, 1U << 27U);
+    check(xhci_parse_capabilities(mmio, sizeof(mmio), &cap) &&
+          (cap.scratchpad_count == 1U), "scratchpad count low-only");
+    put32(mmio, 8U, 1U << 21U);
+    check(xhci_parse_capabilities(mmio, sizeof(mmio), &cap) &&
+          (cap.scratchpad_count == 32U), "scratchpad count high-only");
+    put32(mmio, 8U, (5U << 21U) | (17U << 27U));
+    check(xhci_parse_capabilities(mmio, sizeof(mmio), &cap) &&
+          (cap.scratchpad_count == 177U), "scratchpad count mixed");
+    put32(mmio, 8U, (31U << 21U) | (31U << 27U));
+    check(xhci_parse_capabilities(mmio, sizeof(mmio), &cap) &&
+          (cap.scratchpad_count == 1023U), "scratchpad count maximum");
 
     mmio[0] = 0x10U;
     check(!xhci_parse_capabilities(mmio, sizeof(mmio), &cap), "short cap length");

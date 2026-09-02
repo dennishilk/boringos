@@ -56,8 +56,8 @@ bool xhci_parse_capabilities(const volatile void *mmio, uint32_t length,
     parsed.max_slots = (uint8_t)(hcs1 & 0xffU);
     parsed.max_interrupters = (uint16_t)((hcs1 >> 8U) & 0x7ffU);
     parsed.max_ports = (uint8_t)((hcs1 >> 24U) & 0xffU);
-    parsed.scratchpad_count = (uint16_t)((((hcs2 >> 27U) & 0x1fU) << 5U) |
-                                         ((hcs2 >> 21U) & 0x1fU));
+    parsed.scratchpad_count = (uint16_t)((((hcs2 >> 21U) & 0x1fU) << 5U) |
+                                         ((hcs2 >> 27U) & 0x1fU));
     parsed.doorbell_offset = read32(base, 0x14U) & ~3U;
     parsed.runtime_offset = read32(base, 0x18U) & ~0x1fU;
     parsed.extended_capability_offset =
