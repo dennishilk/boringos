@@ -14,6 +14,163 @@
 #include <boring/user_memory.h>
 #include <boring/vmm.h>
 
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+#include <boring/io.h>
+
+#define M61_WM_DISPLAY_POST_PORT 0x80U
+#define M61_DISPLAY_CONTROL_VERSION 2U
+#define M61_DISPLAY_MANAGER 11U
+#define M61_DISPLAY_PRESENT 16U
+#define M61_DISPLAY_REPLY 18U
+#define M61_DISPLAY_STATUS_OK 0U
+#define M61_DISPLAY_MESSAGE_SIZE 56U
+
+enum m61_wm_display_post_code {
+    M61_WM_DISPLAY_CONNECT_OK = 0x9a,
+    M61_WM_MANAGER_REQUEST_SENT = 0x9b,
+    M61_WM_MANAGER_REPLY_OK = 0x9c,
+    M61_WM_DISPLAY_PRESENT_SENT = 0x9d,
+    M61_DISPLAY_PRESENT_RECEIVED = 0x9e,
+    M61_WM_MANAGER_REPLY_REJECTED = 0x9f
+};
+
+static uint64_t m61_wm_pid;
+static uint32_t m61_wm_display_endpoint;
+static bool m61_connect_posted;
+static bool m61_manager_request_posted;
+static bool m61_manager_reply_posted;
+static bool m61_manager_bound;
+static bool m61_present_sent_posted;
+static bool m61_present_received_posted;
+
+static bool m61_same_bytes(const char *value, size_t value_length,
+                           const char *expected, size_t expected_length) {
+    size_t index;
+
+    if ((value == NULL) || (expected == NULL) ||
+        (value_length != expected_length)) {
+        return false;
+    }
+    for (index = 0U; index < value_length; ++index) {
+        if (value[index] != expected[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool m61_process_name_ends_with(const struct process *process,
+                                       const char *ending) {
+    size_t value_length = 0U;
+    size_t ending_length = 0U;
+    size_t index;
+
+    if ((process == NULL) || (ending == NULL)) {
+        return false;
+    }
+    while ((value_length <= KERNEL_PROCESS_NAME_MAX) &&
+           (process->name[value_length] != '\0')) {
+        ++value_length;
+    }
+    while ((ending_length <= KERNEL_PROCESS_NAME_MAX) &&
+           (ending[ending_length] != '\0')) {
+        ++ending_length;
+    }
+    if ((value_length > KERNEL_PROCESS_NAME_MAX) ||
+        (ending_length > KERNEL_PROCESS_NAME_MAX) ||
+        (value_length < ending_length)) {
+        return false;
+    }
+    for (index = 0U; index < ending_length; ++index) {
+        if (process->name[value_length - ending_length + index] !=
+            ending[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static uint32_t m61_read_u32(const uint8_t *value) {
+    return (uint32_t)value[0] |
+           ((uint32_t)value[1] << 8U) |
+           ((uint32_t)value[2] << 16U) |
+           ((uint32_t)value[3] << 24U);
+}
+
+static bool m61_display_message(const uint8_t *payload, size_t length,
+                                uint32_t type) {
+    return (payload != NULL) && (length == M61_DISPLAY_MESSAGE_SIZE) &&
+           (m61_read_u32(payload) == M61_DISPLAY_CONTROL_VERSION) &&
+           (m61_read_u32(payload + 4U) == type);
+}
+
+static void m61_wm_display_post(uint8_t code) {
+    x86_64_out8((uint16_t)M61_WM_DISPLAY_POST_PORT, code);
+}
+
+static void m61_note_display_connect(struct process *process,
+                                     const char *name, size_t length,
+                                     enum boring_ipc_result result,
+                                     uint32_t handle) {
+    if ((result == BORING_IPC_RESULT_OK) &&
+        (handle != BORING_IPC_HANDLE_INVALID) &&
+        m61_process_name_ends_with(process, "boringwm") &&
+        m61_same_bytes(name, length, "boring.display", 14U)) {
+        m61_wm_pid = process->pid;
+        m61_wm_display_endpoint = handle;
+        if (!m61_connect_posted) {
+            m61_connect_posted = true;
+            m61_wm_display_post((uint8_t)M61_WM_DISPLAY_CONNECT_OK);
+        }
+    }
+}
+
+static void m61_note_ipc_send(struct process *process, uint32_t endpoint,
+                              const uint8_t *payload, size_t length,
+                              enum boring_ipc_result result) {
+    if ((result != BORING_IPC_RESULT_OK) || (process == NULL) ||
+        (process->pid != m61_wm_pid) ||
+        (endpoint != m61_wm_display_endpoint)) {
+        return;
+    }
+    if (!m61_manager_request_posted &&
+        m61_display_message(payload, length, M61_DISPLAY_MANAGER)) {
+        m61_manager_request_posted = true;
+        m61_wm_display_post((uint8_t)M61_WM_MANAGER_REQUEST_SENT);
+    } else if (m61_manager_bound && !m61_present_sent_posted &&
+               m61_display_message(payload, length, M61_DISPLAY_PRESENT)) {
+        m61_present_sent_posted = true;
+        m61_wm_display_post((uint8_t)M61_WM_DISPLAY_PRESENT_SENT);
+    }
+}
+
+static void m61_note_ipc_receive(struct process *process, uint32_t endpoint,
+                                 const uint8_t *payload, size_t length) {
+    if ((process != NULL) && m61_manager_request_posted &&
+        (process->pid == m61_wm_pid) &&
+        (endpoint == m61_wm_display_endpoint) &&
+        !m61_manager_reply_posted && (payload != NULL) &&
+        (length == M61_DISPLAY_MESSAGE_SIZE) &&
+        (m61_read_u32(payload + 4U) == M61_DISPLAY_REPLY)) {
+        m61_manager_reply_posted = true;
+        if ((m61_read_u32(payload) == M61_DISPLAY_CONTROL_VERSION) &&
+            (m61_read_u32(payload + 8U) == M61_DISPLAY_STATUS_OK)) {
+            m61_manager_bound = true;
+            m61_wm_display_post((uint8_t)M61_WM_MANAGER_REPLY_OK);
+        } else {
+            m61_wm_display_post((uint8_t)M61_WM_MANAGER_REPLY_REJECTED);
+        }
+    }
+
+    if (!m61_present_received_posted &&
+        m61_process_name_ends_with(process, "boring-display") &&
+        m61_display_message(payload, length, M61_DISPLAY_PRESENT)) {
+        m61_present_received_posted = true;
+        m61_wm_display_post((uint8_t)M61_DISPLAY_PRESENT_RECEIVED);
+    }
+}
+#endif
+
 extern uint8_t x86_64_syscall_stack[X86_64_SYSCALL_STACK_SIZE];
 
 uintptr_t x86_64_syscall_active_stack_top =
@@ -242,6 +399,9 @@ static uint64_t service_connect(uint64_t user_name, uint64_t raw_length) {
     }
     name[length] = '\0';
     result = boring_ipc_service_connect(process, name, length, &handle);
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    m61_note_display_connect(process, name, length, result, handle);
+#endif
     return (result == BORING_IPC_RESULT_OK) ? (uint64_t)handle :
         ipc_error(ipc_result_errno(result));
 }
@@ -292,6 +452,9 @@ static uint64_t ipc_send(uint64_t raw_endpoint,
     }
     result = boring_ipc_send(process, (uint32_t)raw_endpoint,
                              payload, length, (uint32_t)raw_buffer_handle);
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    m61_note_ipc_send(process, (uint32_t)raw_endpoint, payload, length, result);
+#endif
     return (result == BORING_IPC_RESULT_OK) ? 0ULL :
         ipc_error(ipc_result_errno(result));
 }
@@ -337,6 +500,10 @@ static uint64_t ipc_receive(uint64_t raw_endpoint,
         break;
     }
 
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    m61_note_ipc_receive(process, (uint32_t)raw_endpoint, payload,
+                         kernel_result.payload_length);
+#endif
     abi_result.payload_length = (uint64_t)kernel_result.payload_length;
     abi_result.buffer_handle = kernel_result.buffer_handle;
     abi_result.flags = BORING_IPC_RECEIVE_FLAGS_NONE;
