@@ -853,8 +853,9 @@ enum boring_framebuffer_user_result __wrap_boring_framebuffer_user_present(
         } else {
             M61_HANDOFF_POST(M61_HANDOFF_POST_FINAL_PRESENT_ERROR);
         }
+    } else {
+        M61_HANDOFF_POST(M61_HANDOFF_POST_OUTER_PRESENT_RESUMED);
     }
-    M61_HANDOFF_POST(M61_HANDOFF_POST_OUTER_PRESENT_RESUMED);
     if (result != BORING_FRAMEBUFFER_USER_OK) {
         trace_stage(stage_number, '!', label);
         return result;

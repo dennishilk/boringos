@@ -183,8 +183,9 @@ final_present_block = re.compile(
     r"\} else \{\s*"
     r"M61_HANDOFF_POST\(M61_HANDOFF_POST_FINAL_PRESENT_ERROR\);\s*"
     r"\}\s*"
-    r"\}\s*"
+    r"\} else \{\s*"
     r"M61_HANDOFF_POST\(M61_HANDOFF_POST_OUTER_PRESENT_RESUMED\);\s*"
+    r"\}\s*"
     r"if \(result != BORING_FRAMEBUFFER_USER_OK\)",
 )
 if final_present_block.search(wrapper) is None:
@@ -200,7 +201,6 @@ if any(wrapper.count(post) != 1 or source.count(post) != 1
     raise RuntimeError("M61 final-present POST escaped its sole wrapper gate")
 
 ordered_after_call = (
-    "M61_HANDOFF_POST(M61_HANDOFF_POST_OUTER_PRESENT_RESUMED);",
     "if (result != BORING_FRAMEBUFFER_USER_OK)",
     "desktop_presented = true;",
     "M61_HANDOFF_POST(M61_HANDOFF_POST_SERIAL_ENTER);",
@@ -269,7 +269,7 @@ address_to_index = {
     instruction[0]: index for index, instruction in enumerate(instructions)
 }
 events = {}
-for code in (0x3C, 0x3D, 0x3E):
+for code in (0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E):
     matches = []
     for index, (_, mnemonic, operands) in enumerate(instructions[:-1]):
         next_mnemonic = instructions[index + 1][1]
@@ -285,9 +285,12 @@ for code in (0x3C, 0x3D, 0x3E):
     events[matches[0]] = f"{code:02X}"
 
 inner_target = "<m61_post_boring_framebuffer_user_present>"
+handoff_target = "<__wrap_boring_boot_console_desktop_handoff>"
 for index, (_, mnemonic, operands) in enumerate(instructions):
     if mnemonic in ("call", "jmp") and inner_target in operands:
         events[index] = "PRESENT"
+    if mnemonic in ("call", "jmp") and handoff_target in operands:
+        events[index] = "HANDOFF"
 
 paths = []
 
@@ -324,7 +327,7 @@ new_post_paths = {
     path for path in paths if any(code in path for code in ("3C", "3D", "3E"))
 }
 if new_post_paths != {
-        ("3C", "PRESENT", "3D"),
+        ("3C", "PRESENT", "3D", "3A", "3B", "HANDOFF"),
         ("3C", "PRESENT", "3E"),
 }:
     raise RuntimeError(
@@ -333,8 +336,11 @@ ordinary_present_paths = [
     path for path in paths if "PRESENT" in path and "3C" not in path
 ]
 if (not ordinary_present_paths or
+        not any("39" in path for path in ordinary_present_paths) or
         any("3D" in path or "3E" in path for path in ordinary_present_paths)):
     raise RuntimeError("M61 linked non-final present path gained 3C/3D/3E")
+if any("39" in path for path in new_post_paths):
+    raise RuntimeError("M61 linked final-present classification is masked by POST 39")
 
 if not re.search(
     r"call\s+[^\n]*<m61_post_boring_framebuffer_user_present>", outer):
@@ -363,7 +369,12 @@ print("M61_HANDOFF_GAP_SOURCE_ORDER=PASS")
 print("M61_FINAL_PRESENT_RESULT_GATES=PASS")
 print("M61_FINAL_PRESENT_ELF_CONTROL_FLOW=PASS")
 print("M61_FINAL_PRESENT_ELF_POSTS=3C,3D,3E")
-print("M61_NON_FINAL_PRESENT_NEW_POSTS=0")
+print("M61_FINAL_PRESENT_HANG_PREFIX=3C->REAL_PRESENT")
+print("M61_FINAL_PRESENT_SUCCESS_PATH=3C->REAL_PRESENT->3D->SUCCESS_CONTINUATION")
+print("M61_FINAL_PRESENT_ERROR_PATH=3C->REAL_PRESENT->3E->ERROR_CONTINUATION")
+print("FINAL_3D_NOT_MASKED_BY_39=YES")
+print("FINAL_3E_NOT_MASKED_BY_39=YES")
+print("NON_FINAL_39_PRESERVED=YES")
 PY
 
 printf '%s\n' 'M61_PHYSICAL_HANDOFF_BISECTOR=PASS'
