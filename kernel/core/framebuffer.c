@@ -16,6 +16,11 @@ static volatile struct boring_limine_framebuffer_request limine_framebuffer_requ
 
 static struct boring_framebuffer boot_surface;
 static bool boot_surface_ready;
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+static struct boring_m61_framebuffer_mapping_diagnostics
+    m61_mapping_diagnostics;
+static bool m61_mapping_diagnostics_ready;
+#endif
 
 static bool boring_u64_mul(uint64_t first, uint64_t second, uint64_t *result) {
     if (result == NULL) {
@@ -200,6 +205,130 @@ const struct boring_framebuffer *boring_framebuffer_get(void) {
 }
 
 #ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+static bool boring_framebuffer_metadata_equal(
+    const struct boring_framebuffer *first,
+    const struct boring_framebuffer *second) {
+    return (first != NULL) && (second != NULL) &&
+           (first->width == second->width) &&
+           (first->height == second->height) &&
+           (first->pitch == second->pitch) &&
+           (first->byte_size == second->byte_size) &&
+           (first->bpp == second->bpp) &&
+           (first->bytes_per_pixel == second->bytes_per_pixel) &&
+           (first->memory_model == second->memory_model) &&
+           (first->red_mask_size == second->red_mask_size) &&
+           (first->red_mask_shift == second->red_mask_shift) &&
+           (first->green_mask_size == second->green_mask_size) &&
+           (first->green_mask_shift == second->green_mask_shift) &&
+           (first->blue_mask_size == second->blue_mask_size) &&
+           (first->blue_mask_shift == second->blue_mask_shift);
+}
+
+bool boring_m61_framebuffer_normalize(
+    struct boring_framebuffer *surface,
+    struct boring_m61_framebuffer_mapping_diagnostics *diagnostics) {
+    struct boring_framebuffer candidate;
+    struct boring_framebuffer original;
+    struct vmm_framebuffer_resolution resolution;
+    volatile void *alias = NULL;
+    uintptr_t expected_alias;
+    size_t mapping_pages = 0U;
+
+    if (diagnostics == NULL) {
+        return false;
+    }
+    *diagnostics =
+        (struct boring_m61_framebuffer_mapping_diagnostics){0};
+    diagnostics->attempted = true;
+    if (!boring_framebuffer_surface_valid(surface) ||
+        (surface->byte_size > (uint64_t)SIZE_MAX)) {
+        return false;
+    }
+
+    original = *surface;
+    diagnostics->original_virtual_start = (uintptr_t)surface->address;
+    diagnostics->original_virtual_end =
+        diagnostics->original_virtual_start +
+        (uintptr_t)(surface->byte_size - 1ULL);
+    diagnostics->byte_size = surface->byte_size;
+
+    if (!vmm_resolve_limine_framebuffer(
+            diagnostics->original_virtual_start,
+            (size_t)surface->byte_size, &resolution)) {
+        return false;
+    }
+    diagnostics->resolution = resolution;
+    diagnostics->memmap_range_match = true;
+
+    expected_alias = VMM_FRAMEBUFFER_WINDOW_BASE +
+        (uintptr_t)(resolution.physical_base & (VMM_PAGE_SIZE - 1ULL));
+    candidate = original;
+    candidate.address = (volatile uint8_t *)expected_alias;
+    if (!boring_framebuffer_surface_valid(&candidate)) {
+        return false;
+    }
+
+    if (!vmm_map_framebuffer_region(
+            resolution.physical_base, (size_t)surface->byte_size,
+            &alias, &mapping_pages) ||
+        ((uintptr_t)alias != expected_alias)) {
+        return false;
+    }
+
+    diagnostics->alias_virtual_start = (uintptr_t)alias;
+    diagnostics->alias_virtual_end = diagnostics->alias_virtual_start +
+        (uintptr_t)(surface->byte_size - 1ULL);
+    diagnostics->mapping_pages = mapping_pages;
+    if (!vmm_inspect_mapping(
+            diagnostics->alias_virtual_start,
+            &diagnostics->alias_start_mapping) ||
+        !vmm_inspect_mapping(
+            diagnostics->alias_virtual_end,
+            &diagnostics->alias_end_mapping) ||
+        !diagnostics->alias_start_mapping.present ||
+        !diagnostics->alias_start_mapping.effective_writable ||
+        !diagnostics->alias_start_mapping.leaf_pcd ||
+        (diagnostics->alias_start_mapping.physical_address !=
+         resolution.physical_base) ||
+        !diagnostics->alias_end_mapping.present ||
+        !diagnostics->alias_end_mapping.effective_writable ||
+        !diagnostics->alias_end_mapping.leaf_pcd ||
+        (diagnostics->alias_end_mapping.physical_address !=
+         resolution.physical_end)) {
+        return false;
+    }
+
+    surface->address = candidate.address;
+    diagnostics->alias_created = true;
+    diagnostics->metadata_preserved =
+        boring_framebuffer_metadata_equal(&original, surface);
+    return diagnostics->metadata_preserved &&
+           boring_framebuffer_surface_valid(surface);
+}
+
+bool boring_m61_framebuffer_prepare_runtime(void) {
+    struct boring_m61_framebuffer_mapping_diagnostics diagnostics = {0};
+    const bool result = boot_surface_ready &&
+        boring_m61_framebuffer_normalize(&boot_surface, &diagnostics);
+
+    m61_mapping_diagnostics = diagnostics;
+    m61_mapping_diagnostics_ready = true;
+    if (!result) {
+        return false;
+    }
+    boot_surface_ready = boring_framebuffer_surface_valid(&boot_surface);
+    return boot_surface_ready;
+}
+
+bool boring_m61_framebuffer_get_mapping_diagnostics(
+    struct boring_m61_framebuffer_mapping_diagnostics *diagnostics) {
+    if (!m61_mapping_diagnostics_ready || (diagnostics == NULL)) {
+        return false;
+    }
+    *diagnostics = m61_mapping_diagnostics;
+    return true;
+}
+
 uint64_t boring_m61_framebuffer_count(void) {
     const struct boring_limine_framebuffer_response *const response =
         limine_framebuffer_request.response;

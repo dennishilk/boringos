@@ -40,4 +40,8 @@ bool boring_graphics_vertical_line(const struct boring_framebuffer *surface,
                                    uint64_t length,
                                    uint32_t color);
 
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+bool boring_m61_first_framebuffer_store_active(void);
+#endif
+
 #endif

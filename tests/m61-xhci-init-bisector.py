@@ -115,10 +115,12 @@ new_codes = (
     set(ring_reasons.values()) | set(ring_progress.values())
 )
 
-# 80-87 and 92-99 are older physical-bisector claims even though their
-# generators are separate from the current exact-head script. Keep them
-# reserved along with every code emitted by the current candidate.
+# 30-33 identify faults during the first real framebuffer store. 80-87 and
+# 92-99 are older physical-bisector claims even though their generators are
+# separate from the current exact-head script. Keep them reserved along with
+# every code emitted by the current candidate.
 claimed = (
+    set(range(0x30, 0x34)) |
     set(range(0x61, 0x80)) |
     set(range(0x80, 0x88)) |
     set(range(0x90, 0x9A)) |

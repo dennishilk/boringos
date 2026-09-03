@@ -554,6 +554,11 @@ nm build/kernel.elf | grep -Fq 'boring_m61_post_62_to_63_sequence'
 nm build/kernel.elf | grep -Fq 'boring_m61_vmm_failure_reason'
 nm build/kernel.elf | grep -Fq 'boring_m61_xhci_failure_reason'
 nm build/kernel.elf | grep -Fq 'boring_m61_usb_mass_storage_failure_reason'
+nm build/kernel.elf | grep -Fq 'vmm_inspect_mapping'
+nm build/kernel.elf | grep -Fq 'vmm_map_framebuffer_region'
+nm build/kernel.elf | grep -Fq 'boring_m61_framebuffer_prepare_runtime'
+nm build/kernel.elf | grep -Fq 'boring_m61_first_framebuffer_store_active'
+nm build/kernel.elf | grep -Fq 'boring_m61_framebuffer_fault_post_codes'
 
 python3 - <<'EOF_POST_VERIFY'
 import re
@@ -563,6 +568,11 @@ from pathlib import Path
 source = Path("kernel/core/m61_post80_generated.c").read_text()
 entry_source = Path("kernel/core/entry.c").read_text()
 vmm_source = Path("kernel/arch/x86_64/vmm.c").read_text()
+vmm_header_source = Path("kernel/include/boring/vmm.h").read_text()
+mmio_source = Path("kernel/arch/x86_64/mmio.c").read_text()
+framebuffer_source = Path("kernel/core/framebuffer.c").read_text()
+graphics_source = Path("kernel/core/graphics.c").read_text()
+trace_source = Path("kernel/core/m61_physical_breadcrumbs.c").read_text()
 usb_source = Path("kernel/core/usb_mass_storage_impl.inc").read_text()
 xhci_source = Path("kernel/arch/x86_64/xhci.c").read_text()
 m37_source = Path("kernel/core/m37_desktop_test.c").read_text()
@@ -613,6 +623,7 @@ def function_definition(name, text=source):
 
 vmm_init_source = function_definition("m61_post_vmm_init")
 vmm_stats_source = function_definition("__wrap_vmm_get_stats")
+real_vmm_init_source = function_definition("vmm_init", vmm_source)
 for required in (
     "M61_POST(M61_POST_VMM_INIT_BEFORE);",
     "result = __real_vmm_init(hhdm, paging, memmap);",
@@ -709,8 +720,125 @@ if 4096 > vmm_memory_map_cap:
     raise RuntimeError("M61 VMM entry_count == 4096 is not accepted by the cap")
 if not (4097 > vmm_memory_map_cap):
     raise RuntimeError("M61 VMM entry_count == 4097 is not rejected by the cap")
-if any(token in vmm_source for token in ("serial_write", "framebuffer")):
+if ("serial_write" in vmm_source or
+        "framebuffer" in real_vmm_init_source.lower()):
     raise RuntimeError("M61 VMM failure classification gained serial/framebuffer dependency")
+
+# The physical 90 boundary must remain immediately before the real byte store,
+# and 91 must remain reachable only after that store returns.
+pre_store_post = graphics_source.find(
+    "(uint8_t)M61_NORMAL_FRAMEBUFFER_PRE_POST);")
+store_expression = graphics_source.find(
+    "surface->address[offset + (uint64_t)byte_index] =")
+store_inactive = graphics_source.find(
+    "m61_first_normal_framebuffer_store_active = false;")
+post_store_post = graphics_source.find(
+    "(uint8_t)M61_NORMAL_FRAMEBUFFER_POST_POST);")
+if not (0 <= pre_store_post < store_expression < store_inactive < post_store_post):
+    raise RuntimeError("M61 real framebuffer 90/store/91 source order changed")
+if graphics_source.count(
+        "m61_first_normal_framebuffer_store_active = true;") != 1:
+    raise RuntimeError("M61 first-store fault seam is not armed exactly once")
+if "0x91" in trace_source.lower():
+    raise RuntimeError("M61 exception diagnostics can fake POST 91")
+
+fault_codes = {0x30, 0x31, 0x32, 0x33}
+claimed_codes = (
+    set(range(0x40, 0x5E)) |
+    set(range(0x61, 0x80)) |
+    set(range(0x80, 0x90)) |
+    set(range(0x90, 0x9A)) |
+    set(range(0xA0, 0xC4)) |
+    set(range(0xD0, 0xFF))
+)
+if fault_codes & claimed_codes:
+    raise RuntimeError("M61 framebuffer fault POST codes collide with frozen meanings")
+fault_assignments = {
+    name: int(value, 16)
+    for name, value in re.findall(
+        r"^\s*(M61_FRAMEBUFFER_FAULT_[A-Z_]+)\s*=\s*"
+        r"0x([0-9a-fA-F]{2})\s*,?\s*$",
+        trace_source,
+        re.MULTILINE,
+    )
+}
+if fault_assignments != {
+    "M61_FRAMEBUFFER_FAULT_PAGE": 0x30,
+    "M61_FRAMEBUFFER_FAULT_GENERAL_PROTECTION": 0x31,
+    "M61_FRAMEBUFFER_FAULT_MACHINE_CHECK": 0x32,
+    "M61_FRAMEBUFFER_FAULT_OTHER": 0x33,
+}:
+    raise RuntimeError("M61 framebuffer fault POST map is incomplete")
+if not all(token in trace_source for token in (
+    "if (frame->vector == 14ULL)",
+    "if (frame->vector == 13ULL)",
+    "if (frame->vector == 18ULL)",
+    "x86_64_out8((uint16_t)0x80U, code);",
+    "if (boring_m61_first_framebuffer_store_active())",
+    "framebuffer_fault_halt(frame);",
+)):
+    raise RuntimeError("M61 post-90 exception classification is incomplete")
+
+exception_wrapper = function_definition("__wrap_exception_init", trace_source)
+exception_real = exception_wrapper.find("result = __real_exception_init();")
+containment_release = exception_wrapper.find("early_containment_active = false;")
+normalization_call = exception_wrapper.find(
+    "framebuffer_ready = boring_m61_framebuffer_prepare_runtime();")
+normalization_report = exception_wrapper.find(
+    "serial_framebuffer_normalization(framebuffer_ready);")
+if not (0 <= exception_real < containment_release < normalization_call <
+        normalization_report):
+    raise RuntimeError("M61 framebuffer normalization is not after normal exception init")
+
+acquire_start = trace_source.find("static void acquire_framebuffers(void) {")
+acquire_end = trace_source.find("\nstatic bool ends_with", acquire_start)
+if (acquire_start < 0 or acquire_end < 0 or
+        "boring_graphics_" in trace_source[acquire_start:acquire_end] or
+        "boring_m61_framebuffer_prepare_runtime" in
+        trace_source[acquire_start:acquire_end]):
+    raise RuntimeError("M61 early framebuffer acquisition gained writes/mapping")
+
+normalize_source = function_definition(
+    "boring_m61_framebuffer_normalize", framebuffer_source)
+map_call = normalize_source.find("vmm_map_framebuffer_region(")
+address_rebind = normalize_source.find("surface->address = candidate.address;")
+if not (0 <= map_call < address_rebind):
+    raise RuntimeError("M61 framebuffer address changes before mapping success")
+if "boring_graphics_" in normalize_source:
+    raise RuntimeError("M61 framebuffer normalization performs a pixel write")
+for required in (
+    "vmm_resolve_limine_framebuffer(",
+    "diagnostics->memmap_range_match = true;",
+    "diagnostics->metadata_preserved =",
+    "diagnostics->alias_start_mapping.effective_writable",
+    "diagnostics->alias_end_mapping.effective_writable",
+    "boring_framebuffer_surface_valid(surface)",
+):
+    if required not in normalize_source:
+        raise RuntimeError(f"M61 framebuffer normalization missing: {required}")
+
+for required in (
+    "VMM_PAGE_SIZE_2M", "VMM_PAGE_SIZE_1G",
+    "VMM_ENTRY_ADDRESS_MASK_2M", "VMM_ENTRY_ADDRESS_MASK_1G",
+    "parent_writable && leaf_writable",
+    "vmm_resolve_limine_framebuffer",
+    "BORING_LIMINE_MEMMAP_FRAMEBUFFER",
+):
+    if required not in vmm_source:
+        raise RuntimeError(f"M61 large-page framebuffer inspector missing: {required}")
+for required in (
+    "#define VMM_FRAMEBUFFER_WINDOW_BASE ((uintptr_t)0xffffff0004000000ULL)",
+    "#define VMM_FRAMEBUFFER_WINDOW_SIZE ((size_t)0x04000000U)",
+):
+    if required not in vmm_header_source:
+        raise RuntimeError(f"M61 framebuffer MMIO window changed: {required}")
+for required in (
+    "VMM_PTE_CACHE_DISABLE", "vmm_inspect_mapping(current_virtual, &existing)",
+    "vmm_map_framebuffer_region", "VMM_FRAMEBUFFER_WINDOW_PAGES",
+    "PCI MMIO and framebuffer windows must not overlap",
+):
+    if required not in mmio_source:
+        raise RuntimeError(f"M61 framebuffer MMIO mapper missing: {required}")
 
 # Audit the exact post-64 path inherited by M61 from the M37/M54 desktop.
 input_hardware = function_definition("input_hardware_init", m37_source)

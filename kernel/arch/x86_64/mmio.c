@@ -16,6 +16,21 @@
 #define VMM_PTE_ADDRESS_MASK 0x000ffffffffff000ULL
 
 static size_t vmm_mmio_next_page;
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+#define VMM_FRAMEBUFFER_WINDOW_PAGES \
+    (VMM_FRAMEBUFFER_WINDOW_SIZE / (size_t)VMM_PAGE_SIZE)
+static bool vmm_framebuffer_window_mapped;
+
+_Static_assert(VMM_MMIO_WINDOW_BASE + VMM_MMIO_WINDOW_SIZE <=
+               VMM_FRAMEBUFFER_WINDOW_BASE,
+               "PCI MMIO and framebuffer windows must not overlap");
+#endif
+
+struct mmio_mapping_span {
+    uint64_t physical_page;
+    size_t page_offset;
+    size_t pages;
+};
 
 static bool mmio_is_canonical_4level(uint64_t address) {
     const uint64_t upper = address >> 48U;
@@ -165,67 +180,146 @@ static void mmio_rollback(uintptr_t first_virtual, size_t mapped_pages) {
     }
 }
 
-bool vmm_map_mmio_region(uint64_t physical_address,
-                         size_t length,
-                         volatile void **virtual_address) {
+static bool mmio_calculate_span(uint64_t physical_address,
+                                size_t length,
+                                struct mmio_mapping_span *mapping) {
     const uint64_t page_mask = VMM_PAGE_SIZE - 1ULL;
     const uint64_t physical_page = physical_address & ~page_mask;
     const size_t page_offset = (size_t)(physical_address & page_mask);
     size_t span;
     size_t pages;
-    size_t index;
-    uintptr_t first_virtual;
+    uint64_t last_page;
 
-    if ((virtual_address == NULL) || (length == 0U) ||
+    if ((mapping == NULL) || (length == 0U) ||
         (page_offset > (SIZE_MAX - length))) {
         return false;
     }
-
     span = page_offset + length;
     if (span > (SIZE_MAX - ((size_t)VMM_PAGE_SIZE - 1U))) {
         return false;
     }
     pages = (span + ((size_t)VMM_PAGE_SIZE - 1U)) /
             (size_t)VMM_PAGE_SIZE;
-
-    if ((pages == 0U) || (pages > VMM_MMIO_WINDOW_PAGES) ||
-        (vmm_mmio_next_page > (VMM_MMIO_WINDOW_PAGES - pages))) {
+    if ((pages == 0U) ||
+        (physical_page > (UINT64_MAX -
+         ((uint64_t)(pages - 1U) * VMM_PAGE_SIZE)))) {
+        return false;
+    }
+    last_page = physical_page + ((uint64_t)(pages - 1U) * VMM_PAGE_SIZE);
+    if (((physical_page & ~VMM_PTE_ADDRESS_MASK) != 0ULL) ||
+        ((last_page & ~VMM_PTE_ADDRESS_MASK) != 0ULL)) {
         return false;
     }
 
-    if (physical_page > (UINT64_MAX -
-        ((uint64_t)(pages - 1U) * VMM_PAGE_SIZE))) {
+    mapping->physical_page = physical_page;
+    mapping->page_offset = page_offset;
+    mapping->pages = pages;
+    return true;
+}
+
+static bool mmio_map_at(uint64_t physical_address,
+                        size_t length,
+                        uintptr_t first_virtual,
+                        size_t capacity_pages,
+                        volatile void **virtual_address,
+                        size_t *mapped_pages) {
+    struct mmio_mapping_span mapping;
+    size_t index;
+    uintptr_t virtual_end;
+
+    if ((virtual_address == NULL) || (mapped_pages == NULL) ||
+        !mmio_calculate_span(physical_address, length, &mapping) ||
+        (mapping.pages > capacity_pages) ||
+        (mapping.pages > (SIZE_MAX / (size_t)VMM_PAGE_SIZE))) {
+        return false;
+    }
+    if ((uintptr_t)(mapping.pages * (size_t)VMM_PAGE_SIZE) >
+        (UINTPTR_MAX - first_virtual)) {
+        return false;
+    }
+    virtual_end = first_virtual +
+        (uintptr_t)(mapping.pages * (size_t)VMM_PAGE_SIZE) - 1U;
+    if (!mmio_is_canonical_4level((uint64_t)first_virtual) ||
+        !mmio_is_canonical_4level((uint64_t)virtual_end)) {
         return false;
     }
 
-    first_virtual = VMM_MMIO_WINDOW_BASE +
-        (uintptr_t)(vmm_mmio_next_page * (size_t)VMM_PAGE_SIZE);
-    if ((first_virtual < VMM_MMIO_WINDOW_BASE) ||
-        !mmio_is_canonical_4level((uint64_t)first_virtual) ||
-        !mmio_is_canonical_4level((uint64_t)(first_virtual +
-            (uintptr_t)(pages * (size_t)VMM_PAGE_SIZE) - 1U))) {
-        return false;
-    }
-
-    for (index = 0U; index < pages; ++index) {
+    for (index = 0U; index < mapping.pages; ++index) {
         const uintptr_t current_virtual = first_virtual +
             (uintptr_t)(index * (size_t)VMM_PAGE_SIZE);
-        const uint64_t current_physical = physical_page +
+        const uint64_t current_physical = mapping.physical_page +
             ((uint64_t)index * VMM_PAGE_SIZE);
-        uint64_t existing;
+        struct vmm_mapping_info existing;
 
-        if (vmm_translate(current_virtual, &existing) ||
+        if (!vmm_inspect_mapping(current_virtual, &existing) ||
+            !existing.canonical || existing.present ||
             !mmio_map_one(current_virtual, current_physical)) {
             mmio_rollback(first_virtual, index);
             return false;
         }
     }
 
-    vmm_mmio_next_page += pages;
     *virtual_address = (volatile void *)(first_virtual +
-        (uintptr_t)page_offset);
+        (uintptr_t)mapping.page_offset);
+    *mapped_pages = mapping.pages;
     return true;
 }
+
+bool vmm_map_mmio_region(uint64_t physical_address,
+                         size_t length,
+                         volatile void **virtual_address) {
+    size_t pages = 0U;
+    uintptr_t first_virtual;
+
+    if ((virtual_address == NULL) ||
+        (vmm_mmio_next_page >= VMM_MMIO_WINDOW_PAGES)) {
+        return false;
+    }
+    first_virtual = VMM_MMIO_WINDOW_BASE +
+        (uintptr_t)(vmm_mmio_next_page * (size_t)VMM_PAGE_SIZE);
+    if ((first_virtual < VMM_MMIO_WINDOW_BASE) ||
+        !mmio_map_at(physical_address, length, first_virtual,
+                     VMM_MMIO_WINDOW_PAGES - vmm_mmio_next_page,
+                     virtual_address, &pages)) {
+        return false;
+    }
+
+    vmm_mmio_next_page += pages;
+    return true;
+}
+
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+bool vmm_framebuffer_mapping_page_count(uint64_t physical_address,
+                                        size_t length,
+                                        size_t *mapped_pages) {
+    struct mmio_mapping_span mapping;
+
+    if ((mapped_pages == NULL) ||
+        !mmio_calculate_span(physical_address, length, &mapping)) {
+        return false;
+    }
+    *mapped_pages = mapping.pages;
+    return true;
+}
+
+bool vmm_map_framebuffer_region(uint64_t physical_address,
+                                size_t length,
+                                volatile void **virtual_address,
+                                size_t *mapped_pages) {
+    size_t pages = 0U;
+
+    if (vmm_framebuffer_window_mapped ||
+        !mmio_map_at(physical_address, length,
+                     VMM_FRAMEBUFFER_WINDOW_BASE,
+                     VMM_FRAMEBUFFER_WINDOW_PAGES,
+                     virtual_address, &pages)) {
+        return false;
+    }
+    vmm_framebuffer_window_mapped = true;
+    *mapped_pages = pages;
+    return true;
+}
+#endif
 
 bool vmm_unmap_mmio_region(volatile void *virtual_address, size_t length) {
     const uintptr_t address = (uintptr_t)virtual_address;

@@ -11,9 +11,11 @@
 #include <boring/exception.h>
 #include <boring/framebuffer.h>
 #include <boring/framebuffer_user.h>
+#include <boring/graphics.h>
 #include <boring/heap.h>
 #include <boring/input.h>
 #include <boring/ipc.h>
+#include <boring/io.h>
 #include <boring/irq.h>
 #include <boring/pci_inventory.h>
 #include <boring/pmm.h>
@@ -35,6 +37,17 @@
 #define EARLY_IDT_GATE_INTERRUPT 0x8eU
 #define EARLY_IDT_IST_NONE 0U
 #define EARLY_IDT_IST1 1U
+
+enum m61_framebuffer_fault_post_code {
+    M61_FRAMEBUFFER_FAULT_PAGE = 0x30,
+    M61_FRAMEBUFFER_FAULT_GENERAL_PROTECTION = 0x31,
+    M61_FRAMEBUFFER_FAULT_MACHINE_CHECK = 0x32,
+    M61_FRAMEBUFFER_FAULT_OTHER = 0x33
+};
+
+const uint8_t boring_m61_framebuffer_fault_post_codes[] = {
+    0x30U, 0x31U, 0x32U, 0x33U
+};
 
 struct m61_early_idt_entry {
     uint16_t offset_low;
@@ -61,6 +74,7 @@ extern const uintptr_t
 void x86_64_load_idt(const struct m61_early_idtr *idtr);
 void x86_64_store_idt(struct m61_early_idtr *idtr);
 uint16_t x86_64_read_cs(void);
+uint64_t x86_64_read_cr2(void);
 
 const char boring_m61_physical_breadcrumbs_enabled[] =
     "M61 metadata-only framebuffer acquisition and safe boot console enabled";
@@ -301,6 +315,84 @@ static void serial_surface(uint64_t index,
     serial_write_string("/");
     serial_write_u64((uint64_t)surface->blue_mask_shift);
     serial_write_string("\n");
+}
+
+static void serial_mapping(const char *label,
+                           const struct vmm_mapping_info *mapping) {
+    if ((!serial_ready) || (label == NULL) || (mapping == NULL)) {
+        return;
+    }
+    serial_write_string("M61 FRAMEBUFFER MAPPING ");
+    serial_write_string(label);
+    serial_write_string(" canonical=");
+    serial_write_string(mapping->canonical ? "yes" : "no");
+    serial_write_string(" present=");
+    serial_write_string(mapping->present ? "yes" : "no");
+    serial_write_string(" parent_writable=");
+    serial_write_string(mapping->parent_writable ? "yes" : "no");
+    serial_write_string(" leaf_writable=");
+    serial_write_string(mapping->leaf_writable ? "yes" : "no");
+    serial_write_string(" effective_writable=");
+    serial_write_string(mapping->effective_writable ? "yes" : "no");
+    serial_write_string(" leaf_size=");
+    serial_write_u64(mapping->leaf_size);
+    serial_write_string(" physical=");
+    serial_write_hex_u64(mapping->physical_address);
+    serial_write_string(" pwt=");
+    serial_write_string(mapping->leaf_pwt ? "yes" : "no");
+    serial_write_string(" pcd=");
+    serial_write_string(mapping->leaf_pcd ? "yes" : "no");
+    serial_write_string(" pat=");
+    serial_write_string(mapping->leaf_pat ? "yes" : "no");
+    serial_write_string(" nx=");
+    serial_write_string(mapping->effective_nx ? "yes" : "no");
+    serial_write_string("\n");
+}
+
+static void serial_framebuffer_normalization(bool result) {
+    struct boring_m61_framebuffer_mapping_diagnostics diagnostics;
+
+    if (!serial_ready ||
+        !boring_m61_framebuffer_get_mapping_diagnostics(&diagnostics)) {
+        return;
+    }
+    serial_write_string("M61 FRAMEBUFFER NORMALIZATION result=");
+    serial_write_string(result ? "ready" : "original-alias-retained");
+    serial_write_string(" bytes=");
+    serial_write_u64(diagnostics.byte_size);
+    serial_write_string(" va_start=");
+    serial_write_hex_u64((uint64_t)diagnostics.original_virtual_start);
+    serial_write_string(" va_end=");
+    serial_write_hex_u64((uint64_t)diagnostics.original_virtual_end);
+    serial_write_string("\n");
+    serial_mapping("start", &diagnostics.resolution.start_mapping);
+    serial_mapping("end", &diagnostics.resolution.end_mapping);
+    serial_write_string("M61 FRAMEBUFFER PHYSICAL base=");
+    serial_write_hex_u64(diagnostics.resolution.physical_base);
+    serial_write_string(" end=");
+    serial_write_hex_u64(diagnostics.resolution.physical_end);
+    serial_write_string(" memmap_match=");
+    serial_write_string(diagnostics.memmap_range_match ? "yes" : "no");
+    serial_write_string(" inherited_contiguous=");
+    serial_write_string(
+        diagnostics.resolution.inherited_contiguous ? "yes" : "no");
+    serial_write_string(" inherited_writable=");
+    serial_write_string(
+        diagnostics.resolution.inherited_effective_writable ? "yes" : "no");
+    serial_write_string("\n");
+    serial_write_string("M61 FRAMEBUFFER MMIO alias=");
+    serial_write_hex_u64((uint64_t)diagnostics.alias_virtual_start);
+    serial_write_string(" alias_end=");
+    serial_write_hex_u64((uint64_t)diagnostics.alias_virtual_end);
+    serial_write_string(" pages=");
+    serial_write_u64((uint64_t)diagnostics.mapping_pages);
+    serial_write_string(" cache=PCD metadata_preserved=");
+    serial_write_string(diagnostics.metadata_preserved ? "yes" : "no");
+    serial_write_string(" framebuffer_writes=0\n");
+    if (diagnostics.alias_created) {
+        serial_mapping("alias-start", &diagnostics.alias_start_mapping);
+        serial_mapping("alias-end", &diagnostics.alias_end_mapping);
+    }
 }
 
 static bool same_surface(const struct boring_framebuffer *first,
@@ -561,7 +653,11 @@ bool __wrap_exception_init(void) {
     trace_stage(8U, '>', "EXCEPTIONS");
     result = __real_exception_init();
     if (result) {
+        bool framebuffer_ready;
+
         early_containment_active = false;
+        framebuffer_ready = boring_m61_framebuffer_prepare_runtime();
+        serial_framebuffer_normalization(framebuffer_ready);
     }
     trace_stage(8U, result ? '+' : '!', "EXCEPTIONS");
     return result;
@@ -770,6 +866,60 @@ enum boring_framebuffer_user_result __wrap_boring_framebuffer_user_present(
     return result;
 }
 
+static uint8_t framebuffer_fault_post_code(
+    const struct x86_64_trap_frame *frame) {
+    if (frame == NULL) {
+        return (uint8_t)M61_FRAMEBUFFER_FAULT_OTHER;
+    }
+    if (frame->vector == 14ULL) {
+        return (uint8_t)M61_FRAMEBUFFER_FAULT_PAGE;
+    }
+    if (frame->vector == 13ULL) {
+        return (uint8_t)M61_FRAMEBUFFER_FAULT_GENERAL_PROTECTION;
+    }
+    if (frame->vector == 18ULL) {
+        return (uint8_t)M61_FRAMEBUFFER_FAULT_MACHINE_CHECK;
+    }
+    return (uint8_t)M61_FRAMEBUFFER_FAULT_OTHER;
+}
+
+static void framebuffer_fault_halt(const struct x86_64_trap_frame *frame)
+    __attribute__((noreturn));
+static void framebuffer_fault_halt(const struct x86_64_trap_frame *frame) {
+    struct boring_m61_framebuffer_mapping_diagnostics diagnostics;
+    const uint8_t code = framebuffer_fault_post_code(frame);
+
+    x86_64_out8((uint16_t)0x80U, code);
+    if (serial_ready) {
+        serial_write_string("M61 FIRST FRAMEBUFFER STORE FAULT post=");
+        serial_write_hex_u64((uint64_t)code);
+        serial_write_string(" vector=");
+        serial_write_u64(frame == NULL ? UINT64_MAX : frame->vector);
+        serial_write_string(" error=");
+        serial_write_hex_u64(frame == NULL ? UINT64_MAX : frame->error_code);
+        if ((frame != NULL) && (frame->vector == 14ULL)) {
+            serial_write_string(" cr2=");
+            serial_write_hex_u64(x86_64_read_cr2());
+        }
+        if (boring_m61_framebuffer_get_mapping_diagnostics(&diagnostics)) {
+            serial_write_string(" framebuffer_va=");
+            serial_write_hex_u64(
+                (uint64_t)diagnostics.alias_virtual_start);
+            serial_write_string(" framebuffer_physical=");
+            serial_write_hex_u64(diagnostics.resolution.physical_base);
+            serial_write_string(" alias_present=");
+            serial_write_string(
+                diagnostics.alias_start_mapping.present ? "yes" : "no");
+            serial_write_string(" alias_writable=");
+            serial_write_string(
+                diagnostics.alias_start_mapping.effective_writable ?
+                    "yes" : "no");
+        }
+        serial_write_string("\n");
+    }
+    emergency_halt();
+}
+
 void __wrap_x86_64_exception_dispatch(
     const struct x86_64_trap_frame *frame) {
     if (early_containment_active) {
@@ -779,6 +929,9 @@ void __wrap_x86_64_exception_dispatch(
             serial_write_string(" framebuffer_write_active=no\n");
         }
         emergency_halt();
+    }
+    if (boring_m61_first_framebuffer_store_active()) {
+        framebuffer_fault_halt(frame);
     }
     __real_x86_64_exception_dispatch(frame);
 }

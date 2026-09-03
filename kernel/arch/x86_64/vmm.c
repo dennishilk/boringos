@@ -8,8 +8,21 @@
 #define VMM_PAGE_ENTRIES 512ULL
 #define VMM_ENTRY_PRESENT (1ULL << 0)
 #define VMM_ENTRY_WRITABLE (1ULL << 1)
+#define VMM_ENTRY_USER (1ULL << 2)
+#define VMM_ENTRY_PWT (1ULL << 3)
+#define VMM_ENTRY_PCD (1ULL << 4)
 #define VMM_ENTRY_LARGE_PAGE (1ULL << 7)
+#define VMM_ENTRY_PAT_4K (1ULL << 7)
+#define VMM_ENTRY_PAT_LARGE (1ULL << 12)
+#define VMM_ENTRY_NX (1ULL << 63)
 #define VMM_ENTRY_ADDRESS_MASK 0x000ffffffffff000ULL
+#define VMM_PHYSICAL_ADDRESS_MAX 0x000fffffffffffffULL
+#define VMM_PAGE_SIZE_2M (1ULL << 21)
+#define VMM_PAGE_SIZE_1G (1ULL << 30)
+#define VMM_ENTRY_ADDRESS_MASK_2M \
+    (VMM_ENTRY_ADDRESS_MASK & ~(VMM_PAGE_SIZE_2M - 1ULL))
+#define VMM_ENTRY_ADDRESS_MASK_1G \
+    (VMM_ENTRY_ADDRESS_MASK & ~(VMM_PAGE_SIZE_1G - 1ULL))
 #define VMM_ALLOWED_FLAGS VMM_FLAG_WRITABLE
 #define VMM_MAX_MEMORY_MAP_ENTRIES 4096ULL
 #define VMM_MAX_OWNED_TABLE_FRAMES 64ULL
@@ -412,6 +425,142 @@ static enum vmm_lookup_result vmm_walk(uintptr_t virtual_address,
     return VMM_LOOKUP_MAPPED;
 }
 
+static void vmm_mapping_info_reset(struct vmm_mapping_info *info) {
+    info->physical_address = 0ULL;
+    info->leaf_size = 0ULL;
+    info->present_levels = 0U;
+    info->missing_level = (uint8_t)VMM_PAGE_TABLE_LEVEL_NONE;
+    info->leaf_level = (uint8_t)VMM_PAGE_TABLE_LEVEL_NONE;
+    info->canonical = false;
+    info->present = false;
+    info->parent_writable = false;
+    info->leaf_writable = false;
+    info->effective_writable = false;
+    info->effective_user = false;
+    info->leaf_pwt = false;
+    info->leaf_pcd = false;
+    info->leaf_pat = false;
+    info->effective_nx = false;
+}
+
+static void vmm_mapping_set_leaf(struct vmm_mapping_info *info,
+                                 uintptr_t virtual_address,
+                                 uint64_t entry,
+                                 uint64_t address_mask,
+                                 uint64_t leaf_size,
+                                 enum vmm_page_table_level leaf_level,
+                                 bool parent_writable,
+                                 bool parent_user,
+                                 bool parent_nx) {
+    const bool leaf_writable = (entry & VMM_ENTRY_WRITABLE) != 0ULL;
+    const bool leaf_user = (entry & VMM_ENTRY_USER) != 0ULL;
+
+    info->physical_address = (entry & address_mask) +
+        ((uint64_t)virtual_address & (leaf_size - 1ULL));
+    info->leaf_size = leaf_size;
+    info->leaf_level = (uint8_t)leaf_level;
+    info->present = true;
+    info->parent_writable = parent_writable;
+    info->leaf_writable = leaf_writable;
+    info->effective_writable = parent_writable && leaf_writable;
+    info->effective_user = parent_user && leaf_user;
+    info->leaf_pwt = (entry & VMM_ENTRY_PWT) != 0ULL;
+    info->leaf_pcd = (entry & VMM_ENTRY_PCD) != 0ULL;
+    info->leaf_pat = (entry & ((leaf_size == VMM_PAGE_SIZE) ?
+        VMM_ENTRY_PAT_4K : VMM_ENTRY_PAT_LARGE)) != 0ULL;
+    info->effective_nx = parent_nx || ((entry & VMM_ENTRY_NX) != 0ULL);
+}
+
+bool vmm_inspect_mapping(uintptr_t virtual_address,
+                         struct vmm_mapping_info *info) {
+    uint64_t *pdpt;
+    uint64_t *pd;
+    uint64_t *pt;
+    uint64_t entry;
+    bool parent_writable = true;
+    bool parent_user = true;
+    bool parent_nx = false;
+
+    if ((!vmm_initialized) || (info == NULL)) {
+        return false;
+    }
+    vmm_mapping_info_reset(info);
+    if (!vmm_is_canonical_4level((uint64_t)virtual_address)) {
+        return true;
+    }
+    info->canonical = true;
+
+    entry = vmm_root_table[vmm_index_for(virtual_address, 39U)];
+    if ((entry & VMM_ENTRY_PRESENT) == 0ULL) {
+        info->missing_level = (uint8_t)VMM_PAGE_TABLE_LEVEL_PML4;
+        return true;
+    }
+    info->present_levels = 1U;
+    parent_writable = (entry & VMM_ENTRY_WRITABLE) != 0ULL;
+    parent_user = (entry & VMM_ENTRY_USER) != 0ULL;
+    parent_nx = (entry & VMM_ENTRY_NX) != 0ULL;
+    if (!vmm_table_from_physical(entry & VMM_ENTRY_ADDRESS_MASK, &pdpt)) {
+        return false;
+    }
+
+    entry = pdpt[vmm_index_for(virtual_address, 30U)];
+    if ((entry & VMM_ENTRY_PRESENT) == 0ULL) {
+        info->missing_level = (uint8_t)VMM_PAGE_TABLE_LEVEL_PDPT;
+        info->parent_writable = parent_writable;
+        return true;
+    }
+    info->present_levels = 2U;
+    if ((entry & VMM_ENTRY_LARGE_PAGE) != 0ULL) {
+        vmm_mapping_set_leaf(info, virtual_address, entry,
+                             VMM_ENTRY_ADDRESS_MASK_1G, VMM_PAGE_SIZE_1G,
+                             VMM_PAGE_TABLE_LEVEL_PDPT,
+                             parent_writable, parent_user, parent_nx);
+        return true;
+    }
+    parent_writable = parent_writable &&
+        ((entry & VMM_ENTRY_WRITABLE) != 0ULL);
+    parent_user = parent_user && ((entry & VMM_ENTRY_USER) != 0ULL);
+    parent_nx = parent_nx || ((entry & VMM_ENTRY_NX) != 0ULL);
+    if (!vmm_table_from_physical(entry & VMM_ENTRY_ADDRESS_MASK, &pd)) {
+        return false;
+    }
+
+    entry = pd[vmm_index_for(virtual_address, 21U)];
+    if ((entry & VMM_ENTRY_PRESENT) == 0ULL) {
+        info->missing_level = (uint8_t)VMM_PAGE_TABLE_LEVEL_PD;
+        info->parent_writable = parent_writable;
+        return true;
+    }
+    info->present_levels = 3U;
+    if ((entry & VMM_ENTRY_LARGE_PAGE) != 0ULL) {
+        vmm_mapping_set_leaf(info, virtual_address, entry,
+                             VMM_ENTRY_ADDRESS_MASK_2M, VMM_PAGE_SIZE_2M,
+                             VMM_PAGE_TABLE_LEVEL_PD,
+                             parent_writable, parent_user, parent_nx);
+        return true;
+    }
+    parent_writable = parent_writable &&
+        ((entry & VMM_ENTRY_WRITABLE) != 0ULL);
+    parent_user = parent_user && ((entry & VMM_ENTRY_USER) != 0ULL);
+    parent_nx = parent_nx || ((entry & VMM_ENTRY_NX) != 0ULL);
+    if (!vmm_table_from_physical(entry & VMM_ENTRY_ADDRESS_MASK, &pt)) {
+        return false;
+    }
+
+    entry = pt[vmm_index_for(virtual_address, 12U)];
+    if ((entry & VMM_ENTRY_PRESENT) == 0ULL) {
+        info->missing_level = (uint8_t)VMM_PAGE_TABLE_LEVEL_PT;
+        info->parent_writable = parent_writable;
+        return true;
+    }
+    info->present_levels = 4U;
+    vmm_mapping_set_leaf(info, virtual_address, entry,
+                         VMM_ENTRY_ADDRESS_MASK, VMM_PAGE_SIZE,
+                         VMM_PAGE_TABLE_LEVEL_PT,
+                         parent_writable, parent_user, parent_nx);
+    return true;
+}
+
 static bool vmm_validate_memory_map(
     const struct boring_limine_memmap_response *memory_map) {
     uint64_t index;
@@ -682,6 +831,116 @@ bool vmm_translate(uintptr_t virtual_address, uint64_t *physical_address) {
     *physical_address = translated;
     return true;
 }
+
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+bool vmm_resolve_limine_framebuffer(
+    uintptr_t virtual_address,
+    size_t length,
+    struct vmm_framebuffer_resolution *resolution) {
+    const uint64_t virtual_start = (uint64_t)virtual_address;
+    uint64_t virtual_end;
+    uint64_t physical_base;
+    uint64_t physical_end;
+    uint64_t matching_entries = 0ULL;
+    uint64_t index;
+    uintptr_t cursor;
+    uintptr_t last;
+    bool contiguous = true;
+    bool writable = true;
+
+    if ((!vmm_initialized) || (resolution == NULL) || (length == 0U)) {
+        return false;
+    }
+    *resolution = (struct vmm_framebuffer_resolution){0};
+    if (((uint64_t)(length - 1U) > (UINT64_MAX - virtual_start)) ||
+        (virtual_address > (UINTPTR_MAX - (uintptr_t)(length - 1U)))) {
+        return false;
+    }
+    virtual_end = virtual_start + (uint64_t)(length - 1U);
+    last = virtual_address + (uintptr_t)(length - 1U);
+
+    if ((virtual_start < vmm_hhdm_offset) ||
+        !vmm_is_canonical_4level(virtual_start) ||
+        !vmm_is_canonical_4level(virtual_end)) {
+        return false;
+    }
+    physical_base = virtual_start - vmm_hhdm_offset;
+    if ((physical_base > VMM_PHYSICAL_ADDRESS_MAX) ||
+        ((uint64_t)(length - 1U) >
+         (VMM_PHYSICAL_ADDRESS_MAX - physical_base))) {
+        return false;
+    }
+    physical_end = physical_base + (uint64_t)(length - 1U);
+
+    for (index = 0ULL; index < vmm_memory_map->entry_count; ++index) {
+        uint64_t entry_end;
+        const struct boring_limine_memmap_entry *const entry =
+            vmm_memory_map->entries[index];
+
+        if ((entry->type != BORING_LIMINE_MEMMAP_FRAMEBUFFER) ||
+            !vmm_memory_entry_end(entry, &entry_end) ||
+            (physical_base < entry->base) ||
+            (physical_end >= entry_end)) {
+            continue;
+        }
+        ++matching_entries;
+        resolution->memmap_base = entry->base;
+        resolution->memmap_length = entry->length;
+    }
+    if (matching_entries != 1ULL) {
+        return false;
+    }
+
+    resolution->physical_base = physical_base;
+    resolution->physical_end = physical_end;
+    if (!vmm_inspect_mapping(virtual_address,
+                             &resolution->start_mapping) ||
+        !vmm_inspect_mapping(last, &resolution->end_mapping)) {
+        return false;
+    }
+
+    cursor = virtual_address;
+    for (;;) {
+        struct vmm_mapping_info mapping;
+        const uint64_t expected = physical_base +
+            (uint64_t)(cursor - virtual_address);
+
+        if (!vmm_inspect_mapping(cursor, &mapping)) {
+            return false;
+        }
+        if (!mapping.present || (mapping.physical_address != expected)) {
+            contiguous = false;
+        }
+        if (!mapping.present || !mapping.effective_writable) {
+            writable = false;
+        }
+        if (cursor == last) {
+            break;
+        }
+        if ((cursor & ((uintptr_t)VMM_PAGE_SIZE - 1U)) == 0U) {
+            if (cursor > (UINTPTR_MAX - (uintptr_t)VMM_PAGE_SIZE)) {
+                return false;
+            }
+            cursor += (uintptr_t)VMM_PAGE_SIZE;
+        } else {
+            const uintptr_t page = cursor &
+                ~((uintptr_t)VMM_PAGE_SIZE - 1U);
+
+            if (page > (UINTPTR_MAX - (uintptr_t)VMM_PAGE_SIZE)) {
+                return false;
+            }
+            cursor = page + (uintptr_t)VMM_PAGE_SIZE;
+        }
+        if (cursor > last) {
+            cursor = last;
+        }
+    }
+
+    resolution->inherited_contiguous = contiguous;
+    resolution->inherited_effective_writable = contiguous && writable;
+    return true;
+}
+#endif
 
 bool vmm_get_stats(struct vmm_stats *stats) {
     if ((!vmm_initialized) || (stats == NULL)) {

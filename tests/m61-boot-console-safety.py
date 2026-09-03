@@ -109,8 +109,15 @@ def main():
     combined = breadcrumbs + console + post_script
     if "__wrap_x86_64_out8" in combined or "--wrap=x86_64_out8" in combined:
         raise RuntimeError("generic x86_64_out8 hook introduced")
-    if "x86_64_out8" in breadcrumbs or "x86_64_out8" in console:
-        raise RuntimeError("boot-console layer coupled to generic x86_64_out8")
+    framebuffer_fault = function_body(
+        breadcrumbs,
+        "static void framebuffer_fault_halt(")
+    if (console.count("x86_64_out8") != 0 or
+            breadcrumbs.count("x86_64_out8") !=
+            framebuffer_fault.count("x86_64_out8") or
+            framebuffer_fault.count("x86_64_out8") != 1):
+        raise RuntimeError(
+            "port-0x80 output escaped the bounded post-90 fault diagnostic")
     if ("x86_64_out8((uint16_t)M61_POST_PORT" not in post_script or
             "M61_POST(M61_POST_KERNEL_ENTRY)" not in post_script or
             "M61_POST(M61_POST_DESKTOP_PRESENT)" not in post_script):
@@ -121,6 +128,7 @@ def main():
     print("PRE_SAFE_POINT_BOOT_CONSOLE_FRAMEBUFFER_WRITES=0")
     print("GENERIC_X86_64_OUT8_MODIFIED=NO")
     print("POST_FALLBACK_INDEPENDENT=YES")
+    print("POST90_FAULT_DIAGNOSTIC_BOUNDED=YES")
     print("EARLY_STATIC_HISTORY_BOUNDED=YES")
     print("FRAMEBUFFER_ACTIVATION_POINT=after successful normal framebuffer present")
 

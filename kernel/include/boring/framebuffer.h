@@ -2,7 +2,12 @@
 #define BORING_FRAMEBUFFER_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+#include <boring/vmm.h>
+#endif
 
 #define BORING_FRAMEBUFFER_MEMORY_MODEL_RGB 1U
 
@@ -50,9 +55,31 @@ enum boring_framebuffer_status boring_framebuffer_boot_init(void);
 const struct boring_framebuffer *boring_framebuffer_get(void);
 
 #ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+struct boring_m61_framebuffer_mapping_diagnostics {
+    struct vmm_framebuffer_resolution resolution;
+    struct vmm_mapping_info alias_start_mapping;
+    struct vmm_mapping_info alias_end_mapping;
+    uintptr_t original_virtual_start;
+    uintptr_t original_virtual_end;
+    uintptr_t alias_virtual_start;
+    uintptr_t alias_virtual_end;
+    uint64_t byte_size;
+    size_t mapping_pages;
+    bool attempted;
+    bool memmap_range_match;
+    bool alias_created;
+    bool metadata_preserved;
+};
+
 uint64_t boring_m61_framebuffer_count(void);
 bool boring_m61_framebuffer_get(uint64_t index,
                                 struct boring_framebuffer *surface);
+bool boring_m61_framebuffer_normalize(
+    struct boring_framebuffer *surface,
+    struct boring_m61_framebuffer_mapping_diagnostics *diagnostics);
+bool boring_m61_framebuffer_prepare_runtime(void);
+bool boring_m61_framebuffer_get_mapping_diagnostics(
+    struct boring_m61_framebuffer_mapping_diagnostics *diagnostics);
 #endif
 
 #endif

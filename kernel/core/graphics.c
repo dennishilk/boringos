@@ -13,6 +13,11 @@
 #define M61_NORMAL_FRAMEBUFFER_PRE_POST 0x90U
 #define M61_NORMAL_FRAMEBUFFER_POST_POST 0x91U
 static bool m61_first_normal_framebuffer_store_pending = true;
+static volatile bool m61_first_normal_framebuffer_store_active;
+
+bool boring_m61_first_framebuffer_store_active(void) {
+    return m61_first_normal_framebuffer_store_active;
+}
 #endif
 
 static uint32_t boring_color_scale(uint8_t value, uint8_t bits) {
@@ -57,6 +62,7 @@ static void boring_graphics_store_pixel(const struct boring_framebuffer *surface
     if (m61_first_normal_framebuffer_store_pending) {
         m61_first_normal_framebuffer_store_pending = false;
         first_normal_store = true;
+        m61_first_normal_framebuffer_store_active = true;
         x86_64_out8((uint16_t)M61_NORMAL_FRAMEBUFFER_POST_PORT,
                     (uint8_t)M61_NORMAL_FRAMEBUFFER_PRE_POST);
     }
@@ -68,6 +74,7 @@ static void boring_graphics_store_pixel(const struct boring_framebuffer *surface
     }
 #ifdef BORING_M61_PHYSICAL_BREADCRUMBS
     if (first_normal_store) {
+        m61_first_normal_framebuffer_store_active = false;
         x86_64_out8((uint16_t)M61_NORMAL_FRAMEBUFFER_POST_PORT,
                     (uint8_t)M61_NORMAL_FRAMEBUFFER_POST_POST);
     }

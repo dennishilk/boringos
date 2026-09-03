@@ -64,6 +64,8 @@ build/m61-serial-failopen-host-test | tee "$OUT/serial-failopen-host.txt"
 
 python3 tests/m61-boot-console-safety.py | \
     tee "$OUT/boot-console-safety.txt"
+make framebuffer-host-test | tee "$OUT/framebuffer-host.txt"
+make vmm-framebuffer-host-test | tee "$OUT/vmm-framebuffer-host.txt"
 make boot-console-host-test | tee "$OUT/boot-console-host.txt"
 cc -Ikernel/include $HOST_CFLAGS -DBORING_BOOT_CONSOLE_TEST=1 \
    -c kernel/core/boot_console.c -o "$OUT/boot-console-dependency-audit.o"
