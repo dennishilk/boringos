@@ -35,7 +35,7 @@ jobs:
           grep -Fqx 'guest_reset_observed=no' build/m61-early-fault/proof.txt
       - name: Relink M61 physical 7B-to-7C bisector kernel
         run: |
-          python3 tests/m61-physical-trace-kernel-7b-7c.py
+          python3 tests/m61-physical-trace-kernel-wm-terminal.py
           python3 tests/m61-pmm-false-reason.py
       - name: Build physical image and deterministic QEMU test twin
         run: env -u GITHUB_SHA sh tests/m61-build-usb-image.sh
