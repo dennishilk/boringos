@@ -170,25 +170,37 @@ replace_once(
     "--wrap=pmm_init",
     "metadata-only linker wrappers")
 
+physical_source = "kernel/core/m61_physical_breadcrumbs.c"
+generated_source = "kernel/core/.m61_physical_breadcrumbs_71_72.generated.c"
 wm_terminal_source = "kernel/core/m61_wm_terminal_post.c"
 post80_source = "kernel/core/m61_post80_generated.c"
-wm_terminal_count = src.count(wm_terminal_source)
+harness_marker = "    TEST_HARNESS_C='"
+if src.count(harness_marker) != 1:
+    raise RuntimeError(
+        f"candidate TEST_HARNESS_C is ambiguous: found {src.count(harness_marker)} occurrences")
+harness_start = src.index(harness_marker)
+harness_end = src.find("\n", harness_start)
+if harness_end < 0:
+    raise RuntimeError("candidate TEST_HARNESS_C line is unterminated")
+harness_line = src[harness_start:harness_end]
+if harness_line.count(physical_source) != 1:
+    raise RuntimeError(
+        f"candidate physical trace source is ambiguous: found {harness_line.count(physical_source)} occurrences")
+if harness_line.count(post80_source) != 1:
+    raise RuntimeError(
+        f"candidate POST80 source is ambiguous: found {harness_line.count(post80_source)} occurrences")
+wm_terminal_count = harness_line.count(wm_terminal_source)
 if wm_terminal_count not in (0, 1):
     raise RuntimeError(
         f"candidate WM-terminal source is ambiguous: found {wm_terminal_count} occurrences")
-if src.count(post80_source) != 1:
-    raise RuntimeError(
-        f"candidate POST80 source is ambiguous: found {src.count(post80_source)} occurrences")
-replace_once(
-    "kernel/core/m61_physical_breadcrumbs.c",
-    "kernel/core/.m61_physical_breadcrumbs_71_72.generated.c",
-    "candidate direct 82/83 source")
-if src.count("kernel/core/.m61_physical_breadcrumbs_71_72.generated.c") != 1:
+harness_line = harness_line.replace(physical_source, generated_source, 1)
+if harness_line.count(generated_source) != 1:
     raise RuntimeError("candidate generated 71-to-72 source is not linked exactly once")
-if src.count(post80_source) != 1:
+if harness_line.count(post80_source) != 1:
     raise RuntimeError("candidate POST80 source was not preserved exactly once")
-if src.count(wm_terminal_source) != wm_terminal_count:
+if harness_line.count(wm_terminal_source) != wm_terminal_count:
     raise RuntimeError("candidate WM-terminal source count changed during 71-to-72 replacement")
+src = src[:harness_start] + harness_line + src[harness_end:]
 
 replace_once(
     "nm build/kernel.elf | grep -Fq 'boring_m61_post_62_to_63_sequence'",
