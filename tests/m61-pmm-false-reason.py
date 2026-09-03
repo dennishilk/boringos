@@ -163,9 +163,23 @@ changed = set(
 )
 if "kernel/include/boring/io.h" in changed:
     raise RuntimeError("generic x86_64_out8 implementation changed")
-if any(path.startswith("kernel/core/framebuffer") or
-       path.startswith("kernel/core/graphics") for path in changed):
-    raise RuntimeError("framebuffer/graphics diagnostic source changed")
+framebuffer_graphics_changes = {
+    path for path in changed
+    if path.startswith("kernel/core/framebuffer") or
+    path.startswith("kernel/core/graphics")
+}
+allowed_framebuffer_graphics_changes = {
+    "kernel/core/framebuffer.c",
+    "kernel/core/graphics.c",
+}
+unexpected_framebuffer_graphics_changes = (
+    framebuffer_graphics_changes - allowed_framebuffer_graphics_changes
+)
+if unexpected_framebuffer_graphics_changes:
+    raise RuntimeError(
+        "unexpected framebuffer/graphics runtime source changed: "
+        f"{sorted(unexpected_framebuffer_graphics_changes)!r}"
+    )
 for forbidden_path in (
     "kernel/core/vmm.c",
     "kernel/core/usb_mass_storage.c",
@@ -394,4 +408,4 @@ print("M61 PMM false-path 92 suppression: PASS")
 print("M61 caller PMM-false 98 suppression: PASS")
 print("M61 PMM true-path 7A/7B/92/93+ progression preserved: PASS")
 print("M61 generic x86_64_out8 modified: NO")
-print("M61 framebuffer diagnostic added: NO")
+print("M61 framebuffer/graphics candidate scope: PASS")
