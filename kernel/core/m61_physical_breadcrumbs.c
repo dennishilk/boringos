@@ -33,7 +33,7 @@
 #error "M61 physical trace must stay candidate-build gated"
 #endif
 
-#define TRACE_LAST_STAGE 27U
+#define TRACE_LAST_STAGE 26U
 #define EARLY_IDT_GATE_INTERRUPT 0x8eU
 #define EARLY_IDT_IST_NONE 0U
 #define EARLY_IDT_IST1 1U
@@ -89,7 +89,6 @@ static const struct boring_framebuffer *fb;
 static volatile bool early_containment_active;
 static bool serial_ready;
 static bool wm_ready;
-static bool terminal_ready;
 static bool display_initial_presented;
 static bool desktop_presented;
 
@@ -203,7 +202,6 @@ static const char *trace_failure_reason(uint32_t stage_number) {
         case 24U: return "BoringWM process naming failed";
         case 25U: return "boring.wm service registration failed";
         case 26U: return "desktop framebuffer present failed";
-        case 27U: return "automatic terminal process naming failed";
         default: return "stage returned failure";
     }
 }
@@ -242,7 +240,6 @@ static bool trace_boot_stage(uint32_t stage_number,
             *stage = BORING_BOOT_STAGE_BORING_WM;
             return true;
         case 26U: *stage = BORING_BOOT_STAGE_DESKTOP_PRESENT; return true;
-        case 27U: *stage = BORING_BOOT_STAGE_AUTOMATIC_TERMINAL; return true;
         default: return false;
     }
 }
@@ -768,9 +765,6 @@ bool __wrap_process_set_name(struct process *process, const char *name) {
     } else if (ends_with(name, "boringwm")) {
         stage_number = 24U;
         label = "BORING-WM START";
-    } else if (ends_with(name, "boring-terminal")) {
-        stage_number = 27U;
-        label = "TERMINAL START";
     }
     if (stage_number != 0U) {
         trace_stage(stage_number, '>', label);
@@ -778,9 +772,6 @@ bool __wrap_process_set_name(struct process *process, const char *name) {
     result = __real_process_set_name(process, name);
     if (stage_number != 0U) {
         trace_stage(stage_number, result ? '+' : '!', label);
-    }
-    if ((stage_number == 27U) && result) {
-        terminal_ready = true;
     }
     return result;
 }
@@ -830,7 +821,7 @@ enum boring_ipc_result __wrap_boring_ipc_service_register(
 enum boring_framebuffer_user_result __wrap_boring_framebuffer_user_present(
     struct process *process, uint32_t handle) {
     enum boring_framebuffer_user_result result;
-    const bool final_present = wm_ready && terminal_ready;
+    const bool final_present = wm_ready;
     const uint32_t stage_number = final_present ? 26U : 23U;
     const char *const label = final_present ?
         "DESKTOP PRESENT" : "DISPLAY INITIAL PRESENT";

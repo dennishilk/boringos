@@ -107,7 +107,7 @@ enum m61_post_code {
     M61_POST_BORING_INIT = 0x67,
     M61_POST_BORING_DISPLAY = 0x68,
     M61_POST_BORING_WM = 0x69,
-    M61_POST_AUTO_TERMINAL = 0x6a,
+    M61_POST_TERMINAL_START = 0x6a,
     M61_POST_DESKTOP_PRESENT = 0x6f,
 
     M61_POST_FB_PROBE_BOOT_INIT_BEFORE = 0x70,
@@ -164,7 +164,7 @@ const char boring_m61_post_port80_enabled[] =
     "M61 diagnostic POST port 0x80 witness enabled";
 const uint8_t boring_m61_post_sequence[] = {
     0x61U, 0x62U, 0x63U, 0x64U, 0x65U, 0x66U,
-    0x67U, 0x68U, 0x69U, 0x6aU, 0x6fU
+    0x67U, 0x68U, 0x69U, 0x6fU
 };
 const uint8_t boring_m61_post_62_to_63_sequence[] = {
     0x70U, 0x71U, 0x72U, 0x73U, 0x74U, 0x75U, 0x76U, 0x77U,
@@ -503,7 +503,7 @@ bool m61_post_process_set_name(struct process *process, const char *name) {
         M61_POST(M61_POST_BORING_WM);
     } else if (!terminal_posted && name_ends_with(name, "boring-terminal")) {
         terminal_posted = true;
-        M61_POST(M61_POST_AUTO_TERMINAL);
+        M61_POST(M61_POST_TERMINAL_START);
     }
     return true;
 }
@@ -513,7 +513,7 @@ enum boring_framebuffer_user_result m61_post_boring_framebuffer_user_present(
     const enum boring_framebuffer_user_result result =
         __real_boring_framebuffer_user_present(process, handle);
 
-    if ((result == BORING_FRAMEBUFFER_USER_OK) && terminal_posted &&
+    if ((result == BORING_FRAMEBUFFER_USER_OK) && wm_posted &&
         !desktop_posted) {
         desktop_posted = true;
         M61_POST(M61_POST_DESKTOP_PRESENT);
@@ -587,12 +587,13 @@ ordered = [
     "M61_POST(M61_POST_BORING_INIT)",
     "M61_POST(M61_POST_BORING_DISPLAY)",
     "M61_POST(M61_POST_BORING_WM)",
-    "M61_POST(M61_POST_AUTO_TERMINAL)",
     "M61_POST(M61_POST_DESKTOP_PRESENT)",
 ]
 positions = [source.find(item) for item in ordered]
 if any(position < 0 for position in positions) or positions != sorted(positions):
-    raise RuntimeError("M61 POST source milestone sequence is incomplete or reordered")
+    raise RuntimeError("M61 POST source boot milestone sequence is incomplete or reordered")
+if "M61_POST(M61_POST_TERMINAL_START)" not in source:
+    raise RuntimeError("M61 manual terminal-start POST 6A reservation is missing")
 
 def function_definition(name, text=source):
     signature = re.compile(rf"\bbool\s+{re.escape(name)}\s*\(")
@@ -912,6 +913,7 @@ irq_source = function_definition("m61_post_irq_init")
 xhci_post_source = function_definition("m61_post_xhci_init")
 hid_source = function_definition("m61_post_xhci_configure_hid_devices_mixed")
 usb_post_source = function_definition("m61_post_usb_mass_storage_init")
+desktop_post_source = function_definition("m61_post_boring_framebuffer_user_present")
 if irq_source.find("M61_POST(M61_POST_EXCEPTION_IRQ);") < 0 or irq_source.find("M61_POST(M61_POST_AFTER_IRQ_SUCCESS);") < irq_source.find("M61_POST(M61_POST_EXCEPTION_IRQ);"):
     raise RuntimeError("M61 64 meaning/order changed")
 xhci_call_post = xhci_post_source.index("M61_POST(M61_POST_XHCI_INIT_CALL);")
@@ -958,6 +960,13 @@ if "failure_reason" in usb_post_source[usb_true:]:
     raise RuntimeError("M61 USB true path replays a failure reason")
 if usb_post_source.count("M61_POST(M61_POST_USB_STORAGE);") != 1:
     raise RuntimeError("M61 65 success meaning is not unique")
+if "terminal_posted" in desktop_post_source:
+    raise RuntimeError("M61 POST 6F still requires terminal startup")
+real_present = desktop_post_source.find("__real_boring_framebuffer_user_present(process, handle)")
+wm_gate = desktop_post_source.find("(result == BORING_FRAMEBUFFER_USER_OK) && wm_posted")
+desktop_post = desktop_post_source.find("M61_POST(M61_POST_DESKTOP_PRESENT);")
+if not (0 <= real_present < wm_gate < desktop_post):
+    raise RuntimeError("M61 POST 6F is not after successful real post-WM present")
 
 functions = {
     "boring_kernel_entry": ("61",),
@@ -1021,7 +1030,8 @@ for name, codes in functions.items():
 if out_count < 84:
     raise RuntimeError(f"M61 POST binary has only {out_count} milestone outputs")
 print("M61 POST port 0x80 binary acceptance: PASS")
-print("M61 POST existing sequence preserved: 61 62 63 64 65 66 67 68 69 6A 6F")
+print("M61 POST boot sequence: 61 62 63 64 65 66 67 68 69 6F")
+print("M61 POST 6A: reserved for a real terminal process start; not a boot prerequisite")
 print("M61 POST 62-to-63 bisector: 70 71 72 73 74 75 76 77 78 79 7A 7B 7C 7D 7E 7F then 63")
 print("M61 VMM result bisector: C0 init-false C1 init-true C2 stats-false C3 stats-true")
 print("M61 VMM false reasons: D0-DF E0-E6, replayed after C0")

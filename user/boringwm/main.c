@@ -13,10 +13,6 @@ static struct display_event deferred_input;
 static bool has_input, ever_managed;
 int boring_main(void);
 
-#if defined(BORING_M61_PHYSICAL_DESKTOP_WITNESS) && defined(BORING_WM_DEATH_ACCEPTANCE)
-#error "M61 physical desktop witness must not alter the WM death acceptance binary"
-#endif
-
 static struct display_event display_rpc(const struct display_control *request) {
     struct display_event reply;
     struct boring_ipc_receive_result received;
@@ -229,24 +225,7 @@ int boring_main(void) {
         desktop_fail("WM manager binding");
     }
     desktop_say("wm: boring.wm Ring3 policy ready; no pixel mappings\n");
-#ifdef BORING_M61_PHYSICAL_DESKTOP_WITNESS
-    {
-        static const char prefix[] = "M61 PHYSICAL: automatic terminal spawn pid=";
-        char line[96];
-        size_t n = sizeof(prefix) - 1U;
-        long child_pid;
-        desktop_say("M61 PHYSICAL: automatic terminal spawn requested\n");
-        child_pid = launch_application(BORING_KEY_ENTER);
-        if (child_pid <= 0L) {
-            desktop_say("M61 PHYSICAL: automatic terminal spawn FAILED\n");
-        } else {
-            boring_memcpy(line, prefix, n);
-            n = desktop_number(line, n, (uint64_t)child_pid);
-            line[n++] = '\n'; line[n] = '\0';
-            desktop_say(line);
-        }
-    }
-#endif
+    sync_layout();
     for (;;) {
         struct boring_event_watch watches[WM_PEERS + 2U] = {0};
         size_t count = 0U, index;

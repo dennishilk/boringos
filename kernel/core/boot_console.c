@@ -65,7 +65,6 @@ static const char *const boot_stage_labels[BORING_BOOT_STAGE_COUNT] = {
     "boring-init",
     "boring-display",
     "BoringWM",
-    "automatic terminal",
     "desktop present"
 };
 

@@ -196,7 +196,7 @@ static void verify_bounded_history(void) {
           "bounded history retained order first");
     check(boring_boot_console_get_history(
               (size_t)BORING_BOOT_CONSOLE_HISTORY_CAPACITY - 1U, &event) &&
-          (event.stage == BORING_BOOT_STAGE_PMM) &&
+          (event.stage == BORING_BOOT_STAGE_EXCEPTIONS) &&
           (event.status == BORING_BOOT_STATUS_PENDING),
           "bounded history retained order last");
 }
@@ -279,6 +279,8 @@ int main(void) {
                  "BOOT-CONSOLE framebuffer activated at safe normal present\n") !=
           NULL,
           "safe activation serial witness");
+    check(strstr(serial_log, "automatic terminal") == NULL,
+          "boot console has no automatic terminal stage");
 
     check(boring_boot_console_pending(BORING_BOOT_STAGE_DESKTOP_PRESENT),
           "desktop pending live update");
