@@ -37,6 +37,16 @@
 #define EARLY_IDT_GATE_INTERRUPT 0x8eU
 #define EARLY_IDT_IST_NONE 0U
 #define EARLY_IDT_IST1 1U
+#define M61_HANDOFF_POST_PORT 0x80U
+
+enum m61_handoff_gap_post_code {
+    M61_HANDOFF_POST_OUTER_PRESENT_RESUMED = 0x39,
+    M61_HANDOFF_POST_SERIAL_ENTER = 0x3a,
+    M61_HANDOFF_POST_SERIAL_RETURNED = 0x3b
+};
+
+#define M61_HANDOFF_POST(code) \
+    x86_64_out8((uint16_t)M61_HANDOFF_POST_PORT, (uint8_t)(code))
 
 enum m61_framebuffer_fault_post_code {
     M61_FRAMEBUFFER_FAULT_PAGE = 0x30,
@@ -831,6 +841,7 @@ enum boring_framebuffer_user_result __wrap_boring_framebuffer_user_present(
     }
     trace_stage(stage_number, '>', label);
     result = __real_boring_framebuffer_user_present(process, handle);
+    M61_HANDOFF_POST(M61_HANDOFF_POST_OUTER_PRESENT_RESUMED);
     if (result != BORING_FRAMEBUFFER_USER_OK) {
         trace_stage(stage_number, '!', label);
         return result;
@@ -838,7 +849,9 @@ enum boring_framebuffer_user_result __wrap_boring_framebuffer_user_present(
 
     if (final_present) {
         desktop_presented = true;
+        M61_HANDOFF_POST(M61_HANDOFF_POST_SERIAL_ENTER);
         serial_stage(stage_number, '+', label);
+        M61_HANDOFF_POST(M61_HANDOFF_POST_SERIAL_RETURNED);
         boring_boot_console_desktop_handoff();
         return result;
     }

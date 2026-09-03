@@ -112,12 +112,21 @@ def main():
     framebuffer_fault = function_body(
         breadcrumbs,
         "static void framebuffer_fault_halt(")
+    handoff_gap_posts = (
+        "M61_HANDOFF_POST(M61_HANDOFF_POST_OUTER_PRESENT_RESUMED);",
+        "M61_HANDOFF_POST(M61_HANDOFF_POST_SERIAL_ENTER);",
+        "M61_HANDOFF_POST(M61_HANDOFF_POST_SERIAL_RETURNED);",
+    )
     if (console.count("x86_64_out8") != 0 or
-            breadcrumbs.count("x86_64_out8") !=
-            framebuffer_fault.count("x86_64_out8") or
+            breadcrumbs.count("x86_64_out8") != 2 or
             framebuffer_fault.count("x86_64_out8") != 1):
         raise RuntimeError(
-            "port-0x80 output escaped the bounded post-90 fault diagnostic")
+            "M61 direct port-0x80 diagnostics escaped their bounded seams")
+    if (present.count("M61_HANDOFF_POST(") != 3 or
+            any(present.count(marker) != 1 for marker in handoff_gap_posts) or
+            breadcrumbs.count("M61_HANDOFF_POST(") != 4):
+        raise RuntimeError(
+            "M61 handoff-gap POST diagnostics escaped the final-present wrapper")
     if ("x86_64_out8((uint16_t)M61_POST_PORT" not in post_script or
             "M61_POST(M61_POST_KERNEL_ENTRY)" not in post_script or
             "M61_POST(M61_POST_DESKTOP_PRESENT)" not in post_script):
@@ -129,6 +138,7 @@ def main():
     print("GENERIC_X86_64_OUT8_MODIFIED=NO")
     print("POST_FALLBACK_INDEPENDENT=YES")
     print("POST90_FAULT_DIAGNOSTIC_BOUNDED=YES")
+    print("HANDOFF_GAP_POST_DIAGNOSTIC_BOUNDED=YES")
     print("EARLY_STATIC_HISTORY_BOUNDED=YES")
     print("FRAMEBUFFER_ACTIVATION_POINT=after successful normal framebuffer present")
 
