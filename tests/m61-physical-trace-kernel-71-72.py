@@ -170,11 +170,25 @@ replace_once(
     "--wrap=pmm_init",
     "metadata-only linker wrappers")
 
+wm_terminal_source = "kernel/core/m61_wm_terminal_post.c"
+post80_source = "kernel/core/m61_post80_generated.c"
+wm_terminal_count = src.count(wm_terminal_source)
+if wm_terminal_count not in (0, 1):
+    raise RuntimeError(
+        f"candidate WM-terminal source is ambiguous: found {wm_terminal_count} occurrences")
+if src.count(post80_source) != 1:
+    raise RuntimeError(
+        f"candidate POST80 source is ambiguous: found {src.count(post80_source)} occurrences")
 replace_once(
-    "kernel/core/m61_physical_breadcrumbs.c kernel/core/m61_post80_generated.c",
-    "kernel/core/.m61_physical_breadcrumbs_71_72.generated.c "
-    "kernel/core/m61_post80_generated.c",
+    "kernel/core/m61_physical_breadcrumbs.c",
+    "kernel/core/.m61_physical_breadcrumbs_71_72.generated.c",
     "candidate direct 82/83 source")
+if src.count("kernel/core/.m61_physical_breadcrumbs_71_72.generated.c") != 1:
+    raise RuntimeError("candidate generated 71-to-72 source is not linked exactly once")
+if src.count(post80_source) != 1:
+    raise RuntimeError("candidate POST80 source was not preserved exactly once")
+if src.count(wm_terminal_source) != wm_terminal_count:
+    raise RuntimeError("candidate WM-terminal source count changed during 71-to-72 replacement")
 
 replace_once(
     "nm build/kernel.elf | grep -Fq 'boring_m61_post_62_to_63_sequence'",
