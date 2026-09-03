@@ -595,8 +595,10 @@ if any(position < 0 for position in positions) or positions != sorted(positions)
 if "M61_POST(M61_POST_TERMINAL_START)" not in source:
     raise RuntimeError("M61 manual terminal-start POST 6A reservation is missing")
 
-def function_definition(name, text=source):
-    signature = re.compile(rf"\bbool\s+{re.escape(name)}\s*\(")
+def function_definition(name, text=source, return_type="bool"):
+    signature = re.compile(
+        rf"\b{re.escape(return_type)}\s+{re.escape(name)}\s*\("
+    )
     for match in signature.finditer(text):
         position = match.end()
         depth = 1
@@ -913,7 +915,10 @@ irq_source = function_definition("m61_post_irq_init")
 xhci_post_source = function_definition("m61_post_xhci_init")
 hid_source = function_definition("m61_post_xhci_configure_hid_devices_mixed")
 usb_post_source = function_definition("m61_post_usb_mass_storage_init")
-desktop_post_source = function_definition("m61_post_boring_framebuffer_user_present")
+desktop_post_source = function_definition(
+    "m61_post_boring_framebuffer_user_present",
+    return_type="enum boring_framebuffer_user_result",
+)
 if irq_source.find("M61_POST(M61_POST_EXCEPTION_IRQ);") < 0 or irq_source.find("M61_POST(M61_POST_AFTER_IRQ_SUCCESS);") < irq_source.find("M61_POST(M61_POST_EXCEPTION_IRQ);"):
     raise RuntimeError("M61 64 meaning/order changed")
 xhci_call_post = xhci_post_source.index("M61_POST(M61_POST_XHCI_INIT_CALL);")
