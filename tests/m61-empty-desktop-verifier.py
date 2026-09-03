@@ -88,7 +88,7 @@ if "const bool final_present = wm_ready;" not in present:
     fail("desktop present is not gated only by BoringWM readiness")
 real_call = present.find("result = __real_boring_framebuffer_user_present(process, handle);")
 failure_gate = present.find("if (result != BORING_FRAMEBUFFER_USER_OK)")
-final_gate = present.find("if (final_present)")
+final_gate = present.find("if (final_present)", failure_gate)
 handoff = present.find("boring_boot_console_desktop_handoff();")
 if not (0 <= real_call < failure_gate < final_gate < handoff):
     fail("M61 desktop handoff can occur before a successful real framebuffer present")

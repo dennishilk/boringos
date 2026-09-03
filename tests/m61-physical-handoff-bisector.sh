@@ -136,7 +136,7 @@ text = replace_once(
     text,
     '    "m61_post_boring_framebuffer_user_present": ("6f",),\n}\n',
     '    "__wrap_boring_framebuffer_user_present": '
-    '("39", "3a", "3b"),\n'
+    '("39", "3a", "3b", "3c", "3d", "3e"),\n'
     '    "m61_post_boring_framebuffer_user_present": ("6f", "38"),\n'
     '    "__wrap_boring_boot_console_desktop_handoff": '
     '("34", "35", "36", "37"),\n}\n',
@@ -147,6 +147,8 @@ text = replace_once(
     text,
     'print("M61 USB false: F8 returned-false; reasons F9-FD replayed last")\n',
     'print("M61 USB false: F8 returned-false; reasons F9-FD replayed last")\n'
+    'print("M61 POST 6F scope: first successful present after wm_posted '
+    'process naming; not necessarily outer wm_ready final present")\n'
     'print("M61 desktop handoff gap: 6F present OK, 38 inner return, '
     '39 outer resumed, 3A serial enter, 3B serial returned, 34 handoff enter")\n'
     'print("M61 desktop handoff continuation: 35 returned, '
@@ -169,19 +171,46 @@ start = source.index(
     "enum boring_framebuffer_user_result __wrap_boring_framebuffer_user_present(")
 end = source.index("\nstatic uint8_t framebuffer_fault_post_code(", start)
 wrapper = source[start:end]
-ordered = (
-    "result = __real_boring_framebuffer_user_present(process, handle);",
+final_present_block = re.compile(
+    r"trace_stage\(stage_number, '>', label\);\s*"
+    r"if \(final_present\) \{\s*"
+    r"M61_HANDOFF_POST\(M61_HANDOFF_POST_FINAL_PRESENT_ENTER\);\s*"
+    r"\}\s*"
+    r"result = __real_boring_framebuffer_user_present\(process, handle\);\s*"
+    r"if \(final_present\) \{\s*"
+    r"if \(result == BORING_FRAMEBUFFER_USER_OK\) \{\s*"
+    r"M61_HANDOFF_POST\(M61_HANDOFF_POST_FINAL_PRESENT_OK\);\s*"
+    r"\} else \{\s*"
+    r"M61_HANDOFF_POST\(M61_HANDOFF_POST_FINAL_PRESENT_ERROR\);\s*"
+    r"\}\s*"
+    r"\}\s*"
+    r"M61_HANDOFF_POST\(M61_HANDOFF_POST_OUTER_PRESENT_RESUMED\);\s*"
+    r"if \(result != BORING_FRAMEBUFFER_USER_OK\)",
+)
+if final_present_block.search(wrapper) is None:
+    raise RuntimeError("M61 final-present result bisector source gates changed")
+
+new_posts = (
+    "M61_HANDOFF_POST(M61_HANDOFF_POST_FINAL_PRESENT_ENTER);",
+    "M61_HANDOFF_POST(M61_HANDOFF_POST_FINAL_PRESENT_OK);",
+    "M61_HANDOFF_POST(M61_HANDOFF_POST_FINAL_PRESENT_ERROR);",
+)
+if any(wrapper.count(post) != 1 or source.count(post) != 1
+       for post in new_posts):
+    raise RuntimeError("M61 final-present POST escaped its sole wrapper gate")
+
+ordered_after_call = (
     "M61_HANDOFF_POST(M61_HANDOFF_POST_OUTER_PRESENT_RESUMED);",
     "if (result != BORING_FRAMEBUFFER_USER_OK)",
-    "if (final_present)",
     "desktop_presented = true;",
     "M61_HANDOFF_POST(M61_HANDOFF_POST_SERIAL_ENTER);",
     "serial_stage(stage_number, '+', label);",
     "M61_HANDOFF_POST(M61_HANDOFF_POST_SERIAL_RETURNED);",
     "boring_boot_console_desktop_handoff();",
 )
-positions = [wrapper.find(token) for token in ordered]
-if any(position < 0 for position in positions) or positions != sorted(positions):
+positions = [wrapper.find(token) for token in ordered_after_call]
+if (any(position < 0 for position in positions) or
+        positions != sorted(positions)):
     raise RuntimeError(
         f"M61 handoff gap source order is incomplete: {positions!r}")
 
@@ -197,12 +226,16 @@ if codes != {
     "M61_HANDOFF_POST_OUTER_PRESENT_RESUMED": 0x39,
     "M61_HANDOFF_POST_SERIAL_ENTER": 0x3A,
     "M61_HANDOFF_POST_SERIAL_RETURNED": 0x3B,
+    "M61_HANDOFF_POST_FINAL_PRESENT_ENTER": 0x3C,
+    "M61_HANDOFF_POST_FINAL_PRESENT_OK": 0x3D,
+    "M61_HANDOFF_POST_FINAL_PRESENT_ERROR": 0x3E,
 }:
     raise RuntimeError(f"M61 handoff gap POST map changed: {codes!r}")
 
 disassembly = {
     name: subprocess.check_output(
-        ["objdump", "-d", "--disassemble=" + name, "build/kernel.elf"],
+        ["objdump", "-d", "--no-show-raw-insn",
+         "--disassemble=" + name, "build/kernel.elf"],
         text=True,
     )
     for name in (
@@ -214,6 +247,95 @@ disassembly = {
 outer = disassembly["__wrap_boring_framebuffer_user_present"]
 inner = disassembly["m61_post_boring_framebuffer_user_present"]
 handoff = disassembly["__wrap_boring_boot_console_desktop_handoff"]
+
+
+def parse_instructions(body):
+    instructions = []
+    for line in body.splitlines():
+        match = re.match(
+            r"^\s*([0-9a-f]+):\s+([a-z][a-z0-9]*)\s*(.*)$",
+            line,
+            re.IGNORECASE,
+        )
+        if match is not None:
+            instructions.append(
+                (int(match.group(1), 16),
+                 match.group(2).lower(), match.group(3)))
+    return instructions
+
+
+instructions = parse_instructions(outer)
+address_to_index = {
+    instruction[0]: index for index, instruction in enumerate(instructions)
+}
+events = {}
+for code in (0x3C, 0x3D, 0x3E):
+    matches = []
+    for index, (_, mnemonic, operands) in enumerate(instructions[:-1]):
+        next_mnemonic = instructions[index + 1][1]
+        next_operands = instructions[index + 1][2]
+        if (mnemonic == "mov" and
+                re.search(rf"\$0x{code:x}\b", operands, re.IGNORECASE) and
+                re.search(r"%(?:e?ax|al)\b", operands) and
+                next_mnemonic == "out" and "$0x80" in next_operands):
+            matches.append(index + 1)
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"M61 linked outer wrapper has {len(matches)} POST 0x{code:02X} outputs")
+    events[matches[0]] = f"{code:02X}"
+
+inner_target = "<m61_post_boring_framebuffer_user_present>"
+for index, (_, mnemonic, operands) in enumerate(instructions):
+    if mnemonic in ("call", "jmp") and inner_target in operands:
+        events[index] = "PRESENT"
+
+paths = []
+
+
+def walk(index, path_events, visited):
+    if index >= len(instructions):
+        paths.append(tuple(path_events))
+        return
+    if index in visited:
+        raise RuntimeError("M61 linked outer present wrapper gained a loop")
+    visited = visited | {index}
+    if index in events:
+        path_events = path_events + [events[index]]
+    _, mnemonic, operands = instructions[index]
+    target_match = re.match(r"([0-9a-f]+)\b", operands, re.IGNORECASE)
+    target = int(target_match.group(1), 16) if target_match else None
+    if mnemonic == "ret" or (mnemonic == "jmp" and target not in address_to_index):
+        paths.append(tuple(path_events))
+        return
+    if mnemonic == "jmp":
+        walk(address_to_index[target], path_events, visited)
+        return
+    if mnemonic.startswith("j") and mnemonic != "jmp":
+        if target not in address_to_index:
+            raise RuntimeError("M61 linked outer wrapper has an external conditional jump")
+        walk(address_to_index[target], path_events, visited)
+        walk(index + 1, path_events, visited)
+        return
+    walk(index + 1, path_events, visited)
+
+
+walk(0, [], set())
+new_post_paths = {
+    path for path in paths if any(code in path for code in ("3C", "3D", "3E"))
+}
+if new_post_paths != {
+        ("3C", "PRESENT", "3D"),
+        ("3C", "PRESENT", "3E"),
+}:
+    raise RuntimeError(
+        f"M61 linked final-present POST paths changed: {sorted(new_post_paths)!r}")
+ordinary_present_paths = [
+    path for path in paths if "PRESENT" in path and "3C" not in path
+]
+if (not ordinary_present_paths or
+        any("3D" in path or "3E" in path for path in ordinary_present_paths)):
+    raise RuntimeError("M61 linked non-final present path gained 3C/3D/3E")
+
 if not re.search(
     r"call\s+[^\n]*<m61_post_boring_framebuffer_user_present>", outer):
     raise RuntimeError("M61 outer present wrapper does not call the inner POST wrapper")
@@ -228,11 +350,20 @@ if re.search(
     inner,
 ):
     raise RuntimeError("M61 inner present wrapper recurses")
+if re.search(
+    r"(?:call|jmp)\s+[^\n]*<__wrap_boring_framebuffer_user_present>",
+    outer,
+):
+    raise RuntimeError("M61 outer present wrapper recurses")
 if not re.search(
     r"call\s+[^\n]*<boring_boot_console_desktop_handoff>", handoff):
     raise RuntimeError("M61 handoff wrapper does not call the real handoff")
 print("M61_HANDOFF_WRAPPER_LAYERING=PASS")
 print("M61_HANDOFF_GAP_SOURCE_ORDER=PASS")
+print("M61_FINAL_PRESENT_RESULT_GATES=PASS")
+print("M61_FINAL_PRESENT_ELF_CONTROL_FLOW=PASS")
+print("M61_FINAL_PRESENT_ELF_POSTS=3C,3D,3E")
+print("M61_NON_FINAL_PRESENT_NEW_POSTS=0")
 PY
 
 printf '%s\n' 'M61_PHYSICAL_HANDOFF_BISECTOR=PASS'
@@ -240,6 +371,9 @@ printf '%s\n' 'M61_POST_INNER_PRESENT_RETURN=38'
 printf '%s\n' 'M61_POST_OUTER_PRESENT_RESUMED=39'
 printf '%s\n' 'M61_POST_SERIAL_STAGE_ENTER=3A'
 printf '%s\n' 'M61_POST_SERIAL_STAGE_RETURNED=3B'
+printf '%s\n' 'M61_POST_FINAL_PRESENT_ENTER=3C'
+printf '%s\n' 'M61_POST_FINAL_PRESENT_OK=3D'
+printf '%s\n' 'M61_POST_FINAL_PRESENT_ERROR=3E'
 printf '%s\n' 'M61_POST_HANDOFF_ENTER=34'
 printf '%s\n' 'M61_POST_HANDOFF_RETURNED=35'
 printf '%s\n' 'M61_POST_SCANOUT_WITNESS_FAILED=36'

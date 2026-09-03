@@ -508,6 +508,10 @@ bool m61_post_process_set_name(struct process *process, const char *name) {
     return true;
 }
 
+/*
+ * 6F is the first successful present after process naming sets wm_posted.
+ * It does not necessarily identify the outer wm_ready final desktop present.
+ */
 enum boring_framebuffer_user_result m61_post_boring_framebuffer_user_present(
     struct process *process, uint32_t handle) {
     const enum boring_framebuffer_user_result result =

@@ -42,7 +42,10 @@
 enum m61_handoff_gap_post_code {
     M61_HANDOFF_POST_OUTER_PRESENT_RESUMED = 0x39,
     M61_HANDOFF_POST_SERIAL_ENTER = 0x3a,
-    M61_HANDOFF_POST_SERIAL_RETURNED = 0x3b
+    M61_HANDOFF_POST_SERIAL_RETURNED = 0x3b,
+    M61_HANDOFF_POST_FINAL_PRESENT_ENTER = 0x3c,
+    M61_HANDOFF_POST_FINAL_PRESENT_OK = 0x3d,
+    M61_HANDOFF_POST_FINAL_PRESENT_ERROR = 0x3e
 };
 
 #define M61_HANDOFF_POST(code) \
@@ -840,7 +843,17 @@ enum boring_framebuffer_user_result __wrap_boring_framebuffer_user_present(
         return __real_boring_framebuffer_user_present(process, handle);
     }
     trace_stage(stage_number, '>', label);
+    if (final_present) {
+        M61_HANDOFF_POST(M61_HANDOFF_POST_FINAL_PRESENT_ENTER);
+    }
     result = __real_boring_framebuffer_user_present(process, handle);
+    if (final_present) {
+        if (result == BORING_FRAMEBUFFER_USER_OK) {
+            M61_HANDOFF_POST(M61_HANDOFF_POST_FINAL_PRESENT_OK);
+        } else {
+            M61_HANDOFF_POST(M61_HANDOFF_POST_FINAL_PRESENT_ERROR);
+        }
+    }
     M61_HANDOFF_POST(M61_HANDOFF_POST_OUTER_PRESENT_RESUMED);
     if (result != BORING_FRAMEBUFFER_USER_OK) {
         trace_stage(stage_number, '!', label);

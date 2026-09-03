@@ -116,17 +116,20 @@ def main():
         "M61_HANDOFF_POST(M61_HANDOFF_POST_OUTER_PRESENT_RESUMED);",
         "M61_HANDOFF_POST(M61_HANDOFF_POST_SERIAL_ENTER);",
         "M61_HANDOFF_POST(M61_HANDOFF_POST_SERIAL_RETURNED);",
+        "M61_HANDOFF_POST(M61_HANDOFF_POST_FINAL_PRESENT_ENTER);",
+        "M61_HANDOFF_POST(M61_HANDOFF_POST_FINAL_PRESENT_OK);",
+        "M61_HANDOFF_POST(M61_HANDOFF_POST_FINAL_PRESENT_ERROR);",
     )
     if (console.count("x86_64_out8") != 0 or
             breadcrumbs.count("x86_64_out8") != 2 or
             framebuffer_fault.count("x86_64_out8") != 1):
         raise RuntimeError(
             "M61 direct port-0x80 diagnostics escaped their bounded seams")
-    if (present.count("M61_HANDOFF_POST(") != 3 or
+    if (present.count("M61_HANDOFF_POST(") != 6 or
             any(present.count(marker) != 1 for marker in handoff_gap_posts) or
-            breadcrumbs.count("M61_HANDOFF_POST(") != 4):
+            breadcrumbs.count("M61_HANDOFF_POST(") != 7):
         raise RuntimeError(
-            "M61 handoff-gap POST diagnostics escaped the final-present wrapper")
+            "M61 handoff-gap POST diagnostics escaped the present wrapper")
     if ("x86_64_out8((uint16_t)M61_POST_PORT" not in post_script or
             "M61_POST(M61_POST_KERNEL_ENTRY)" not in post_script or
             "M61_POST(M61_POST_DESKTOP_PRESENT)" not in post_script):
