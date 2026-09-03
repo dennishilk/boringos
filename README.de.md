@@ -21,9 +21,19 @@ Die Entwicklung ist bis einschließlich **Milestone 61** abgeschlossen.
 
 BoringOS ist längst nicht mehr nur ein früher Boot-Kernel: Unter QEMU bootet inzwischen eine echte native Ring-3-Desktop-Session mit eigenem Display-Service, Tiling-Window-Manager, grafischem Terminal, Shell, Editor, Dateimanager, persistentem BoringFS, Hardware-Inventar und einem wachsenden BoringOS-eigenen xHCI-/USB-Stack.
 
-Es bleibt ein experimentelles Forschungs-/Lernbetriebssystem. QEMU ist weiterhin die primär verifizierte Plattform. M59 beweist einen begrenzten Repository-/QEMU-Physical-Smoke-Kandidaten samt UEFI-USB-Image; **die physische Cthulhu-Validierung wartet weiterhin auf den Hardware-Test des Benutzers**.
+Es bleibt ein experimentelles Forschungs-/Lernbetriebssystem. QEMU ist weiterhin die primäre automatisierte Regression-Plattform, aber die physische Validierung ist nicht länger hypothetisch: Am **03.09.2026** bootete der exakte M61-Physical-Kandidat `ded342e76a35d9c4558d17dda919575f5fe329ee` auf der echten Maschine **Cthulhu** vom M61-USB-Image und zeichnete die erste absichtliche BoringOS-Framebuffer-Ausgabe auf echter Hardware. Das Board erreichte **POST 91** und bewies damit, dass der erste normale Framebuffer-Store erfolgreich zurückkehrte.
+
+Das physische Boot-Dashboard zeigte **CPU-Inventar, PCI-Inventar, SMBIOS, PMM, VMM, Kernel-Heap, Exceptions, Input, IRQ, PIT, xHCI-Controller, USB-Adressierung, USB-Deskriptoren, USB HID, USB Mass Storage, persistente BoringFS-Root, `boring-init`, `boring-display` und BoringWM** als `[ OK ]`. Das automatische Terminal und die finale Desktop-Present-Stufe sind physisch noch nicht abgeschlossen; deshalb wird bewusst noch kein vollständiger physischer Desktop-Erfolg behauptet.
 
 Die detaillierte Quelle der Wahrheit ist [`docs/roadmap.md`](docs/roadmap.md).
+
+## Erste physische Framebuffer-Ausgabe
+
+Der Cthulhu-Lauf im September 2026 ist die erste bestätigte absichtliche BoringOS-Grafikausgabe auf echter Hardware seit Beginn des Projekts.
+
+Der physische Kandidat verlässt sich für normale Scanout-Writes nicht mehr auf den geerbten Limine-Framebuffer-Alias. Er löst die Framebuffer-Apertur über den Limine-HHDM-/Memory-Map-Vertrag auf, validiert den physischen Framebuffer-Bereich, mappt einen begrenzten schreibbaren cache-deaktivierten Kernel-Alias und lässt den bestehenden Software-Rendering-Pfad unverändert. Die eingefrorenen M61-Breadcrumbs geben `90` unmittelbar vor dem ersten normalen Framebuffer-Store und `91` erst nach dessen erfolgreicher Rückkehr aus; Cthulhu erreichte physisch `91`, während das Boot-Dashboard sichtbar auf dem Monitor stand.
+
+Das beweist den echten Framebuffer-Pfad, nicht native GPU-Beschleunigung. BoringOS verwendet weiterhin vom Firmware-/Limine-Pfad bereitgestellten Scanout-Speicher und Software-Komposition.
 
 ## Was heute wirklich läuft
 
@@ -74,6 +84,7 @@ Zu den implementierten und verifizierten Grundlagen gehören:
 - ein schreibgeschützter M59-Physical-Smoke-Bootpfad samt exaktem UEFI-USB-Image-Kandidaten und deaktivierten internen Storage-Writes
 - begrenzter xHCI-USB-Mass-Storage-Bulk/BOT/SCSI-Transport als `usb0` mit echtem Read/Write/Cache-Flush-Persistenzbeweis und gleichzeitiger USB-HID-Koexistenz bis M60
 - ein begrenztes GPT-/UEFI-Image, das vom selben `usb0`-Gerät bootet und dessen feste BoringFS-Slice als Root mountet, mit Zwei-Boot-Persistenz und live HID-Koexistenz bis M61
+- physischer Cthulhu-Boot über genau diesen M61-USB-Pfad durch echtes xHCI/USB Mass Storage, schreibbare BoringFS-Root, `boring-init`, `boring-display`, BoringWM und die erste bestätigte physische BoringOS-Framebuffer-Ausgabe
 
 ## Nativer Desktop
 
@@ -106,11 +117,11 @@ SMBIOS  → Firmware-, System-, Board- und Speicheridentität
 INFO    → begrenzter versionierter Userspace-Snapshot
 ```
 
-`boringfetch` verwendet diese Kernel-eigenen Werte. Unter QEMU zeigt es deshalb die emulierte QEMU-Hardware; auf echter Hardware soll es später die tatsächliche Maschine beschreiben.
+`boringfetch` verwendet diese Kernel-eigenen Werte. Unter QEMU zeigt es deshalb die emulierte QEMU-Hardware. Der physische Cthulhu-Pfad führt die echten CPU-/PCI-/SMBIOS-Collector inzwischen ebenfalls während des Boots aus; vollständiges physisches `boringfetch` hängt noch vom Abschluss der Automatic-Terminal-Stufe ab.
 
 Milestone 58 entfernt die alte ~4-GiB-Entwicklungsgrenze des PMM für das begrenzte Referenzziel. Der bestehende PMM besitzt jetzt Kapazität für **8.388.608 4-KiB-Frames = 32 GiB**, und eine reale QEMU-`-m 32G`-Acceptance beweist nutzbaren Speicher oberhalb 4 GiB sowie einen verwalteten physischen Frame bei `0x0000000100000000`. Maps jenseits der konfigurierten 32-GiB-PMM-Kapazität bleiben bewusst begrenzt/gecappt; daraus wird kein beliebig skalierender Memory-Support abgeleitet.
 
-Milestone 59 ergänzt den begrenzten Physical-Smoke-Kandidaten: Das exakte Image wurde unter OVMF als schreibgeschützter xHCI-USB-Massenspeicher gebootet, während der Gast PMM/VMM/Heap, Framebuffer, Hardware-Inventar und USB-HID-Input prüft, ohne den normalen Block-Root-Pfad zu betreten. Interne Storage-Writes sind ausdrücklich deaktiviert. Das ist ausschließlich Repository-/QEMU-Readiness; der physische Cthulhu-Test steht noch aus.
+Milestone 59 ergänzt den begrenzten Physical-Smoke-Kandidaten: Das exakte Image wurde unter OVMF als schreibgeschützter xHCI-USB-Massenspeicher gebootet, während der Gast PMM/VMM/Heap, Framebuffer, Hardware-Inventar und USB-HID-Input prüft, ohne den normalen Block-Root-Pfad zu betreten. Interne Storage-Writes sind ausdrücklich deaktiviert. Die spätere physische M61-Arbeit hat dieses Smoke-Ziel auf Cthulhu inzwischen deutlich überschritten: Die Maschine bootet über den echten USB-Root-Pfad, mountet schreibbares BoringFS, startet Display-Stack und BoringWM und rendert das native Boot-Dashboard über das normalisierte physische Framebuffer-Mapping.
 
 ## xHCI-/USB-Stand
 
@@ -152,7 +163,7 @@ vollständige i8042-freie grafische Desktop-Acceptance
 
 M59 verwendet den HID-Pfad für einen Storage-Write-deaktivierten Physical-Smoke-Kandidaten. M60 ergänzt auf demselben xHCI-Controller genau ein begrenztes direkt angeschlossenes USB-Mass-Storage-Gerät: aus Deskriptoren abgeleitete Klasse/Subklasse/Protokoll `08/06/50`, aus Deskriptoren abgeleitete Bulk-IN/OUT-Endpunkte, xHCI-Bulk-Transfers, BOT-CBW/CSW-Validierung und ein One-LUN-SCSI-Subset mit INQUIRY, TEST UNIT READY, REQUEST-SENSE-Fallback, READ CAPACITY(10), READ(10), WRITE(10) und SYNCHRONIZE CACHE(10). Das Gerät wird über die bestehende M21-Block-Device-API als `usb0` registriert. Reale q35-Acceptance beweist exakte LBA-8-Persistenz bei unveränderten Bytes außerhalb dieses Sektors, während USB-Tastatur-/Tablet-Input nach Storage-I/O weiter funktioniert. USB-Hubs, SuperSpeed-Companion-Semantik, BOT-Reset/Stall-Recovery, Dateisystem-Mounting und Root-from-USB bleiben außerhalb M60.
 
-M61 ergänzt ein 96-MiB-GPT-/UEFI-Image mit festem Layout, dessen Limine-Bootdateien und beschreibbare BoringFS-Root auf demselben xHCI-USB-Gerät liegen. Zwei aufeinanderfolgende Boots exakt dieses Images beweisen ein geflushtes `/persist/m61.txt`, exakte hostseitige Bytes, die Wiederanzeige im Terminal, live Tastatur-/Tablet-Input und unveränderte geschützte Bootbereiche. Das ist ein begrenztes USB-Root-Image, kein Installer und kein allgemeiner Partitions-Discovery-Pfad.
+M61 ergänzt ein 96-MiB-GPT-/UEFI-Image mit festem Layout, dessen Limine-Bootdateien und beschreibbare BoringFS-Root auf demselben xHCI-USB-Gerät liegen. Zwei aufeinanderfolgende QEMU-Boots exakt dieses Images beweisen ein geflushtes `/persist/m61.txt`, exakte hostseitige Bytes, die Wiederanzeige im Terminal, live Tastatur-/Tablet-Input und unveränderte geschützte Bootbereiche. Der physische Cthulhu-Lauf beweist zusätzlich, dass die echte Maschine über xHCI-Controller-Initialisierung, USB-Adressierung, Descriptor Discovery, USB HID, USB Mass Storage und den persistenten BoringFS-Root-Mount dieses Pfads kommt. Das ist ein begrenztes USB-Root-Image, kein Installer und kein allgemeiner Partitions-Discovery-Pfad.
 
 ## Storage und Dateisysteme
 
@@ -160,19 +171,19 @@ BoringOS besitzt mit **BoringFS** ein eigenes kleines Dateisystemformat. Das Rep
 
 Die verifizierte persistente QEMU-Root kann modernen VirtIO-PCI-Block-Storage, den in M57 abgeschlossenen begrenzten synchronen AHCI-/SATA-Pfad oder die feste M61-BoringFS-Slice auf `usb0` verwenden. AHCI- und USB-Pfad führen echte Reads, Writes und erforderliche Cache-Flushes über die generische Block-Device-API aus; NVMe ist nicht implementiert.
 
-Das M59-Physical-Smoke-Image umgeht diese beschreibbaren Root-Pfade absichtlich und meldet interne Storage-Writes als deaktiviert.
+Auf Cthulhu bestätigt das physische M61-Boot-Dashboard inzwischen den echten USB-Mass-Storage-Pfad und den persistenten BoringFS-Root-Mount, bevor Display-Stack und BoringWM starten.
 
 ## Aktuelle Grenzen
 
 | Bereich | Aktueller Stand |
 | --- | --- |
-| Primär verifizierte Plattform | QEMU x86_64 |
-| Physische Hardware | M59 Repository-/QEMU-Smoke-Readiness bewiesen; physische Cthulhu-Validierung wartet auf den Benutzer-Hardwaretest |
+| Primär verifizierte Plattform | QEMU x86_64 für vollständige automatisierte Acceptance; physisches Cthulhu ist inzwischen bis BoringWM und nativer Framebuffer-Bootausgabe verifiziert |
+| Physische Hardware | M61-USB-Boot auf Cthulhu physisch durch PMM/VMM, xHCI/HID/Mass Storage, BoringFS-Root, `boring-init`, `boring-display`, BoringWM und erste echte Framebuffer-Ausgabe verifiziert; Automatic Terminal/finales Desktop Present noch ausstehend |
 | Verwalteter RAM | begrenzte 32-GiB-PMM-Kapazität; reale 32-GiB-QEMU-Maps und Frames >= 4 GiB sind verifiziert |
-| Grafik | Firmware-/Limine-Framebuffer + Software-Compositor; keine native AMD/NVIDIA/Intel-GPU-Beschleunigung |
-| Desktop-Input | xHCI-USB-HID-Pfad und Legacy-i8042-/PS/2-Pfad sind jeweils in ihren begrenzten QEMU-Acceptances bewiesen |
-| USB | xHCI HID plus begrenzter direkt angeschlossener Bulk/BOT/SCSI-Mass-Storage und Boot-/Root-Nutzung mit festem Layout bis M61; Hubs und SuperSpeed-Companion-Semantik nicht implementiert |
-| Persistente Root | VirtIO, AHCI/SATA oder feste M61-`usb0`-Slice + BoringFS |
+| Grafik | Firmware-/Limine-Framebuffer + Software-Compositor; echte physische Cthulhu-Framebuffer-Ausgabe verifiziert; keine native AMD/NVIDIA/Intel-GPU-Beschleunigung |
+| Desktop-Input | xHCI-USB-HID-Pfad und Legacy-i8042-/PS/2-Pfad sind jeweils in begrenzten QEMU-Acceptances bewiesen; xHCI-HID-Initialisierung wird auch physisch auf Cthulhu erreicht |
+| USB | xHCI HID plus begrenzter direkt angeschlossener Bulk/BOT/SCSI-Mass-Storage und Boot-/Root-Nutzung mit festem Layout bis M61; entsprechender physischer Cthulhu-Pfad bis zum persistenten Root-Mount verifiziert; Hubs und SuperSpeed-Companion-Semantik nicht implementiert |
+| Persistente Root | VirtIO, AHCI/SATA oder feste M61-`usb0`-Slice + BoringFS; die M61-`usb0`-BoringFS-Root wird jetzt physisch auf Cthulhu erreicht |
 | AHCI / NVMe | begrenztes synchrones AHCI Read/Write/Flush; NVMe nicht implementiert |
 | Networking | nicht implementiert |
 | Audio | nicht implementiert |
@@ -208,7 +219,7 @@ Die permanente CI hält frühere Milestone-Beweise am Leben, während neue Fähi
 
 Das Projekt entwickelt sich in kleinen semantischen Milestones. Ein Milestone gilt nicht allein deshalb als fertig, weil der Code baut: fokussierte Acceptance, geerbte Regressionen, Semantic Freeze, runtime-neutraler Versions-Closeout, Exact-Head-CI, guarded Squash Merge und die Verifikation des neuen `main` gehören zur Entwicklungsdisziplin.
 
-Zum Zeitpunkt dieser README-Aktualisierung ist **M61 bootfähige persistente USB-Root abgeschlossen** und der aktive Entwicklungsbanner lautet **BoringKernel 0.0.62-dev**. Die physische M59-Cthulhu-Validierung bleibt ausdrücklich **PENDING USER HARDWARE TEST**. Es ist keine M62-Implementierung enthalten.
+Zum Zeitpunkt dieser README-Aktualisierung ist **M61 bootfähige persistente USB-Root abgeschlossen** und der aktive Entwicklungsbanner lautet **BoringKernel 0.0.62-dev**. Die physische M61-Validierung auf Cthulhu ist jetzt durch den echten USB-Root-Pfad, BoringWM-Start und die erste absichtliche native Framebuffer-Ausgabe bestätigt. Das automatische Terminal und die finale physische Desktop-Present-Stufe sind noch nicht abgeschlossen. Es ist keine M62-Implementierung enthalten.
 
 Für den exakten aktuellen Milestone-Stand gilt [`docs/roadmap.md`](docs/roadmap.md), nicht eine geplante Funktion aus dieser README.
 
