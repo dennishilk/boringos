@@ -27,6 +27,17 @@ ld -nostdlib -static --build-id=none -z max-page-size=0x1000 \
    build/user/boringwm/core.o build/user/boringwm/main.o \
    -o build/user/boringwm.elf
 
+strings build/user/boringwm.elf | \
+    grep -Fqx 'M61 PHYSICAL: automatic terminal spawn requested'
+strings build/user/boringwm.elf | \
+    grep -Fqx 'M61 PHYSICAL: automatic terminal spawn FAILED'
+strings build/user/boringwm.elf | \
+    grep -Fqx 'M61 PHYSICAL: automatic terminal spawn pid='
+nm build/user/boringwm.elf | grep -Eq '[[:space:]]launch_application$'
+objdump -d build/user/boringwm.elf | \
+    grep -Eq 'call[^<]*<launch_application>'
+printf '%s\n' 'M61 exact BoringWM ELF auto-terminal path/strings: PASS'
+
 mkdir -p build/user/boring-init-desktop
 cc $USER_CFLAGS -c user/boring-init/desktop.c \
     -o build/user/boring-init-desktop/main.o
@@ -50,6 +61,19 @@ mkdir -p "$OUT"
     build/user/boring-edit.elf build/user/cat.elf > "$OUT/geometry.txt"
 build/boringfsck "$OUT/boringos-root.img" > "$OUT/boringfsck-before.txt"
 grep -Fqx 'Status: VALID' "$OUT/boringfsck-before.txt"
+build/boringfsck --cat /bin/boring-terminal "$OUT/boringos-root.img" \
+    > "$OUT/boring-terminal.embedded.elf"
+build/boringfsck --cat /bin/boring-shell "$OUT/boringos-root.img" \
+    > "$OUT/boring-shell.embedded.elf"
+test -s "$OUT/boring-terminal.embedded.elf"
+test -s "$OUT/boring-shell.embedded.elf"
+cmp -s build/user/boring-terminal.elf "$OUT/boring-terminal.embedded.elf"
+cmp -s build/user/boring-shell.elf "$OUT/boring-shell.embedded.elf"
+TERMINAL_ELF_MAGIC=$(od -An -tx1 -N4 "$OUT/boring-terminal.embedded.elf" | tr -d ' \n')
+SHELL_ELF_MAGIC=$(od -An -tx1 -N4 "$OUT/boring-shell.embedded.elf" | tr -d ' \n')
+test "$TERMINAL_ELF_MAGIC" = 7f454c46
+test "$SHELL_ELF_MAGIC" = 7f454c46
+printf '%s\n' 'M61 BoringFS /bin/boring-terminal + /bin/boring-shell ELF identity: PASS'
 if build/boringfsck --cat /persist/m61.txt "$OUT/boringos-root.img" \
     >"$OUT/preseed-check.stdout" 2>"$OUT/preseed-check.stderr"; then
     echo 'M61 build FAILED: /persist/m61.txt is pre-seeded' >&2
@@ -91,12 +115,14 @@ fi
 rm -f "$MALFORMED"
 printf '%s\n' 'M61 malformed/absent expected BoringFS root: REJECTED'
 
+python3 tests/m61-wm-terminal-post-verifier.py
+
 rm -rf build/kernel build/iso_root
 rm -f build/kernel.elf build/boringos.iso build/.test-mode
 make TEST_MODE=m36-desktop \
     TEST_CPPFLAGS='-DBORING_M36_DESKTOP_ACCEPTANCE=1 -DBORING_M37_DESKTOP_ACCEPTANCE=1 -DBORING_M54_USB_ONLY_DESKTOP=1 -DBORING_M61_PHYSICAL_BREADCRUMBS=1' \
-    TEST_HARNESS_C='kernel/core/m61_desktop_test.c kernel/core/m37_desktop_test_adapter.c kernel/core/block_slice.c kernel/core/xhci_mixed.c kernel/arch/x86_64/xhci_mixed.c kernel/core/usb_mass_storage.c kernel/core/m61_physical_breadcrumbs.c' \
-    LD='ld --wrap=serial_init --wrap=boring_cpu_inventory_init --wrap=boring_pci_inventory_init --wrap=boring_smbios_boot_init --wrap=pmm_init --wrap=vmm_init --wrap=heap_init --wrap=exception_init --wrap=syscall_test_run --wrap=boring_input_init --wrap=irq_init --wrap=timer_init --wrap=xhci_init --wrap=xhci_address_connected --wrap=xhci_discover_descriptors --wrap=xhci_configure_hid_devices_mixed --wrap=usb_mass_storage_init --wrap=boringfs_vfs_create_writable --wrap=process_set_name --wrap=boring_framebuffer_user_claim --wrap=boring_framebuffer_user_present --wrap=boring_ipc_service_register --wrap=x86_64_exception_dispatch' \
+    TEST_HARNESS_C='kernel/core/m61_desktop_test.c kernel/core/m37_desktop_test_adapter.c kernel/core/block_slice.c kernel/core/xhci_mixed.c kernel/arch/x86_64/xhci_mixed.c kernel/core/usb_mass_storage.c kernel/core/m61_physical_breadcrumbs.c kernel/core/m61_wm_terminal_post.c' \
+    LD='ld --wrap=serial_init --wrap=boring_cpu_inventory_init --wrap=boring_pci_inventory_init --wrap=boring_smbios_boot_init --wrap=pmm_init --wrap=vmm_init --wrap=heap_init --wrap=exception_init --wrap=syscall_test_run --wrap=boring_input_init --wrap=irq_init --wrap=timer_init --wrap=xhci_init --wrap=xhci_address_connected --wrap=xhci_discover_descriptors --wrap=xhci_configure_hid_devices_mixed --wrap=usb_mass_storage_init --wrap=boringfs_vfs_create_writable --wrap=process_set_name --wrap=boring_framebuffer_user_claim --wrap=boring_framebuffer_user_present --wrap=boring_ipc_service_register --wrap=boring_ipc_service_connect --wrap=boring_ipc_poll --wrap=boring_ipc_send --wrap=boring_ipc_receive --wrap=x86_64_syscall_dispatch_m36 --wrap=x86_64_exception_dispatch' \
     BOOT_USER_ELF=build/user/boring-init-desktop.elf \
     BOOT_USER_NAME=boring-init.elf \
     BOOT_EXTRA_USER_ELF= BOOT_EXTRA_USER_NAME= \
@@ -106,9 +132,17 @@ make TEST_MODE=m36-desktop \
     build/kernel.elf build/deps/limine-binary/limine
 
 nm build/kernel.elf | grep -Fq 'boring_m61_physical_breadcrumbs_enabled'
+nm build/kernel.elf | grep -Fq '__wrap_boring_ipc_service_connect'
+nm build/kernel.elf | grep -Fq '__wrap_boring_ipc_poll'
+nm build/kernel.elf | grep -Fq '__wrap_boring_ipc_send'
+nm build/kernel.elf | grep -Fq '__wrap_boring_ipc_receive'
+nm build/kernel.elf | grep -Fq '__wrap_x86_64_syscall_dispatch_m36'
+objdump -d build/kernel.elf | \
+    grep -Eq 'call[^<]*<__wrap_x86_64_syscall_dispatch_m36>'
 grep -Fqx 'timeout: 5' limine-m61-usb.conf
 grep -Fqx 'mouse: no' limine-m61-usb.conf
 printf '%s\n' 'M61 physical framebuffer breadcrumbs: ENABLED'
+printf '%s\n' 'M61 WM->automatic-terminal kernel sub-bisector: ENABLED'
 printf '%s\n' 'M61 physical desktop auto-terminal witness: ENABLED'
 printf '%s\n' 'M61 USB Limine bounded autoboot: 5 seconds, mouse countdown cancellation disabled'
 printf '%s\n' 'M61 USB-root desktop build passed.'
