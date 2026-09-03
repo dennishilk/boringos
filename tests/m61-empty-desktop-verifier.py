@@ -18,7 +18,7 @@ def fail(message):
 
 
 def function_body(source, signature):
-    start = source.find(signature)
+    start = source.rfind(signature)
     if start < 0:
         fail(f"missing function: {signature}")
     opening = source.find("{", start)
