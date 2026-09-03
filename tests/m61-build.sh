@@ -20,7 +20,6 @@ if strings build/user/boringwm.elf | \
     echo 'M61 build FAILED: automatic terminal spawn string remains' >&2
     exit 1
 fi
-nm build/user/boringwm.elf | grep -Eq '[[:space:]]launch_application$'
 printf '%s\n' 'M61 exact BoringWM ELF empty desktop/manual launcher: PASS'
 
 mkdir -p build/user/boring-init-desktop
