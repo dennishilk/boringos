@@ -212,9 +212,19 @@ static void handle_input(const struct display_event *message) {
     }
 }
 
+static long connect_display_service(void) {
+    for (;;) {
+        const long endpoint = boring_service_connect(
+            BORING_DISPLAY_SERVICE_NAME, BORING_DISPLAY_SERVICE_NAME_LENGTH);
+        if (endpoint > 0L) { return endpoint; }
+        if (endpoint != -(long)BORING_SYSCALL_ENOENT) { return endpoint; }
+        __asm__ volatile ("pause");
+    }
+}
+
 int boring_main(void) {
     long listener = boring_service_register(BORING_WM_SERVICE, BORING_WM_SERVICE_LENGTH);
-    long ep = boring_service_connect(BORING_DISPLAY_SERVICE_NAME, BORING_DISPLAY_SERVICE_NAME_LENGTH);
+    long ep = connect_display_service();
     struct display_control hello = {0}; struct display_event info;
     if ((listener <= 0L) || (ep <= 0L)) { desktop_fail("WM service connect"); }
     display = (uint32_t)ep; ep = boring_endpoint_peer(display);
