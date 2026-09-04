@@ -15,6 +15,7 @@ GRAPHICS = (ROOT / "kernel/core/graphics.c").read_text()
 MAKEFILE = (ROOT / "Makefile").read_text()
 M38_BUILD = (ROOT / "tests/m38-build.sh").read_text()
 M37_BUNDLE = (ROOT / "tests/m37-bundle-test.sh").read_text()
+M54_QEMU = (ROOT / "tests/m54-usb-only-desktop-qemu.py").read_text()
 
 
 def fail(message):
@@ -86,6 +87,11 @@ if M38_BUILD.count(f"-D{drain_gate}=1") != 2:
     fail("M38 death variants do not preserve the bounded-session drain gate")
 if "TEST_MODE=m36-desktop" not in M37_BUNDLE:
     fail("M37 BoringFS bundle lost its bounded-session acceptance build")
+if f"-D{drain_gate}=1" not in M37_BUNDLE:
+    fail("M37 BoringFS bundle lost its explicit bounded-session gate")
+for token in ("M37_BUNDLE_EXTRA_USER_CPPFLAGS", "-DBORING_M54_USB_ONLY_DESKTOP=1"):
+    if token not in M54_QEMU:
+        fail(f"M54 BoringFS bundle lost its historical runtime flag: {token}")
 if drain_gate in BUILD:
     fail("M61 runtime must not enable the historical bounded-session gate")
 

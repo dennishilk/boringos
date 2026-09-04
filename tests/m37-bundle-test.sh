@@ -4,10 +4,12 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 OUT="${ROOT}/build/m37-bundle-test"
 BUILDER="${ROOT}/build/boringfs-m37-bundle"
 IMAGE="${OUT}/boringos-root.img"
+BUNDLE_EXTRA_USER_CPPFLAGS=${M37_BUNDLE_EXTRA_USER_CPPFLAGS:-}
 rm -rf "${OUT}"
 mkdir -p "${OUT}"
-make -C "${ROOT}" TEST_MODE=m36-desktop boringfsck user-boringfetch user-shell \
-    user-boring-terminal user-boringwm
+make -C "${ROOT}" TEST_MODE=m36-desktop \
+    RUNTIME_USER_CPPFLAGS="-Iuser/runtime/include -Ikernel/include -DBORING_BOUNDED_DESKTOP_ACCEPTANCE=1 ${BUNDLE_EXTRA_USER_CPPFLAGS}" \
+    boringfsck user-boringfetch user-shell user-boring-terminal user-boringwm
 cc -I"${ROOT}/libs/boringfs/include" -std=c11 -fno-builtin \
    -fno-tree-loop-distribute-patterns -Wall -Wextra -Wpedantic -Werror \
    -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes \

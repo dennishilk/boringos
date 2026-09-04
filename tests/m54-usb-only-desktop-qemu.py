@@ -28,9 +28,13 @@ def run():
     with (OUT / "build.log").open("w") as out:
         subprocess.run(["sh", "tests/m54-build.sh"], cwd=ROOT,
                        stdout=out, stderr=subprocess.STDOUT, check=True)
+    bundle_env = os.environ.copy()
+    bundle_env["M37_BUNDLE_EXTRA_USER_CPPFLAGS"] = \
+        "-DBORING_M54_USB_ONLY_DESKTOP=1"
     with (OUT / "bundle.log").open("w") as out:
         subprocess.run(["sh", "tests/m37-bundle-test.sh"], cwd=ROOT,
-                       stdout=out, stderr=subprocess.STDOUT, check=True)
+                       env=bundle_env, stdout=out, stderr=subprocess.STDOUT,
+                       check=True)
     for name in ("geometry.txt", "boringfsck.txt", "SHA256SUMS"):
         shutil.copyfile(ROOT / "build/m37-bundle-test" / name, OUT / name)
     root_image = ROOT / "build/m37-bundle-test/boringos-root.img"
