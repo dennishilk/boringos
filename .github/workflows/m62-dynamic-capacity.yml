@@ -20,7 +20,7 @@ jobs:
       - name: Install QEMU and UEFI image dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 ovmf gdisk dosfstools mtools xz-utils
+          sudo apt-get install -y qemu-system-x86 ovmf gdisk dosfstools mtools xz-utils xorriso
       - name: Verify dynamic storage architecture
         run: python3 tests/m62-dynamic-capacity-verifier.py
       - name: Stress 24 concurrent processes and tasks for three churn cycles
