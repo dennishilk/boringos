@@ -101,7 +101,6 @@ jobs:
           grep -Fq 'wm: frame=1 count=0 focus=0' "$log"
           grep -Fq 'wm: Super+Return spawned /bin/boring-terminal' "$log"
           ! grep -Fq 'M61 PHYSICAL: automatic terminal' "$log"
-          ! grep -Fq 'M61 TRACE [27+] TERMINAL START' "$log"
           python3 - "$log" <<'PY'
           import sys
           from pathlib import Path
@@ -115,6 +114,10 @@ jobs:
           positions = [source.find(marker) for marker in markers]
           if any(position < 0 for position in positions) or positions != sorted(positions):
               raise SystemExit(f"M61 empty-desktop/manual-launch order changed: {positions!r}")
+          terminal_trace = source.find("M61 TRACE [27+] TERMINAL START")
+          if terminal_trace >= 0 and terminal_trace <= positions[-1]:
+              raise SystemExit(
+                  "M61 terminal-start trace occurred before manual Super+Return")
           PY
           proof=build/m61-bootable-persistent-usb/first-boot/physical-trace-proof.txt
           grep -Fqx 'DIAGNOSTIC_FRAMEBUFFER_WRITES_BYPASSED=YES' "$proof"
