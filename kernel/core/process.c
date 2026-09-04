@@ -243,6 +243,13 @@ bool process_create(struct process **process_out) {
         return false;
     }
     process_zero_object(process);
+    /*
+     * Dynamic objects must enter the same initialized empty state that the
+     * former static slots had after process_init().  In particular,
+     * user_memory_process_state_init() seeds non-zero buffer-handle
+     * generations; byte-zero alone is not a valid reusable process state.
+     */
+    process_clear(process);
     if (!address_space_create(&process->address_space)) {
         (void)kfree(process);
         process_restore_interrupts(interrupts_were_enabled);
