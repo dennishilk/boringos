@@ -307,10 +307,13 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
             if (result != 0L) {
                 break;
             }
-            if (!serviced) {
-                x86_64_enable_and_halt();
-                x86_64_interrupts_disable();
-            }
+            /*
+             * Runtime HID completions are consumed by explicit polling.
+             * Interrupter 0 is not enabled, so a Transfer Event cannot wake
+             * this HLT path by itself. Keep the wait cooperative and return
+             * directly to the next bounded xHCI poll instead of depending on
+             * unrelated PIT/PIC delivery for HID liveness.
+             */
             continue;
         }
 #endif

@@ -143,26 +143,31 @@ for token in (
 if "incoming_queue(connection, entry->side)->count != 0U" not in IPC:
     fail("accepted endpoint queue is not polled for READ")
 
-m54_yield = event.find("task_yield();")
-m54_repoll_disable = event.find("x86_64_interrupts_disable();", m54_yield)
-m54_repoll = event.find(
+m54_owner_start = event.find("if (m54_is_input_owner(process)) {")
+m54_owner_end = event.find("#endif", m54_owner_start)
+if not (0 <= m54_owner_start < m54_owner_end):
+    fail("M54 input-owner event-wait branch missing")
+m54_owner = event[m54_owner_start:m54_owner_end]
+m54_yield = m54_owner.find("task_yield();")
+m54_repoll_disable = m54_owner.find("x86_64_interrupts_disable();", m54_yield)
+m54_repoll = m54_owner.find(
     "result = poll_watches(process, watches, count);",
     m54_repoll_disable,
 )
-m54_ready_gate = event.find("if (result != 0L) {", m54_repoll)
-m54_ready_break = event.find("break;", m54_ready_gate)
-m54_halt = event.find("x86_64_enable_and_halt();", m54_ready_break)
-m54_continue = event.find("continue;", m54_halt)
+m54_ready_gate = m54_owner.find("if (result != 0L) {", m54_repoll)
+m54_ready_break = m54_owner.find("break;", m54_ready_gate)
+m54_continue = m54_owner.find("continue;", m54_ready_break)
 if not (
     0 <= m54_yield < m54_repoll_disable < m54_repoll <
-    m54_ready_gate < m54_ready_break < m54_halt < m54_continue <
-    event.find("if (!arm_fd_watches", m54_continue)
+    m54_ready_gate < m54_ready_break < m54_continue
 ):
-    fail("M54 event wait can sleep on readiness sampled before task_yield")
+    fail("M54 event wait lost its post-yield readiness re-poll")
+if "x86_64_enable_and_halt();" in m54_owner:
+    fail("M54 polled HID wait still depends on an unrelated interrupt to leave HLT")
 if event.count("result = poll_watches(process, watches, count);") < 2:
     fail("M54 event wait missing post-yield readiness re-poll")
 if "!timer_init(100U)" not in DESKTOP:
-    fail("M54 physical desktop lost its 100 Hz fallback wake source")
+    fail("M54 physical desktop lost its 100 Hz scheduler timer")
 
 accept_witness = function_body(
     IPC_SYSCALL,
@@ -229,7 +234,8 @@ print("C5=DISPLAY_RECEIVED_EXACT_MANAGER_REQUEST")
 print("C6=CONTROL_VALIDATION_AND_ENDPOINT_PEER_PASSED")
 print("C7=WM_PROBE_AUTHENTICATION_PASSED")
 print("C8=CONTROL_REPLY_SEND_RETURNED_OK")
-print("M54_POST_YIELD_REPOLL_BEFORE_HLT=PASS")
+print("M54_POST_YIELD_REPOLL_BEFORE_NEXT_HID_POLL=PASS")
+print("M54_POLLED_HID_WAIT_HAS_NO_HLT_DEPENDENCY=PASS")
 print("M54_YIELD_READY_EVENT_NOT_LOST=PASS")
 print("C4_ACCEPT_WITNESS_TIMING_INDEPENDENT=PASS")
 print("DISPLAY_MANAGER_AUTHENTICATION_WEAKENED=NO")
