@@ -6,7 +6,8 @@ BUILDER="${ROOT}/build/boringfs-m37-bundle"
 IMAGE="${OUT}/boringos-root.img"
 rm -rf "${OUT}"
 mkdir -p "${OUT}"
-make -C "${ROOT}" boringfsck user-boringfetch user-shell user-boring-terminal user-boringwm
+make -C "${ROOT}" TEST_MODE=m36-desktop boringfsck user-boringfetch user-shell \
+    user-boring-terminal user-boringwm
 cc -I"${ROOT}/libs/boringfs/include" -std=c11 -fno-builtin \
    -fno-tree-loop-distribute-patterns -Wall -Wextra -Wpedantic -Werror \
    -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes \
