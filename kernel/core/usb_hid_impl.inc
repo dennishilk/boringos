@@ -685,7 +685,7 @@ static bool m52_poll_hid_reports_limit(struct xhci_state *state,
         type = (uint8_t)((event.control >> M52_TRB_TYPE_SHIFT) &
                          M52_TRB_TYPE_MASK);
 #if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
-        if (type == M52_TRB_TYPE_TRANSFER_EVENT) {
+        if (type == XHCI_TRB_TYPE_TRANSFER_EVENT) {
             boring_m61_runtime_hid_post(
                 (uint8_t)M61_RUNTIME_HID_POST_B_TRANSFER_EVENT);
         }
