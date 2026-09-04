@@ -120,6 +120,9 @@ def main():
         "M61_HANDOFF_POST(M61_HANDOFF_POST_FINAL_PRESENT_OK);",
         "M61_HANDOFF_POST(M61_HANDOFF_POST_FINAL_PRESENT_ERROR);",
     )
+    post37_witness = function_body(
+        breadcrumbs,
+        "void boring_m61_post37_witness(")
     runtime_hid_post = function_body(
         breadcrumbs,
         "void boring_m61_runtime_hid_post(")
@@ -127,12 +130,22 @@ def main():
         breadcrumbs,
         "void boring_m61_runtime_xhci_observe(")
     if (console.count("x86_64_out8") != 0 or
-            breadcrumbs.count("x86_64_out8") != 4 or
+            breadcrumbs.count("x86_64_out8") != 5 or
             framebuffer_fault.count("x86_64_out8") != 1 or
+            post37_witness.count("x86_64_out8") != 1 or
             runtime_hid_post.count("x86_64_out8") != 1 or
             runtime_xhci_observe.count("x86_64_out8") != 1):
         raise RuntimeError(
             "M61 direct port-0x80 diagnostics escaped their bounded seams")
+    for required in (
+            "!m61_runtime_hid_armed",
+            "m61_runtime_hid_highest >=",
+            "(m61_post37_observed & bit) != 0U",
+            "m61_post37_observed = (uint16_t)(m61_post37_observed | bit);",
+    ):
+        if required not in post37_witness:
+            raise RuntimeError(
+                f"M61 POST37 control-flow diagnostic lost bounded guard: {required}")
     if (present.count("M61_HANDOFF_POST(") != 6 or
             any(present.count(marker) != 1 for marker in handoff_gap_posts) or
             breadcrumbs.count("M61_HANDOFF_POST(") != 7):
@@ -150,6 +163,7 @@ def main():
     print("POST_FALLBACK_INDEPENDENT=YES")
     print("POST90_FAULT_DIAGNOSTIC_BOUNDED=YES")
     print("HANDOFF_GAP_POST_DIAGNOSTIC_BOUNDED=YES")
+    print("POST37_CONTROL_FLOW_DIAGNOSTIC_BOUNDED=YES")
     print("EARLY_STATIC_HISTORY_BOUNDED=YES")
     print("FRAMEBUFFER_ACTIVATION_POINT=after successful normal framebuffer present")
 
