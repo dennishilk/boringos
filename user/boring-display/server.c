@@ -6,7 +6,7 @@
 #include <boring/wm.h>
 #include "managed.h"
 
-#define DISPLAY_PEERS 8U
+#define DISPLAY_PEERS 16U
 static struct boring_display_core core;
 static struct display_managed managed;
 static uint32_t peers[DISPLAY_PEERS];

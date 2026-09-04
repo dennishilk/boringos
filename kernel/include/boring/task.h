@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 #define KERNEL_TASK_STACK_SIZE 16384U
-#define KERNEL_TASK_MAX 8U
+#define KERNEL_TASK_POLICY_LIMIT 64U
 #define KERNEL_BOOTSTRAP_TASK_ID 0ULL
 
 enum kernel_task_state {

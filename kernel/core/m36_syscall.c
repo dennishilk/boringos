@@ -9,6 +9,7 @@
 #include <boring/event_syscall.h>
 #include <boring/fd.h>
 #include <boring/framebuffer_user.h>
+#include <boring/heap.h>
 #include <boring/input.h>
 #include <boring/ipc.h>
 #include <boring/m36_syscall.h>
@@ -43,9 +44,13 @@ struct m36_spawn_record {
     bool exited;
     bool detached;
     bool parent_waiting;
+    struct m36_spawn_record *registry_prev;
+    struct m36_spawn_record *registry_next;
 };
 
-static struct m36_spawn_record spawn_records[KERNEL_PROCESS_MAX];
+static struct m36_spawn_record *spawn_record_head;
+static struct m36_spawn_record *spawn_record_tail;
+static uint64_t spawn_record_count;
 
 void x86_64_enter_ring3_argv(uintptr_t user_rip,
                              uintptr_t user_rsp,
@@ -407,24 +412,63 @@ static void m36_record_clear(struct m36_spawn_record *record) {
     }
 }
 
-static struct m36_spawn_record *m36_record_free(void) {
-    size_t index;
+static bool m36_record_capacity_available(void) {
+    return spawn_record_count < (uint64_t)KERNEL_PROCESS_POLICY_LIMIT;
+}
 
-    for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
-        if (!spawn_records[index].active) {
-            return &spawn_records[index];
-        }
+static struct m36_spawn_record *m36_record_create(void) {
+    struct m36_spawn_record *record;
+
+    if (!m36_record_capacity_available()) {
+        return NULL;
     }
-    return NULL;
+    record = (struct m36_spawn_record *)kmalloc(sizeof(*record));
+    if (record == NULL) {
+        return NULL;
+    }
+    m36_record_clear(record);
+    record->registry_prev = spawn_record_tail;
+    if (spawn_record_tail != NULL) {
+        spawn_record_tail->registry_next = record;
+    } else {
+        spawn_record_head = record;
+    }
+    spawn_record_tail = record;
+    ++spawn_record_count;
+    return record;
+}
+
+static bool m36_record_release(struct m36_spawn_record *record) {
+    void *object;
+
+    if ((record == NULL) || !record->active) {
+        return false;
+    }
+    if (record->registry_prev != NULL) {
+        record->registry_prev->registry_next = record->registry_next;
+    } else {
+        spawn_record_head = record->registry_next;
+    }
+    if (record->registry_next != NULL) {
+        record->registry_next->registry_prev = record->registry_prev;
+    } else {
+        spawn_record_tail = record->registry_prev;
+    }
+    if (spawn_record_count != 0ULL) {
+        --spawn_record_count;
+    }
+    object = record;
+    m36_record_clear(record);
+    return kfree(object);
 }
 
 static struct m36_spawn_record *m36_record_child(struct process *child) {
-    size_t index;
+    struct m36_spawn_record *record;
 
-    for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
-        if (spawn_records[index].active &&
-            (spawn_records[index].child == child)) {
-            return &spawn_records[index];
+    for (record = spawn_record_head; record != NULL;
+         record = record->registry_next) {
+        if (record->active && (record->child == child)) {
+            return record;
         }
     }
     return NULL;
@@ -432,14 +476,14 @@ static struct m36_spawn_record *m36_record_child(struct process *child) {
 
 static struct m36_spawn_record *m36_record_pid(uint64_t pid,
                                                 uint64_t parent_pid) {
-    size_t index;
+    struct m36_spawn_record *record;
 
-    for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
-        if (spawn_records[index].active &&
-            (spawn_records[index].child != NULL) &&
-            (spawn_records[index].child->pid == pid) &&
-            (spawn_records[index].parent_pid == parent_pid)) {
-            return &spawn_records[index];
+    for (record = spawn_record_head; record != NULL;
+         record = record->registry_next) {
+        if (record->active && (record->child != NULL) &&
+            (record->child->pid == pid) &&
+            (record->parent_pid == parent_pid)) {
+            return record;
         }
     }
     return NULL;
@@ -452,10 +496,11 @@ static bool m36_record_waitable(const struct m36_spawn_record *record,
 }
 
 static bool m36_parent_has_waitable(uint64_t parent_pid) {
-    size_t index;
+    struct m36_spawn_record *record;
 
-    for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
-        if (m36_record_waitable(&spawn_records[index], parent_pid)) {
+    for (record = spawn_record_head; record != NULL;
+         record = record->registry_next) {
+        if (m36_record_waitable(record, parent_pid)) {
             return true;
         }
     }
@@ -464,11 +509,10 @@ static bool m36_parent_has_waitable(uint64_t parent_pid) {
 
 static struct m36_spawn_record *m36_record_any_finished(uint64_t parent_pid) {
     struct m36_spawn_record *best = NULL;
-    size_t index;
+    struct m36_spawn_record *record;
 
-    for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
-        struct m36_spawn_record *const record = &spawn_records[index];
-
+    for (record = spawn_record_head; record != NULL;
+         record = record->registry_next) {
         if (!m36_record_waitable(record, parent_pid) ||
             (record->child->state != PROCESS_FINISHED)) {
             continue;
@@ -481,11 +525,10 @@ static struct m36_spawn_record *m36_record_any_finished(uint64_t parent_pid) {
 }
 
 static void m36_set_parent_waiting(uint64_t parent_pid, bool waiting) {
-    size_t index;
+    struct m36_spawn_record *record;
 
-    for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
-        struct m36_spawn_record *const record = &spawn_records[index];
-
+    for (record = spawn_record_head; record != NULL;
+         record = record->registry_next) {
         if (m36_record_waitable(record, parent_pid)) {
             record->parent_waiting = waiting;
         }
@@ -509,15 +552,17 @@ static bool m36_reap_record(struct m36_spawn_record *record) {
         serial_write_u64(child_pid);
         serial_write_string(" task/process cleanup complete\n");
     }
-    m36_record_clear(record);
+    if (!m36_record_release(record)) {
+        return false;
+    }
     return true;
 }
 
 static void m36_reap_detached(void) {
-    size_t index;
+    struct m36_spawn_record *record = spawn_record_head;
 
-    for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
-        struct m36_spawn_record *const record = &spawn_records[index];
+    while (record != NULL) {
+        struct m36_spawn_record *const next = record->registry_next;
 
         if (record->active && record->detached && record->exited &&
             (record->child != NULL) &&
@@ -526,6 +571,7 @@ static void m36_reap_detached(void) {
                 serial_write_string("m36: detached reap deferred\n");
             }
         }
+        record = next;
     }
 }
 
@@ -630,7 +676,7 @@ static uint64_t m36_spawn(uint64_t user_path,
     struct boring_elf_image image;
     struct ring3_user_mapping_info entry_info;
     struct ring3_user_mapping_info stack_info;
-    struct m36_spawn_record *record;
+    struct m36_spawn_record *record = NULL;
     const char *name;
     uintptr_t entry_rsp = 0U;
     uintptr_t child_argv = 0U;
@@ -647,8 +693,7 @@ static uint64_t m36_spawn(uint64_t user_path,
     if (task_current_process_id() != parent->pid) {
         return m36_error(BORING_SYSCALL_ENOTSUP);
     }
-    record = m36_record_free();
-    if (record == NULL) {
+    if (!m36_record_capacity_available()) {
         return m36_error(BORING_SYSCALL_ENOSPC);
     }
     copy_error = m36_copy_string(user_path, path_length,
@@ -752,7 +797,11 @@ static uint64_t m36_spawn(uint64_t user_path,
     serial_write_u64((uint64_t)stdio_config.stderr_fd);
     serial_write_string("\n");
 
-    m36_record_clear(record);
+    record = m36_record_create();
+    if (record == NULL) {
+        return m36_spawn_rollback(child, &image, image_loaded,
+                                  BORING_SYSCALL_ENOSPC);
+    }
     record->child = child;
     record->image = image;
     record->entry_rsp = entry_rsp;
@@ -764,7 +813,7 @@ static uint64_t m36_spawn(uint64_t user_path,
     record->detached =
         (stdio_config.flags & BORING_SPAWN_FLAG_DETACHED) != 0U;
     if (!task_create_for_process(child, m36_spawn_entry, record, &task_id)) {
-        m36_record_clear(record);
+        (void)m36_record_release(record);
         return m36_spawn_rollback(child, &image, image_loaded,
                                   BORING_SYSCALL_ENOSPC);
     }

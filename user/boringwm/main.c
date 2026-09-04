@@ -5,7 +5,7 @@
 #include <boring/ipc.h>
 #include "core.h"
 
-#define WM_PEERS 8U
+#define WM_PEERS 16U
 static struct wm_core wm;
 static uint32_t display, peers[WM_PEERS], frame_number;
 static uint64_t display_pid;

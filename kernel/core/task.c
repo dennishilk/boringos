@@ -34,13 +34,17 @@ struct kernel_task {
     void (*entry)(void *);
     void *arg;
     uint64_t preempt_slices;
+    struct kernel_task *registry_prev;
+    struct kernel_task *registry_next;
     bool slot_used;
     bool interrupts_enabled;
 };
 
 static struct kernel_task bootstrap_task;
-static struct kernel_task tasks[KERNEL_TASK_MAX];
+static struct kernel_task *task_registry_head;
+static struct kernel_task *task_registry_tail;
 static struct kernel_task *current_task;
+static uint64_t live_task_count;
 static bool task_initialized;
 static bool preemption_enabled;
 static uint64_t next_task_id;
@@ -78,24 +82,56 @@ static void task_clear(struct kernel_task *task) {
     task->entry = NULL;
     task->arg = NULL;
     task->preempt_slices = 0ULL;
+    task->registry_prev = NULL;
+    task->registry_next = NULL;
     task->slot_used = false;
     task->interrupts_enabled = false;
 }
 
 static bool task_is_regular(const struct kernel_task *task) {
-    size_t index;
+    const struct kernel_task *cursor;
 
     if (task == NULL) {
         return false;
     }
 
-    for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
-        if (task == &tasks[index]) {
-            return tasks[index].slot_used;
+    for (cursor = task_registry_head; cursor != NULL;
+         cursor = cursor->registry_next) {
+        if (cursor == task) {
+            return cursor->slot_used;
         }
     }
-
     return false;
+}
+
+static void task_registry_append(struct kernel_task *task) {
+    task->registry_prev = task_registry_tail;
+    task->registry_next = NULL;
+    if (task_registry_tail != NULL) {
+        task_registry_tail->registry_next = task;
+    } else {
+        task_registry_head = task;
+    }
+    task_registry_tail = task;
+    ++live_task_count;
+}
+
+static void task_registry_remove(struct kernel_task *task) {
+    if (task->registry_prev != NULL) {
+        task->registry_prev->registry_next = task->registry_next;
+    } else {
+        task_registry_head = task->registry_next;
+    }
+    if (task->registry_next != NULL) {
+        task->registry_next->registry_prev = task->registry_prev;
+    } else {
+        task_registry_tail = task->registry_prev;
+    }
+    task->registry_prev = NULL;
+    task->registry_next = NULL;
+    if (live_task_count != 0ULL) {
+        --live_task_count;
+    }
 }
 
 static bool task_process_is_valid(const struct kernel_task *task) {
@@ -244,65 +280,63 @@ static void task_select_syscall_stack(const struct kernel_task *task) {
 
 static struct kernel_task *task_select_next_cooperative(
     const struct kernel_task *from) {
-    size_t start = 0U;
-    size_t offset;
+    struct kernel_task *candidate;
+    uint64_t visited = 0ULL;
 
-    if ((from != NULL) && (from != &bootstrap_task)) {
-        size_t index;
-
-        for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
-            if (from == &tasks[index]) {
-                start = (index + 1U) % (size_t)KERNEL_TASK_MAX;
-                break;
-            }
-        }
+    if (task_registry_head == NULL) {
+        return NULL;
+    }
+    if ((from != NULL) && (from != &bootstrap_task) &&
+        task_is_regular(from)) {
+        candidate = (from->registry_next != NULL) ?
+            from->registry_next : task_registry_head;
+    } else {
+        candidate = task_registry_head;
     }
 
-    for (offset = 0U; offset < (size_t)KERNEL_TASK_MAX; ++offset) {
-        const size_t index =
-            (start + offset) % (size_t)KERNEL_TASK_MAX;
-
-        if (tasks[index].slot_used && task_process_is_valid(&tasks[index]) &&
-            (tasks[index].context_kind == KERNEL_TASK_CONTEXT_COOPERATIVE) &&
-            (tasks[index].state == KERNEL_TASK_READY) &&
-            (&tasks[index] != from)) {
-            return &tasks[index];
+    while ((candidate != NULL) && (visited < live_task_count)) {
+        if ((candidate != from) && candidate->slot_used &&
+            task_process_is_valid(candidate) &&
+            (candidate->context_kind == KERNEL_TASK_CONTEXT_COOPERATIVE) &&
+            (candidate->state == KERNEL_TASK_READY)) {
+            return candidate;
         }
+        candidate = (candidate->registry_next != NULL) ?
+            candidate->registry_next : task_registry_head;
+        ++visited;
     }
-
     return NULL;
 }
 
 static struct kernel_task *task_select_next_preemptive(
     const struct kernel_task *from) {
-    size_t start = 0U;
-    size_t offset;
+    struct kernel_task *candidate;
+    uint64_t visited = 0ULL;
 
-    if ((from != NULL) && (from != &bootstrap_task)) {
-        size_t index;
-
-        for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
-            if (from == &tasks[index]) {
-                start = (index + 1U) % (size_t)KERNEL_TASK_MAX;
-                break;
-            }
-        }
+    if (task_registry_head == NULL) {
+        return NULL;
+    }
+    if ((from != NULL) && (from != &bootstrap_task) &&
+        task_is_regular(from)) {
+        candidate = (from->registry_next != NULL) ?
+            from->registry_next : task_registry_head;
+    } else {
+        candidate = task_registry_head;
     }
 
-    for (offset = 0U; offset < (size_t)KERNEL_TASK_MAX; ++offset) {
-        const size_t index =
-            (start + offset) % (size_t)KERNEL_TASK_MAX;
-
-        if (tasks[index].slot_used && task_process_is_valid(&tasks[index]) &&
-            (tasks[index].context_kind == KERNEL_TASK_CONTEXT_PREEMPTIVE) &&
-            (tasks[index].state == KERNEL_TASK_READY) &&
-            (&tasks[index] != from) &&
-            task_preempt_frame_is_valid_for(&tasks[index],
-                                            tasks[index].preempt_frame)) {
-            return &tasks[index];
+    while ((candidate != NULL) && (visited < live_task_count)) {
+        if ((candidate != from) && candidate->slot_used &&
+            task_process_is_valid(candidate) &&
+            (candidate->context_kind == KERNEL_TASK_CONTEXT_PREEMPTIVE) &&
+            (candidate->state == KERNEL_TASK_READY) &&
+            task_preempt_frame_is_valid_for(candidate,
+                                            candidate->preempt_frame)) {
+            return candidate;
         }
+        candidate = (candidate->registry_next != NULL) ?
+            candidate->registry_next : task_registry_head;
+        ++visited;
     }
-
     return NULL;
 }
 
@@ -371,10 +405,10 @@ static bool task_create_internal(struct process *owner,
                                  uint64_t *task_id,
                                  enum kernel_task_context_kind context_kind) {
     struct kernel_task *task = NULL;
+    struct kernel_task *other;
     void *stack = NULL;
     uintptr_t stack_base;
     uintptr_t stack_top;
-    size_t index;
     bool interrupts_were_enabled;
     bool prepared;
 
@@ -384,6 +418,7 @@ static bool task_create_internal(struct process *owner,
     if ((!task_initialized) || preemption_enabled || (owner == NULL) ||
         !process_is_alive(owner) || (entry == NULL) || (task_id == NULL) ||
         (next_task_id == UINT64_MAX) ||
+        (live_task_count >= (uint64_t)KERNEL_TASK_POLICY_LIMIT) ||
         ((context_kind != KERNEL_TASK_CONTEXT_COOPERATIVE) &&
          (context_kind != KERNEL_TASK_CONTEXT_PREEMPTIVE))) {
         if (interrupts_were_enabled) {
@@ -392,21 +427,18 @@ static bool task_create_internal(struct process *owner,
         return false;
     }
 
-    for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
-        if (!tasks[index].slot_used) {
-            task = &tasks[index];
-            break;
-        }
-    }
+    task = (struct kernel_task *)kmalloc(sizeof(*task));
     if (task == NULL) {
         if (interrupts_were_enabled) {
             x86_64_interrupts_enable();
         }
         return false;
     }
+    task_clear(task);
 
     stack = kmalloc((size_t)KERNEL_TASK_STACK_SIZE);
     if (stack == NULL) {
+        (void)kfree(task);
         if (interrupts_were_enabled) {
             x86_64_interrupts_enable();
         }
@@ -418,6 +450,7 @@ static bool task_create_internal(struct process *owner,
         ((size_t)KERNEL_TASK_STACK_SIZE >
          (size_t)(UINTPTR_MAX - stack_base))) {
         (void)kfree(stack);
+        (void)kfree(task);
         if (interrupts_were_enabled) {
             x86_64_interrupts_enable();
         }
@@ -425,13 +458,15 @@ static bool task_create_internal(struct process *owner,
     }
     stack_top = stack_base + (uintptr_t)KERNEL_TASK_STACK_SIZE;
 
-    for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
-        if (tasks[index].slot_used &&
+    for (other = task_registry_head; other != NULL;
+         other = other->registry_next) {
+        if (other->slot_used &&
             task_stack_ranges_overlap(stack_base,
                                       (size_t)KERNEL_TASK_STACK_SIZE,
-                                      (uintptr_t)tasks[index].stack_base,
-                                      tasks[index].stack_size)) {
+                                      (uintptr_t)other->stack_base,
+                                      other->stack_size)) {
             (void)kfree(stack);
+            (void)kfree(task);
             if (interrupts_were_enabled) {
                 x86_64_interrupts_enable();
             }
@@ -441,7 +476,6 @@ static bool task_create_internal(struct process *owner,
 
     *(volatile uint64_t *)stack = TASK_STACK_SENTINEL;
 
-    task_clear(task);
     task->id = next_task_id;
     task->process = owner;
     task->state = KERNEL_TASK_READY;
@@ -461,12 +495,14 @@ static bool task_create_internal(struct process *owner,
     if ((!prepared) || !task_stack_is_valid(task)) {
         task_clear(task);
         (void)kfree(stack);
+        (void)kfree(task);
         if (interrupts_were_enabled) {
             x86_64_interrupts_enable();
         }
         return false;
     }
 
+    task_registry_append(task);
     ++next_task_id;
     *task_id = task->id;
     ++created_task_count;
@@ -479,7 +515,6 @@ static bool task_create_internal(struct process *owner,
 
 bool task_init(void) {
     struct process *bootstrap_process;
-    size_t index;
     const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
     x86_64_interrupts_disable();
@@ -500,9 +535,9 @@ bool task_init(void) {
     bootstrap_task.slot_used = true;
     bootstrap_task.interrupts_enabled = interrupts_were_enabled;
 
-    for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
-        task_clear(&tasks[index]);
-    }
+    task_registry_head = NULL;
+    task_registry_tail = NULL;
+    live_task_count = 0ULL;
 
     current_task = &bootstrap_task;
     next_task_id = 1ULL;
@@ -631,22 +666,17 @@ bool task_block_current(void) {
 }
 
 bool task_wake_pid(uint64_t pid) {
-    size_t index;
+    struct process *process;
 
     if (!task_initialized || (pid == 0ULL)) {
         return false;
     }
-    for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
-        if (tasks[index].slot_used && (tasks[index].process != NULL) &&
-            (tasks[index].process->pid == pid)) {
-            return task_wake_process(tasks[index].process);
-        }
-    }
-    return false;
+    process = process_find_pid(pid);
+    return (process != NULL) && task_wake_process(process);
 }
 
 bool task_wake_process(struct process *process) {
-    size_t index;
+    struct kernel_task *task;
     bool woke = false;
     const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
@@ -657,11 +687,12 @@ bool task_wake_process(struct process *process) {
         }
         return false;
     }
-    for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
-        if (tasks[index].slot_used && (tasks[index].process == process) &&
-            (tasks[index].context_kind == KERNEL_TASK_CONTEXT_COOPERATIVE) &&
-            (tasks[index].state == KERNEL_TASK_BLOCKED)) {
-            tasks[index].state = KERNEL_TASK_READY;
+    for (task = task_registry_head; task != NULL;
+         task = task->registry_next) {
+        if (task->slot_used && (task->process == process) &&
+            (task->context_kind == KERNEL_TASK_CONTEXT_COOPERATIVE) &&
+            (task->state == KERNEL_TASK_BLOCKED)) {
+            task->state = KERNEL_TASK_READY;
             woke = true;
         }
     }
@@ -754,8 +785,6 @@ bool task_current_stack_contains(const void *address) {
 }
 
 bool task_get_stats(struct task_stats *stats) {
-    uint64_t active = 0ULL;
-    size_t index;
     bool interrupts_were_enabled;
 
     if ((!task_initialized) || (stats == NULL)) {
@@ -773,12 +802,6 @@ bool task_get_stats(struct task_stats *stats) {
         return false;
     }
 
-    for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
-        if (tasks[index].slot_used) {
-            ++active;
-        }
-    }
-
     stats->created_tasks = created_task_count;
     stats->finished_tasks = finished_task_count;
     stats->context_switches = cooperative_context_switch_count;
@@ -787,7 +810,7 @@ bool task_get_stats(struct task_stats *stats) {
     stats->preemptions = preemption_count;
     stats->finished_resume_count = finished_resume_count;
     stats->scheduler_fault_count = scheduler_fault_count;
-    stats->active_tasks = active;
+    stats->active_tasks = live_task_count;
     stats->current_task_id = current_task->id;
     stats->current_process_pid = current_task->process->pid;
     stats->stack_size = (size_t)KERNEL_TASK_STACK_SIZE;
@@ -800,7 +823,7 @@ bool task_get_stats(struct task_stats *stats) {
 }
 
 bool task_finished_stacks_valid(void) {
-    size_t index;
+    struct kernel_task *task;
     bool valid = true;
     const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
@@ -812,10 +835,11 @@ bool task_finished_stacks_valid(void) {
         (process_current() != bootstrap_task.process)) {
         valid = false;
     } else {
-        for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
-            if (tasks[index].slot_used &&
-                ((tasks[index].state != KERNEL_TASK_FINISHED) ||
-                 !task_stack_storage_is_valid(&tasks[index], NULL, NULL))) {
+        for (task = task_registry_head; task != NULL;
+             task = task->registry_next) {
+            if (task->slot_used &&
+                ((task->state != KERNEL_TASK_FINISHED) ||
+                 !task_stack_storage_is_valid(task, NULL, NULL))) {
                 valid = false;
                 break;
             }
@@ -829,7 +853,7 @@ bool task_finished_stacks_valid(void) {
 }
 
 bool task_reap_finished_process(struct process *process) {
-    size_t index;
+    struct kernel_task *task;
     bool found = false;
     const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
@@ -843,12 +867,13 @@ bool task_reap_finished_process(struct process *process) {
         return false;
     }
 
-    for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
-        if (tasks[index].slot_used && (tasks[index].process == process)) {
+    for (task = task_registry_head; task != NULL;
+         task = task->registry_next) {
+        if (task->slot_used && (task->process == process)) {
             found = true;
-            if ((&tasks[index] == current_task) ||
-                (tasks[index].state != KERNEL_TASK_FINISHED) ||
-                !task_stack_storage_is_valid(&tasks[index], NULL, NULL)) {
+            if ((task == current_task) ||
+                (task->state != KERNEL_TASK_FINISHED) ||
+                !task_stack_storage_is_valid(task, NULL, NULL)) {
                 if (interrupts_were_enabled) {
                     x86_64_interrupts_enable();
                 }
@@ -863,9 +888,13 @@ bool task_reap_finished_process(struct process *process) {
         return false;
     }
 
-    for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
-        if (tasks[index].slot_used && (tasks[index].process == process)) {
-            void *const stack = tasks[index].stack_base;
+    task = task_registry_head;
+    while (task != NULL) {
+        struct kernel_task *const next = task->registry_next;
+
+        if (task->slot_used && (task->process == process)) {
+            void *const stack = task->stack_base;
+            void *const object = task;
 
             if (!kfree(stack)) {
                 if (interrupts_were_enabled) {
@@ -873,8 +902,16 @@ bool task_reap_finished_process(struct process *process) {
                 }
                 return false;
             }
-            task_clear(&tasks[index]);
+            task_registry_remove(task);
+            task_clear(task);
+            if (!kfree(object)) {
+                if (interrupts_were_enabled) {
+                    x86_64_interrupts_enable();
+                }
+                return false;
+            }
         }
+        task = next;
     }
 
     if (interrupts_were_enabled) {
@@ -885,7 +922,7 @@ bool task_reap_finished_process(struct process *process) {
 
 bool task_cleanup_finished(uint64_t *freed_stacks) {
     uint64_t freed = 0ULL;
-    size_t index;
+    struct kernel_task *task;
     const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
     x86_64_interrupts_disable();
@@ -900,10 +937,11 @@ bool task_cleanup_finished(uint64_t *freed_stacks) {
         return false;
     }
 
-    for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
-        if (tasks[index].slot_used &&
-            ((tasks[index].state != KERNEL_TASK_FINISHED) ||
-             !task_stack_storage_is_valid(&tasks[index], NULL, NULL))) {
+    for (task = task_registry_head; task != NULL;
+         task = task->registry_next) {
+        if (task->slot_used &&
+            ((task->state != KERNEL_TASK_FINISHED) ||
+             !task_stack_storage_is_valid(task, NULL, NULL))) {
             if (interrupts_were_enabled) {
                 x86_64_interrupts_enable();
             }
@@ -911,19 +949,28 @@ bool task_cleanup_finished(uint64_t *freed_stacks) {
         }
     }
 
-    for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
-        if (tasks[index].slot_used) {
-            void *const stack = tasks[index].stack_base;
+    task = task_registry_head;
+    while (task != NULL) {
+        struct kernel_task *const next = task->registry_next;
+        void *const stack = task->stack_base;
+        void *const object = task;
 
-            if (!kfree(stack)) {
-                if (interrupts_were_enabled) {
-                    x86_64_interrupts_enable();
-                }
-                return false;
+        if (!kfree(stack)) {
+            if (interrupts_were_enabled) {
+                x86_64_interrupts_enable();
             }
-            task_clear(&tasks[index]);
-            ++freed;
+            return false;
         }
+        task_registry_remove(task);
+        task_clear(task);
+        if (!kfree(object)) {
+            if (interrupts_were_enabled) {
+                x86_64_interrupts_enable();
+            }
+            return false;
+        }
+        ++freed;
+        task = next;
     }
 
     *freed_stacks = freed;
@@ -934,7 +981,7 @@ bool task_cleanup_finished(uint64_t *freed_stacks) {
 }
 
 bool task_preemption_start(void) {
-    size_t index;
+    struct kernel_task *task;
     uint64_t ready_count = 0ULL;
     const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
@@ -950,14 +997,13 @@ bool task_preemption_start(void) {
         return false;
     }
 
-    for (index = 0U; index < (size_t)KERNEL_TASK_MAX; ++index) {
-        if (tasks[index].slot_used) {
-            if ((tasks[index].state != KERNEL_TASK_READY) ||
-                !task_process_is_valid(&tasks[index]) ||
-                (tasks[index].context_kind !=
-                 KERNEL_TASK_CONTEXT_PREEMPTIVE) ||
-                !task_preempt_frame_is_valid_for(
-                    &tasks[index], tasks[index].preempt_frame)) {
+    for (task = task_registry_head; task != NULL;
+         task = task->registry_next) {
+        if (task->slot_used) {
+            if ((task->state != KERNEL_TASK_READY) ||
+                !task_process_is_valid(task) ||
+                (task->context_kind != KERNEL_TASK_CONTEXT_PREEMPTIVE) ||
+                !task_preempt_frame_is_valid_for(task, task->preempt_frame)) {
                 if (interrupts_were_enabled) {
                     x86_64_interrupts_enable();
                 }

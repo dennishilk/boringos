@@ -4,6 +4,7 @@
 
 #include <boring/ipc.h>
 #include <boring/event_abi.h>
+#include <boring/heap.h>
 #include <boring/process.h>
 #include <boring/syscall_abi.h>
 #include <boring/task.h>
@@ -13,7 +14,6 @@
 #define IPC_HANDLE_GENERATION_MAX ((1U << (32U - IPC_HANDLE_SLOT_BITS)) - 1U)
 #define IPC_SIDE_CLIENT 0U
 #define IPC_SIDE_SERVER 1U
-#define IPC_PROCESS_STATE_MAX KERNEL_PROCESS_MAX
 #define IPC_INDEX_INVALID UINT16_MAX
 
 struct ipc_handle_entry {
@@ -28,6 +28,8 @@ struct ipc_process_state {
     struct process *owner;
     uint64_t owner_pid;
     struct ipc_handle_entry handles[BORING_IPC_HANDLES_PER_PROCESS];
+    struct ipc_process_state *registry_prev;
+    struct ipc_process_state *registry_next;
 };
 
 struct ipc_message {
@@ -66,7 +68,8 @@ struct ipc_service {
     bool active;
 };
 
-static struct ipc_process_state process_states[IPC_PROCESS_STATE_MAX];
+static struct ipc_process_state *process_state_head;
+static struct ipc_process_state *process_state_tail;
 static struct ipc_connection connections[BORING_IPC_GLOBAL_CONNECTION_MAX];
 static struct ipc_service services[BORING_IPC_GLOBAL_SERVICE_MAX];
 static bool ipc_initialized;
@@ -166,16 +169,56 @@ static bool process_identity_valid(const struct process *process) {
            (process->pid != KERNEL_BOOTSTRAP_PID);
 }
 
+static void process_state_initialize(struct ipc_process_state *state) {
+    size_t slot;
+
+    state->owner = NULL;
+    state->owner_pid = 0ULL;
+    state->registry_prev = NULL;
+    state->registry_next = NULL;
+    for (slot = 0U; slot < (size_t)BORING_IPC_HANDLES_PER_PROCESS; ++slot) {
+        state->handles[slot].generation = 1U;
+        state->handles[slot].object_index = IPC_INDEX_INVALID;
+        state->handles[slot].type = (uint8_t)BORING_IPC_HANDLE_NONE;
+        state->handles[slot].side = 0U;
+        state->handles[slot].active = false;
+    }
+}
+
+static void process_state_append(struct ipc_process_state *state) {
+    state->registry_prev = process_state_tail;
+    if (process_state_tail != NULL) {
+        process_state_tail->registry_next = state;
+    } else {
+        process_state_head = state;
+    }
+    process_state_tail = state;
+}
+
+static void process_state_remove(struct ipc_process_state *state) {
+    if (state->registry_prev != NULL) {
+        state->registry_prev->registry_next = state->registry_next;
+    } else {
+        process_state_head = state->registry_next;
+    }
+    if (state->registry_next != NULL) {
+        state->registry_next->registry_prev = state->registry_prev;
+    } else {
+        process_state_tail = state->registry_prev;
+    }
+    state->registry_prev = NULL;
+    state->registry_next = NULL;
+}
+
 static struct ipc_process_state *state_for_process(struct process *process,
                                                    bool create) {
-    struct ipc_process_state *free_state = NULL;
-    size_t index;
+    struct ipc_process_state *state;
 
     if (!process_identity_valid(process)) {
         return NULL;
     }
-    for (index = 0U; index < (size_t)IPC_PROCESS_STATE_MAX; ++index) {
-        struct ipc_process_state *state = &process_states[index];
+    for (state = process_state_head; state != NULL;
+         state = state->registry_next) {
         if (state->owner == process) {
             if (state->owner_pid != process->pid) {
                 size_t slot;
@@ -189,16 +232,19 @@ static struct ipc_process_state *state_for_process(struct process *process,
             }
             return state;
         }
-        if ((free_state == NULL) && (state->owner == NULL)) {
-            free_state = state;
-        }
     }
-    if (!create || (free_state == NULL)) {
+    if (!create) {
         return NULL;
     }
-    free_state->owner = process;
-    free_state->owner_pid = process->pid;
-    return free_state;
+    state = (struct ipc_process_state *)kmalloc(sizeof(*state));
+    if (state == NULL) {
+        return NULL;
+    }
+    process_state_initialize(state);
+    state->owner = process;
+    state->owner_pid = process->pid;
+    process_state_append(state);
+    return state;
 }
 
 static struct ipc_handle_entry *find_free_handle(
@@ -483,24 +529,12 @@ static void unregister_service(struct ipc_service *service) {
 
 bool boring_ipc_system_init(void) {
     size_t index;
-    size_t slot;
 
     if (ipc_initialized) {
         return true;
     }
-    for (index = 0U; index < (size_t)IPC_PROCESS_STATE_MAX; ++index) {
-        process_states[index].owner = NULL;
-        process_states[index].owner_pid = 0ULL;
-        for (slot = 0U; slot < (size_t)BORING_IPC_HANDLES_PER_PROCESS;
-             ++slot) {
-            process_states[index].handles[slot].generation = 1U;
-            process_states[index].handles[slot].object_index = IPC_INDEX_INVALID;
-            process_states[index].handles[slot].type =
-                (uint8_t)BORING_IPC_HANDLE_NONE;
-            process_states[index].handles[slot].side = 0U;
-            process_states[index].handles[slot].active = false;
-        }
-    }
+    process_state_head = NULL;
+    process_state_tail = NULL;
     for (index = 0U; index < (size_t)BORING_IPC_GLOBAL_CONNECTION_MAX;
          ++index) {
         clear_connection(&connections[index]);
@@ -955,6 +989,10 @@ void boring_ipc_process_cleanup(struct process *process) {
         }
         invalidate_handle_entry(entry);
     }
+    process_state_remove(state);
+    state->owner = NULL;
+    state->owner_pid = 0ULL;
+    (void)kfree(state);
 }
 
 bool boring_ipc_get_stats(struct boring_ipc_stats *stats) {
@@ -1002,23 +1040,29 @@ bool boring_ipc_get_stats(struct boring_ipc_stats *stats) {
 
 bool boring_ipc_host_reset(void) {
     struct boring_ipc_stats stats;
-    size_t index;
+    struct ipc_process_state *state;
 
     if (!boring_ipc_get_stats(&stats) || (stats.live_services != 0U) ||
         (stats.live_connections != 0U) || (stats.queued_messages != 0U) ||
         (stats.retained_buffer_attachments != 0U)) {
         return false;
     }
-    for (index = 0U; index < (size_t)IPC_PROCESS_STATE_MAX; ++index) {
+    state = process_state_head;
+    while (state != NULL) {
+        struct ipc_process_state *const next = state->registry_next;
         size_t slot;
-        process_states[index].owner = NULL;
-        process_states[index].owner_pid = 0ULL;
+
         for (slot = 0U; slot < (size_t)BORING_IPC_HANDLES_PER_PROCESS;
              ++slot) {
-            if (process_states[index].handles[slot].active) {
+            if (state->handles[slot].active) {
                 return false;
             }
         }
+        process_state_remove(state);
+        if (!kfree(state)) {
+            return false;
+        }
+        state = next;
     }
     return true;
 }

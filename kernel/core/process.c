@@ -3,12 +3,15 @@
 #include <stdint.h>
 
 #include <boring/cpu.h>
+#include <boring/heap.h>
 #include <boring/process.h>
 #include <boring/pty.h>
 
 static struct process bootstrap_process;
-static struct process processes[KERNEL_PROCESS_MAX];
+static struct process *process_registry_head;
+static struct process *process_registry_tail;
 static struct process *current_process;
+static uint64_t live_process_count;
 static uint64_t next_pid;
 static uint64_t created_process_count;
 static uint64_t finished_process_count;
@@ -43,6 +46,19 @@ static void process_zero_text(char *text, size_t capacity) {
     }
 }
 
+static void process_zero_object(struct process *process) {
+    uint8_t *bytes;
+    size_t index;
+
+    if (process == NULL) {
+        return;
+    }
+    bytes = (uint8_t *)process;
+    for (index = 0U; index < sizeof(*process); ++index) {
+        bytes[index] = 0U;
+    }
+}
+
 static void process_clear(struct process *process) {
     size_t index;
 
@@ -74,23 +90,56 @@ static void process_clear(struct process *process) {
     process_zero_text(process->name, sizeof(process->name));
     process_zero_text(process->username, sizeof(process->username));
     process_zero_text(process->cwd_text, sizeof(process->cwd_text));
+    process->registry_prev = NULL;
+    process->registry_next = NULL;
     process->cwd_valid = false;
     process->cwd_text_valid = false;
     process->slot_used = false;
 }
 
 static bool process_is_regular(const struct process *process) {
-    size_t index;
+    const struct process *cursor;
 
     if (process == NULL) {
         return false;
     }
-    for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
-        if (process == &processes[index]) {
-            return processes[index].slot_used;
+    for (cursor = process_registry_head; cursor != NULL;
+         cursor = cursor->registry_next) {
+        if (cursor == process) {
+            return cursor->slot_used;
         }
     }
     return false;
+}
+
+static void process_registry_append(struct process *process) {
+    process->registry_prev = process_registry_tail;
+    process->registry_next = NULL;
+    if (process_registry_tail != NULL) {
+        process_registry_tail->registry_next = process;
+    } else {
+        process_registry_head = process;
+    }
+    process_registry_tail = process;
+    ++live_process_count;
+}
+
+static void process_registry_remove(struct process *process) {
+    if (process->registry_prev != NULL) {
+        process->registry_prev->registry_next = process->registry_next;
+    } else {
+        process_registry_head = process->registry_next;
+    }
+    if (process->registry_next != NULL) {
+        process->registry_next->registry_prev = process->registry_prev;
+    } else {
+        process_registry_tail = process->registry_prev;
+    }
+    process->registry_prev = NULL;
+    process->registry_next = NULL;
+    if (live_process_count != 0ULL) {
+        --live_process_count;
+    }
 }
 
 static bool process_is_known_alive(const struct process *process) {
@@ -106,7 +155,6 @@ static void process_restore_interrupts(bool interrupts_were_enabled) {
 }
 
 bool process_init(void) {
-    size_t index;
     const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
     x86_64_interrupts_disable();
@@ -116,9 +164,9 @@ bool process_init(void) {
     }
 
     process_clear(&bootstrap_process);
-    for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
-        process_clear(&processes[index]);
-    }
+    process_registry_head = NULL;
+    process_registry_tail = NULL;
+    live_process_count = 0ULL;
     if (!pty_init() || !user_memory_system_init() ||
         !address_space_system_init(&bootstrap_process.address_space)) {
         process_clear(&bootstrap_process);
@@ -155,18 +203,19 @@ struct process *process_current(void) {
 }
 
 struct process *process_find_pid(uint64_t pid) {
-    size_t index;
     const bool interrupts_were_enabled = x86_64_interrupts_enabled();
     struct process *found = NULL;
+    struct process *cursor;
 
     x86_64_interrupts_disable();
     if (process_initialized) {
         if ((pid == KERNEL_BOOTSTRAP_PID) && bootstrap_process.slot_used) {
             found = &bootstrap_process;
         } else {
-            for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
-                if (processes[index].slot_used && (processes[index].pid == pid)) {
-                    found = &processes[index];
+            for (cursor = process_registry_head; cursor != NULL;
+                 cursor = cursor->registry_next) {
+                if (cursor->slot_used && (cursor->pid == pid)) {
+                    found = cursor;
                     break;
                 }
             }
@@ -177,36 +226,31 @@ struct process *process_find_pid(uint64_t pid) {
 }
 
 bool process_create(struct process **process_out) {
-    struct process *process = NULL;
-    size_t index;
+    struct process *process;
     const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
     x86_64_interrupts_disable();
     if ((!process_initialized) || (process_out == NULL) ||
-        (next_pid == UINT64_MAX)) {
-        process_restore_interrupts(interrupts_were_enabled);
-        return false;
-    }
-    for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
-        if (!processes[index].slot_used) {
-            process = &processes[index];
-            break;
-        }
-    }
-    if (process == NULL) {
+        (next_pid == UINT64_MAX) ||
+        (live_process_count >= (uint64_t)KERNEL_PROCESS_POLICY_LIMIT)) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
 
-    process_clear(process);
+    process = (struct process *)kmalloc(sizeof(*process));
+    if (process == NULL) {
+        process_restore_interrupts(interrupts_were_enabled);
+        return false;
+    }
+    process_zero_object(process);
     if (!address_space_create(&process->address_space)) {
-        process_clear(process);
+        (void)kfree(process);
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
     if (!kernel_fd_table_init(&process->fd_table)) {
         (void)address_space_destroy(&process->address_space);
-        process_clear(process);
+        (void)kfree(process);
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
@@ -234,6 +278,7 @@ bool process_create(struct process **process_out) {
                                     sizeof(process->username), "boring");
         }
     }
+    process_registry_append(process);
     ++next_pid;
     ++created_process_count;
     *process_out = process;
@@ -242,6 +287,7 @@ bool process_create(struct process **process_out) {
 }
 
 bool process_discard_unstarted(struct process *process) {
+    void *object;
     const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
     x86_64_interrupts_disable();
@@ -257,7 +303,13 @@ bool process_discard_unstarted(struct process *process) {
     }
     next_pid = process->pid;
     --created_process_count;
+    process_registry_remove(process);
+    object = process;
     process_clear(process);
+    if (!kfree(object)) {
+        process_restore_interrupts(interrupts_were_enabled);
+        return false;
+    }
     process_restore_interrupts(interrupts_were_enabled);
     return true;
 }
@@ -296,6 +348,7 @@ bool process_mark_finished(struct process *process) {
 }
 
 bool process_destroy(struct process *process) {
+    void *object;
     const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
     x86_64_interrupts_disable();
@@ -306,7 +359,13 @@ bool process_destroy(struct process *process) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
+    process_registry_remove(process);
+    object = process;
     process_clear(process);
+    if (!kfree(object)) {
+        process_restore_interrupts(interrupts_were_enabled);
+        return false;
+    }
     process_restore_interrupts(interrupts_were_enabled);
     return true;
 }
@@ -467,7 +526,7 @@ bool process_get_cwd_text(const struct process *process,
 
 bool process_get_snapshot(uint64_t index, struct process_snapshot *snapshot) {
     uint64_t logical = 0ULL;
-    size_t slot;
+    struct process *process;
     const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
     x86_64_interrupts_disable();
@@ -475,8 +534,8 @@ bool process_get_snapshot(uint64_t index, struct process_snapshot *snapshot) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
-    for (slot = 0U; slot < (size_t)KERNEL_PROCESS_MAX; ++slot) {
-        struct process *const process = &processes[slot];
+    for (process = process_registry_head; process != NULL;
+         process = process->registry_next) {
         if (!process->slot_used) {
             continue;
         }
@@ -502,8 +561,6 @@ bool process_get_snapshot(uint64_t index, struct process_snapshot *snapshot) {
 }
 
 bool process_get_stats(struct process_stats *stats) {
-    uint64_t active = 0ULL;
-    size_t index;
     const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
     x86_64_interrupts_disable();
@@ -512,14 +569,9 @@ bool process_get_stats(struct process_stats *stats) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;
     }
-    for (index = 0U; index < (size_t)KERNEL_PROCESS_MAX; ++index) {
-        if (processes[index].slot_used) {
-            ++active;
-        }
-    }
     stats->created_processes = created_process_count;
     stats->finished_processes = finished_process_count;
-    stats->active_processes = active;
+    stats->active_processes = live_process_count;
     stats->current_pid = current_process->pid;
     process_restore_interrupts(interrupts_were_enabled);
     return true;

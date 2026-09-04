@@ -1,0 +1,72 @@
+name: M62 dynamic process task capacity
+
+on:
+  push:
+    branches: [agent/m62-dynamic-process-task-capacity]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  m62-dynamic-capacity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - name: Install QEMU and UEFI image dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 ovmf gdisk dosfstools mtools xz-utils
+      - name: Verify dynamic storage architecture
+        run: python3 tests/m62-dynamic-capacity-verifier.py
+      - name: Stress 24 concurrent processes and tasks for three churn cycles
+        run: sh tests/m62-capacity-qemu.sh
+      - name: Focused inherited process and desktop regressions
+        run: |
+          sh tests/m36-spawn-qemu.sh
+          sh tests/m37-build.sh
+          python3 tests/m37-desktop-qemu.py
+          sh tests/m38-build.sh
+          python3 tests/m38-desktop-qemu.py
+          sh tests/m39-build.sh
+          python3 tests/m39-edit-qemu.py
+          sh tests/m40-build.sh
+          python3 tests/m40-files-qemu.py
+          sh tests/m54-build.sh
+          python3 tests/m54-usb-only-desktop-qemu.py
+      - name: Rebuild exact M61 physical runtime path
+        run: |
+          sh tests/m61-build.sh
+          python3 tests/m61-empty-desktop-verifier.py
+          sh tests/m61-physical-handoff-bisector.sh
+          env -u GITHUB_SHA sh tests/m61-build-usb-image.sh
+          test "$(stat -c %s build/boringos-m61-usb.img)" = "100663296"
+          sha256sum -c build/boringos-m61-usb.img.sha256
+      - name: Stress real persistent desktop above eight processes
+        run: python3 tests/m62-desktop-capacity-qemu.py
+      - name: Prepare one M62 physical USB artifact
+        id: physical
+        run: |
+          cp build/boringos-m61-usb.img build/boringos-m62-usb.img
+          sha256sum build/boringos-m62-usb.img > build/boringos-m62-usb.img.sha256
+          test "$(stat -c %s build/boringos-m62-usb.img)" = "100663296"
+          xz -T0 -6 -c build/boringos-m62-usb.img > build/boringos-m62-usb.img.xz
+          raw_sha=$(awk '{print $1}' build/boringos-m62-usb.img.sha256)
+          echo "raw_sha=$raw_sha" >> "$GITHUB_OUTPUT"
+          echo "raw_bytes=100663296" >> "$GITHUB_OUTPUT"
+      - name: Publish exactly one M62 physical USB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: m62-dynamic-capacity-${{ github.sha }}-${{ steps.physical.outputs.raw_sha }}
+          path: |
+            build/boringos-m62-usb.img.xz
+            build/boringos-m62-usb.img.sha256
+            build/m62-capacity-proof.txt
+            build/m62-dynamic-capacity-verifier.txt
+            build/m62-desktop-capacity/proof.txt
+          if-no-files-found: error
+          retention-days: 14

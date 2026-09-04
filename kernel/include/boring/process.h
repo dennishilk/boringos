@@ -11,7 +11,7 @@
 #include <boring/vfs.h>
 
 #define KERNEL_BOOTSTRAP_PID 0ULL
-#define KERNEL_PROCESS_MAX 8U
+#define KERNEL_PROCESS_POLICY_LIMIT 64U
 #define KERNEL_PROCESS_NAME_MAX 31U
 #define KERNEL_PROCESS_USER_MAX 31U
 
@@ -37,6 +37,8 @@ struct process {
     char name[KERNEL_PROCESS_NAME_MAX + 1U];
     char username[KERNEL_PROCESS_USER_MAX + 1U];
     char cwd_text[VFS_PATH_MAX + 1U];
+    struct process *registry_prev;
+    struct process *registry_next;
     bool cwd_valid;
     bool cwd_text_valid;
     bool slot_used;
