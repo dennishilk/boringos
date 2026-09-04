@@ -125,16 +125,8 @@ static bool m54_is_input_owner(const struct process *process) {
            input.initialized && input.owned && (input.owner_pid == process->pid);
 }
 
-static uint64_t m61_semantic_consumed(const struct xhci_state *active) {
-    uint64_t total;
-    uint8_t index;
-    if (active == NULL) { return 0ULL; }
-    total = (uint64_t)active->command_completions +
-            (uint64_t)active->port_events_consumed;
-    for (index = 0U; index < active->addressed_count; ++index) {
-        total += (uint64_t)active->addressed[index].transfer_events;
-    }
-    return total;
+static uint64_t m61_event_dequeue_count(const struct xhci_state *active) {
+    return (active == NULL) ? 0ULL : active->event_dequeue_count;
 }
 
 static void m61_trace_keyboard_state(const char *prefix) {
@@ -149,7 +141,7 @@ static void m61_trace_keyboard_state(const char *prefix) {
     serial_write_u64((uint64_t)input.queued_events);
     serial_write_string("/"); serial_write_u64(input.dropped_events);
     serial_write_string("/"); serial_write_u64((uint64_t)input.modifiers);
-    serial_write_string(" consumed="); serial_write_u64(m61_semantic_consumed(active));
+    serial_write_string(" consumed="); serial_write_u64(m61_event_dequeue_count(active));
     serial_write_string("\n");
     for (device_index = 0U; device_index < active->addressed_count; ++device_index) {
         const struct xhci_addressed_device *device = &active->addressed[device_index];
@@ -190,7 +182,7 @@ static void m61_trace_failed_hid_service(void) {
         !vmm_pmm_frame_to_hhdm(active->event_ring_physical, &ring_virtual)) {
         return;
     }
-    consumed = m61_semantic_consumed(active);
+    consumed = m61_event_dequeue_count(active);
     index = (uint16_t)(consumed % XHCI_EVENT_RING_TRBS);
     cycle = (((consumed / XHCI_EVENT_RING_TRBS) & 1ULL) == 0ULL);
     ring = (volatile struct xhci_trb *)ring_virtual;

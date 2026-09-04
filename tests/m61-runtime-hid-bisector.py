@@ -8,9 +8,14 @@ t=(R/"kernel/core/m61_physical_breadcrumbs.c").read_text()
 w=(R/"tests/m61-physical-handoff-bisector.sh").read_text()
 e=(R/"kernel/core/event_syscall.c").read_text()
 u=(R/"kernel/core/usb_hid_impl.inc").read_text()
+c=(R/"kernel/core/usb_hid.c").read_text()
 i=(R/"kernel/core/input.c").read_text()
 s=(R/"kernel/core/syscall.c").read_text()
 d=(R/"user/boring-display/server.c").read_text()
+a=(R/"kernel/arch/x86_64/xhci.c").read_text()
+m=(R/"kernel/core/usb_mass_storage_impl.inc").read_text()
+x=(R/"kernel/core/xhci.c").read_text()
+xh=(R/"kernel/include/boring/xhci.h").read_text()
 
 codes={n:int(v,16) for n,v in re.findall(
  r"^\s*(M61_RUNTIME_HID_POST_[A-Z_]+)\s*=\s*0x([0-9a-fA-F]{2}),?$",h,re.M)}
@@ -21,9 +26,20 @@ want={
  "M61_RUNTIME_HID_POST_D_INPUT_QUEUED":0xCC,
  "M61_RUNTIME_HID_POST_E_INPUT_READ":0xCD}
 assert codes==want, codes
+observations={n:int(v,16) for n,v in re.findall(
+ r"^\s*(M61_RUNTIME_XHCI_POST_[A-Z_]+)\s*=\s*0x([0-9a-fA-F]{2}),?$",h,re.M)}
+want_observations={
+ "M61_RUNTIME_XHCI_POST_HID_ENDPOINTS_ARMED":0x5E,
+ "M61_RUNTIME_XHCI_POST_ANY_CYCLE_READY_EVENT":0x5F,
+ "M61_RUNTIME_XHCI_POST_PORT_STATUS_AT_HEAD":0xCE,
+ "M61_RUNTIME_XHCI_POST_OTHER_EVENT_AT_HEAD":0xCF}
+assert observations==want_observations, observations
 claimed=set(range(0x30,0x5E))|set(range(0x61,0xC9))|set(range(0xD0,0xFF))
-assert not(set(codes.values())&claimed)
+assert len(set(codes.values())|set(observations.values()))==9
+assert not((set(codes.values())|set(observations.values()))&claimed)
 assert "code != (uint8_t)(m61_runtime_hid_highest + 1U)" in t
+assert "void boring_m61_runtime_xhci_observe(uint8_t code)" in t
+assert "m61_runtime_hid_highest >=\n         (uint8_t)M61_RUNTIME_HID_POST_B_TRANSFER_EVENT" in t
 assert "M61_POST(M61_POST_DESKTOP_WITNESS_WRITTEN);\n    boring_m61_runtime_hid_arm();" in w
 
 owner=e[e.index("if (m54_is_input_owner(process)) {"):e.index("        if (!arm_fd_watches",e.index("if (m54_is_input_owner(process)) {"))]
@@ -33,8 +49,25 @@ assert "x86_64_enable_and_halt();" not in owner
 
 submit=u[u.index("static bool m52_submit_endpoint("):u.index("static uint32_t m53_usage_keycode")]
 assert submit.index("runtime->expected_trb_physical = trb_physical;") < submit.index("runtime->transfer_outstanding = true;") < submit.rindex("return true;")
-poll=u[u.index("static bool m52_poll_hid_reports_limit("):u.index("bool xhci_poll_hid_reports(")]
-assert poll.index("type = (uint8_t)") < poll.index("M61_RUNTIME_HID_POST_B_TRANSFER_EVENT") < poll.index("m52_complete_event(active, &event, &completed)")
+poll=c[c.index("static bool m60_poll_hid_reports_limit("):c.index("bool xhci_poll_hid_reports(")]
+assert poll.index("m60_rearm_hid_endpoints(active, mmio)") < poll.index("M61_RUNTIME_XHCI_POST_HID_ENDPOINTS_ARMED")
+assert poll.index("xhci_event_dequeue_position(active") < poll.index("M61_RUNTIME_XHCI_POST_ANY_CYCLE_READY_EVENT")
+assert poll.index("type == XHCI_TRB_TYPE_PORT_STATUS_EVENT") < poll.index("M61_RUNTIME_XHCI_POST_PORT_STATUS_AT_HEAD") < poll.index("xhci_consume_port_status_event(active, &event)")
+assert poll.index("M61_RUNTIME_XHCI_POST_OTHER_EVENT_AT_HEAD") < poll.index("M61_RUNTIME_HID_POST_B_TRANSFER_EVENT") < poll.index("m60_consume_hid_event_mapped(active, &event, &completed)")
+assert poll.index("xhci_event_dequeue_advance(active") < poll.index("m52_mmio_write64(mmio, interrupter + 0x18U")
+legacy_poll=u[u.index("static bool m52_poll_hid_reports_limit("):u.index("bool xhci_poll_hid_reports(")]
+assert "m52_consumed_events" not in u
+assert legacy_poll.index("xhci_event_dequeue_position(active") < legacy_poll.index("xhci_event_dequeue_advance(active") < legacy_poll.index("m52_mmio_write64(mmio, interrupter + 0x18U")
+mass_take=m[m.index("static bool take_event("):m.index("static bool commit_event(")]
+mass_commit=m[m.index("static bool commit_event("):m.index("static bool consume_port_event(")]
+assert "command_completions +" not in mass_take
+assert "xhci_event_dequeue_position(msc_runtime.state" in mass_take
+assert mass_commit.index("xhci_event_dequeue_advance(msc_runtime.state") < mass_commit.index("mmio_write64(msc_runtime.mmio")
+arch_take=a[a.index("static bool event_take("):a.index("static bool consume_port_event(")]
+assert arch_take.index("xhci_event_dequeue_position(&active_state") < arch_take.index("xhci_event_dequeue_advance(&active_state") < arch_take.index("mmio_write64(runtime_state.mmio")
+assert "return xhci_consume_port_status_event(&active_state, event);" in a
+assert "uint64_t event_dequeue_count;" in xh
+assert "++state->event_dequeue_count;" in x
 complete=u[u.index("static bool m52_complete_event("):u.index("static bool m52_poll_hid_reports_limit(")]
 assert complete.index("xhci_validate_interrupt_transfer_event(") < complete.index("M61_RUNTIME_HID_POST_C_EVENT_VALIDATED") < complete.index("m52_decode_report(")
 assert complete.count("return true;")==1
@@ -47,6 +80,9 @@ assert "(boring_input_claim() != 0L)" in d and "boring_input_release" not in d
 
 print("M61_RUNTIME_HID_BISECTOR=PASS")
 print("POST_A=C9 POST_B=CA POST_C=CB POST_D=CC POST_E=CD")
+print("XHCI_ARMED=5E XHCI_READY=5F XHCI_PORT_HEAD=CE XHCI_OTHER_HEAD=CF")
+print("ACTIVE_M60_CA_PATH=PASS")
+print("GENERIC_EVENT_DEQUEUE_BEFORE_ERDP=PASS")
 print("POST37_ARM_ORDER=PASS")
 print("POST_D_AFTER_INPUT_COUNT_INCREMENT=PASS")
 print("INPUT_READINESS_AND_OWNER=PASS")

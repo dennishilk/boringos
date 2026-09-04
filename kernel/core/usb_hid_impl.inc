@@ -236,18 +236,6 @@ static void m52_mmio_write64(volatile uint8_t *base, uint32_t offset,
     m52_mmio_write32(base, offset + 4U, (uint32_t)(value >> 32U));
 }
 
-static uint64_t m52_consumed_events(const struct xhci_state *state) {
-    uint64_t total;
-    uint8_t device_index;
-    total = (uint64_t)state->command_completions +
-            (uint64_t)state->port_events_consumed;
-    for (device_index = 0U; device_index < state->addressed_count;
-         ++device_index) {
-        total += (uint64_t)state->addressed[device_index].transfer_events;
-    }
-    return total;
-}
-
 static bool m52_allocate_report_buffer(struct xhci_hid_endpoint_runtime *runtime) {
     void *virtual_address = NULL;
     if (runtime->report_buffer_physical != 0ULL) { return true; }
@@ -613,7 +601,6 @@ static bool m52_poll_hid_reports_limit(struct xhci_state *state,
     volatile uint8_t *mmio;
     void *event_virtual = NULL;
     volatile struct xhci_trb *event_ring;
-    uint64_t consumed;
     uint16_t event_index;
     bool event_cycle;
     uint32_t completed = 0U;
@@ -654,15 +641,17 @@ static bool m52_poll_hid_reports_limit(struct xhci_state *state,
             }
         }
     }
-    consumed = m52_consumed_events(active);
-    event_index = (uint16_t)(consumed % XHCI_EVENT_RING_TRBS);
-    event_cycle = (((consumed / XHCI_EVENT_RING_TRBS) & 1ULL) == 0ULL);
+    if (!xhci_event_dequeue_position(active, &event_index, &event_cycle)) {
+        goto out;
+    }
     for (attempt = 0U;
          (attempt < wait_limit) && (completed < completion_goal);
          ++attempt) {
         struct xhci_trb event;
         uint32_t control = event_ring[event_index].control;
         uint8_t type;
+        uint16_t next_index;
+        bool next_cycle;
         const uint32_t interrupter = active->capabilities.runtime_offset +
                                      M52_RUNTIME_INTERRUPTER0;
         if (((control & M52_TRB_CYCLE) != 0U) != event_cycle) {
@@ -672,16 +661,6 @@ static bool m52_poll_hid_reports_limit(struct xhci_state *state,
         event.parameter = event_ring[event_index].parameter;
         event.status = event_ring[event_index].status;
         event.control = control;
-        ++event_index;
-        if (event_index == XHCI_EVENT_RING_TRBS) {
-            event_index = 0U;
-            event_cycle = !event_cycle;
-        }
-        m52_barrier();
-        if (interrupter > M52_MMIO_WINDOW_SIZE - 0x20U) { goto out; }
-        m52_mmio_write64(mmio, interrupter + 0x18U,
-            (active->event_ring_physical +
-             ((uint64_t)event_index * XHCI_TRB_SIZE)) | (1ULL << 3U));
         type = (uint8_t)((event.control >> M52_TRB_TYPE_SHIFT) &
                          M52_TRB_TYPE_MASK);
 #if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
@@ -690,9 +669,22 @@ static bool m52_poll_hid_reports_limit(struct xhci_state *state,
                 (uint8_t)M61_RUNTIME_HID_POST_B_TRANSFER_EVENT);
         }
 #endif
-        if (type == M52_TRB_TYPE_PORT_STATUS_EVENT) {
+        if ((type == M52_TRB_TYPE_PORT_STATUS_EVENT) &&
+            !xhci_consume_port_status_event(active, &event)) {
             goto out;
         }
+        if ((interrupter > M52_MMIO_WINDOW_SIZE - 0x20U) ||
+            !xhci_event_dequeue_advance(active, event_index, event_cycle,
+                                        &next_index, &next_cycle)) {
+            goto out;
+        }
+        m52_barrier();
+        m52_mmio_write64(mmio, interrupter + 0x18U,
+            (active->event_ring_physical +
+             ((uint64_t)next_index * XHCI_TRB_SIZE)) | (1ULL << 3U));
+        event_index = next_index;
+        event_cycle = next_cycle;
+        if (type == M52_TRB_TYPE_PORT_STATUS_EVENT) { goto out; }
         if ((type != XHCI_TRB_TYPE_TRANSFER_EVENT) ||
             !m52_complete_event(active, &event, &completed)) {
             goto out;

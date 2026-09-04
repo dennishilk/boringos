@@ -27,6 +27,7 @@
 #define XHCI_TRB_TYPE_EVALUATE_CONTEXT 13U
 #define XHCI_TRB_TYPE_TRANSFER_EVENT 32U
 #define XHCI_TRB_TYPE_COMMAND_COMPLETION_EVENT 33U
+#define XHCI_TRB_TYPE_PORT_STATUS_EVENT 34U
 #define XHCI_COMPLETION_SUCCESS 1U
 #define XHCI_COMPLETION_SHORT_PACKET 13U
 #define XHCI_USB_DESCRIPTOR_DEVICE 1U
@@ -158,6 +159,7 @@ struct xhci_state {
     uint64_t event_ring_physical;
     uint64_t erst_physical;
     uint64_t connected_ports;
+    uint64_t event_dequeue_count;
     struct xhci_addressed_device addressed[XHCI_MAX_ADDRESSED_DEVICES];
     uint32_t command_completions;
     uint32_t port_events_consumed;
@@ -257,6 +259,16 @@ bool xhci_validate_interrupt_transfer_event(
     uint8_t expected_slot_id, uint8_t expected_endpoint_id,
     uint64_t expected_trb_physical, uint16_t requested_length,
     uint16_t *actual_length, bool *short_packet);
+
+/* One software cursor owns the shared Event Ring. Advancing it records one
+ * ERDP commit independently of the semantic type-specific counters. */
+bool xhci_event_dequeue_position(const struct xhci_state *state,
+                                 uint16_t *index, bool *cycle);
+bool xhci_event_dequeue_advance(struct xhci_state *state,
+                                uint16_t index, bool cycle,
+                                uint16_t *next_index, bool *next_cycle);
+bool xhci_consume_port_status_event(struct xhci_state *state,
+                                    const struct xhci_trb *event);
 
 /* Pure M61 shared-Event-Ring classifier. A nonmatching transfer is REJECT
  * unless it strictly owns either the awaited Storage TRB or one currently

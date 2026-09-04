@@ -226,6 +226,42 @@ static bool m60_rearm_hid_endpoints(struct xhci_state *active,
     return true;
 }
 
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+static bool m61_hid_endpoints_armed(const struct xhci_state *active) {
+    bool found = false;
+    uint8_t device_index;
+    if (active == NULL) { return false; }
+    for (device_index = 0U; device_index < active->addressed_count;
+         ++device_index) {
+        const struct xhci_addressed_device *device =
+            &active->addressed[device_index];
+        enum m60_hid_classification classification =
+            m60_classify_hid_device(device);
+        uint8_t endpoint_index;
+        if (classification == M60_HID_INVALID) { return false; }
+        if (classification == M60_HID_NOT_HID) { continue; }
+        if (!device->device_configured || !device->hid_endpoint_ready ||
+            (device->hid_configuration.endpoint_count == 0U) ||
+            (device->hid_configuration.endpoint_count >
+             XHCI_MAX_HID_ENDPOINTS)) {
+            return false;
+        }
+        found = true;
+        for (endpoint_index = 0U;
+             endpoint_index < device->hid_configuration.endpoint_count;
+             ++endpoint_index) {
+            const struct xhci_hid_endpoint_runtime *runtime =
+                &device->hid_runtime[endpoint_index];
+            if (!runtime->transfer_outstanding ||
+                (runtime->expected_trb_physical == 0ULL)) {
+                return false;
+            }
+        }
+    }
+    return found;
+}
+#endif
+
 static bool m60_consume_hid_event_mapped(struct xhci_state *active,
                                           const struct xhci_trb *event,
                                           uint32_t *completed) {
@@ -285,7 +321,6 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
     volatile uint8_t *mmio;
     void *event_virtual = NULL;
     volatile struct xhci_trb *event_ring;
-    uint64_t consumed;
     uint16_t event_index;
     bool event_cycle;
     uint32_t completed = 0U;
@@ -313,10 +348,16 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
     event_ring = (volatile struct xhci_trb *)event_virtual;
 
     if (!m60_rearm_hid_endpoints(active, mmio)) { goto out; }
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+    if (m61_hid_endpoints_armed(active)) {
+        boring_m61_runtime_xhci_observe(
+            (uint8_t)M61_RUNTIME_XHCI_POST_HID_ENDPOINTS_ARMED);
+    }
+#endif
 
-    consumed = m52_consumed_events(active);
-    event_index = (uint16_t)(consumed % XHCI_EVENT_RING_TRBS);
-    event_cycle = (((consumed / XHCI_EVENT_RING_TRBS) & 1ULL) == 0ULL);
+    if (!xhci_event_dequeue_position(active, &event_index, &event_cycle)) {
+        goto out;
+    }
     for (attempt = 0U;
          (attempt < wait_limit) && (completed < completion_goal);
          ++attempt) {
@@ -338,23 +379,44 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
         event.control = control;
         type = (uint8_t)((event.control >> M52_TRB_TYPE_SHIFT) &
                          M52_TRB_TYPE_MASK);
-        if ((type != XHCI_TRB_TYPE_TRANSFER_EVENT) ||
-            !m60_consume_hid_event_mapped(active, &event, &completed)) {
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+        boring_m61_runtime_xhci_observe(
+            (uint8_t)M61_RUNTIME_XHCI_POST_ANY_CYCLE_READY_EVENT);
+#endif
+        if (type == XHCI_TRB_TYPE_PORT_STATUS_EVENT) {
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+            boring_m61_runtime_xhci_observe(
+                (uint8_t)M61_RUNTIME_XHCI_POST_PORT_STATUS_AT_HEAD);
+#endif
+            if (!xhci_consume_port_status_event(active, &event)) { goto out; }
+        } else {
+            if (type != XHCI_TRB_TYPE_TRANSFER_EVENT) {
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+                boring_m61_runtime_xhci_observe(
+                    (uint8_t)M61_RUNTIME_XHCI_POST_OTHER_EVENT_AT_HEAD);
+#endif
+                goto out;
+            }
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+            boring_m61_runtime_hid_post(
+                (uint8_t)M61_RUNTIME_HID_POST_B_TRANSFER_EVENT);
+#endif
+            if (!m60_consume_hid_event_mapped(active, &event, &completed)) {
+                goto out;
+            }
+        }
+        if ((interrupter > M52_MMIO_WINDOW_SIZE - 0x20U) ||
+            !xhci_event_dequeue_advance(active, event_index, event_cycle,
+                                        &next_index, &next_cycle)) {
             goto out;
         }
-        next_index = (uint16_t)(event_index + 1U);
-        next_cycle = event_cycle;
-        if (next_index == XHCI_EVENT_RING_TRBS) {
-            next_index = 0U;
-            next_cycle = !next_cycle;
-        }
         m52_barrier();
-        if (interrupter > M52_MMIO_WINDOW_SIZE - 0x20U) { goto out; }
         m52_mmio_write64(mmio, interrupter + 0x18U,
             (active->event_ring_physical +
              ((uint64_t)next_index * XHCI_TRB_SIZE)) | (1ULL << 3U));
         event_index = next_index;
         event_cycle = next_cycle;
+        if (type == XHCI_TRB_TYPE_PORT_STATUS_EVENT) { continue; }
         should_rearm = (completed < completion_goal) || rearm_after_completion;
         if (should_rearm) {
             (void)m60_rearm_hid_endpoints(active, mmio);

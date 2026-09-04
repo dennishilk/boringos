@@ -36,6 +36,52 @@ static uint16_t little16(const uint8_t *bytes) {
     return (uint16_t)((uint16_t)bytes[0] | ((uint16_t)bytes[1] << 8U));
 }
 
+bool xhci_event_dequeue_position(const struct xhci_state *state,
+                                 uint16_t *index, bool *cycle) {
+    if ((state == NULL) || (index == NULL) || (cycle == NULL)) {
+        return false;
+    }
+    *index = (uint16_t)(state->event_dequeue_count % XHCI_EVENT_RING_TRBS);
+    *cycle = (((state->event_dequeue_count / XHCI_EVENT_RING_TRBS) & 1ULL) ==
+              0ULL);
+    return true;
+}
+
+bool xhci_event_dequeue_advance(struct xhci_state *state,
+                                uint16_t index, bool cycle,
+                                uint16_t *next_index, bool *next_cycle) {
+    uint16_t current_index;
+    bool current_cycle;
+    if ((state == NULL) || (next_index == NULL) || (next_cycle == NULL) ||
+        (state->event_dequeue_count == UINT64_MAX) ||
+        !xhci_event_dequeue_position(state, &current_index, &current_cycle) ||
+        (index != current_index) || (cycle != current_cycle)) {
+        return false;
+    }
+    ++state->event_dequeue_count;
+    return xhci_event_dequeue_position(state, next_index, next_cycle);
+}
+
+bool xhci_consume_port_status_event(struct xhci_state *state,
+                                    const struct xhci_trb *event) {
+    uint8_t type;
+    uint8_t port_id;
+    uint8_t completion;
+    if ((state == NULL) || (event == NULL)) { return false; }
+    type = (uint8_t)((event->control >> XHCI_TRB_TYPE_SHIFT) &
+                     XHCI_TRB_TYPE_MASK);
+    port_id = (uint8_t)(event->parameter >> 24U);
+    completion = (uint8_t)(event->status >> 24U);
+    if ((type != XHCI_TRB_TYPE_PORT_STATUS_EVENT) || (port_id == 0U) ||
+        (port_id > state->capabilities.max_ports) ||
+        (completion != XHCI_COMPLETION_SUCCESS) ||
+        (state->port_events_consumed == UINT32_MAX)) {
+        return false;
+    }
+    ++state->port_events_consumed;
+    return true;
+}
+
 bool xhci_parse_capabilities(const volatile void *mmio, uint32_t length,
                              struct xhci_capabilities *capabilities) {
     const volatile uint8_t *base = (const volatile uint8_t *)mmio;

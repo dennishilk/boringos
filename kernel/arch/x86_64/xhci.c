@@ -150,7 +150,6 @@ uint8_t boring_m61_xhci_failure_reason(void) {
 #define XHCI_TRB_TYPE_ENABLE_SLOT 9U
 #define XHCI_TRB_TYPE_DISABLE_SLOT 10U
 #define XHCI_TRB_TYPE_ADDRESS_DEVICE 11U
-#define XHCI_TRB_TYPE_PORT_STATUS_EVENT 34U
 #define XHCI_TRB_TYPE_MASK 0x3fU
 #define XHCI_COMMAND_SLOT_SHIFT 24U
 #define XHCI_EVENT_WAIT_LIMIT 10000000U
@@ -574,47 +573,44 @@ static bool command_submit(uint64_t parameter, uint32_t status,
 static bool event_take(struct xhci_trb *event, bool *available) {
     const volatile struct xhci_trb *source;
     uint32_t control;
+    uint16_t event_index;
+    uint16_t next_index;
+    bool event_cycle;
+    bool next_cycle;
     const uint32_t interrupter = active_state.capabilities.runtime_offset +
                                  XHCI_RUNTIME_INTERRUPTER0;
     if ((event == NULL) || (available == NULL) ||
         (runtime_state.mmio == NULL) || (runtime_state.event_ring == NULL) ||
-        (runtime_state.event_index >= XHCI_EVENT_RING_TRBS)) {
+        !xhci_event_dequeue_position(&active_state, &event_index,
+                                     &event_cycle)) {
         return false;
     }
-    source = &runtime_state.event_ring[runtime_state.event_index];
+    source = &runtime_state.event_ring[event_index];
     control = source->control;
-    if (((control & XHCI_TRB_CYCLE) != 0U) != runtime_state.event_cycle) {
+    if (((control & XHCI_TRB_CYCLE) != 0U) != event_cycle) {
         *available = false;
         return true;
     }
     event->parameter = source->parameter;
     event->status = source->status;
     event->control = control;
-    ++runtime_state.event_index;
-    if (runtime_state.event_index == XHCI_EVENT_RING_TRBS) {
-        runtime_state.event_index = 0U;
-        runtime_state.event_cycle = !runtime_state.event_cycle;
+    if (!xhci_event_dequeue_advance(&active_state, event_index, event_cycle,
+                                    &next_index, &next_cycle)) {
+        return false;
     }
+    runtime_state.event_index = next_index;
+    runtime_state.event_cycle = next_cycle;
     memory_barrier();
     mmio_write64(runtime_state.mmio, interrupter + 0x18U,
                  (active_state.event_ring_physical +
-                  ((uint64_t)runtime_state.event_index * XHCI_TRB_SIZE)) |
+                  ((uint64_t)next_index * XHCI_TRB_SIZE)) |
                  (1ULL << 3U));
     *available = true;
     return true;
 }
 
 static bool consume_port_event(const struct xhci_trb *event) {
-    const uint8_t port_id = (uint8_t)(event->parameter >> 24U);
-    const uint8_t completion = (uint8_t)(event->status >> 24U);
-    if ((port_id == 0U) || (port_id > active_state.capabilities.max_ports) ||
-        (completion != XHCI_COMPLETION_SUCCESS)) {
-        return false;
-    }
-    if (active_state.port_events_consumed != UINT32_MAX) {
-        ++active_state.port_events_consumed;
-    }
-    return true;
+    return xhci_consume_port_status_event(&active_state, event);
 }
 
 static bool event_dispatch_wait(enum xhci_event_expectation expectation,

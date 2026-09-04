@@ -321,22 +321,12 @@ static void dma_frame_free(uint64_t *physical, void **virtual_address) {
     if (virtual_address != NULL) { *virtual_address = NULL; }
 }
 
-static uint64_t consumed_events(const struct xhci_state *state) {
-    uint64_t total;
-    uint8_t index;
-    total = (uint64_t)state->command_completions +
-            (uint64_t)state->port_events_consumed;
-    for (index = 0U; index < state->addressed_count; ++index) {
-        total += (uint64_t)state->addressed[index].transfer_events;
-    }
-    return total;
-}
-
-static bool take_event(struct xhci_trb *event, uint16_t *next_index) {
+static bool take_event(struct xhci_trb *event, uint16_t *event_index,
+                       bool *event_cycle) {
     volatile struct xhci_trb *ring = NULL;
     void *ring_virtual = NULL;
     uint32_t attempt;
-    if ((event == NULL) || (next_index == NULL) ||
+    if ((event == NULL) || (event_index == NULL) || (event_cycle == NULL) ||
         (msc_runtime.state == NULL) || (msc_runtime.mmio == NULL) ||
         !vmm_pmm_frame_to_hhdm(msc_runtime.state->event_ring_physical,
                                &ring_virtual)) {
@@ -344,9 +334,11 @@ static bool take_event(struct xhci_trb *event, uint16_t *next_index) {
     }
     ring = (volatile struct xhci_trb *)ring_virtual;
     for (attempt = 0U; attempt < MSC_EVENT_WAIT_LIMIT; ++attempt) {
-        const uint64_t consumed = consumed_events(msc_runtime.state);
-        const uint16_t index = (uint16_t)(consumed % XHCI_EVENT_RING_TRBS);
-        const bool cycle = (((consumed / XHCI_EVENT_RING_TRBS) & 1ULL) == 0ULL);
+        uint16_t index;
+        bool cycle;
+        if (!xhci_event_dequeue_position(msc_runtime.state, &index, &cycle)) {
+            return false;
+        }
         const uint32_t control = ring[index].control;
         if (((control & MSC_TRB_CYCLE) != 0U) != cycle) {
             x86_64_pause();
@@ -355,18 +347,22 @@ static bool take_event(struct xhci_trb *event, uint16_t *next_index) {
         event->parameter = ring[index].parameter;
         event->status = ring[index].status;
         event->control = control;
-        *next_index = (uint16_t)(index + 1U);
-        if (*next_index == XHCI_EVENT_RING_TRBS) { *next_index = 0U; }
+        *event_index = index;
+        *event_cycle = cycle;
         return true;
     }
     return false;
 }
 
-static bool commit_event(uint16_t next_index) {
+static bool commit_event(uint16_t event_index, bool event_cycle) {
+    uint16_t next_index;
+    bool next_cycle;
     if ((msc_runtime.state == NULL) || (msc_runtime.mmio == NULL) ||
-        (next_index >= XHCI_EVENT_RING_TRBS)) {
+        !xhci_event_dequeue_advance(msc_runtime.state, event_index,
+                                    event_cycle, &next_index, &next_cycle)) {
         return false;
     }
+    (void)next_cycle;
     barrier();
     mmio_write64(msc_runtime.mmio,
                  msc_runtime.state->capabilities.runtime_offset +
@@ -378,15 +374,7 @@ static bool commit_event(uint16_t next_index) {
 }
 
 static bool consume_port_event(const struct xhci_trb *event) {
-    const uint8_t port = (uint8_t)(event->parameter >> 24U);
-    const uint8_t completion = (uint8_t)(event->status >> 24U);
-    if ((port == 0U) || (port > msc_runtime.state->capabilities.max_ports) ||
-        (completion != XHCI_COMPLETION_SUCCESS) ||
-        (msc_runtime.state->port_events_consumed == UINT32_MAX)) {
-        return false;
-    }
-    ++msc_runtime.state->port_events_consumed;
-    return true;
+    return xhci_consume_port_status_event(msc_runtime.state, event);
 }
 
 static bool wait_control_status(struct xhci_addressed_device *device,
@@ -394,12 +382,14 @@ static bool wait_control_status(struct xhci_addressed_device *device,
     uint32_t attempt;
     for (attempt = 0U; attempt < MSC_EVENT_WAIT_LIMIT; ++attempt) {
         struct xhci_trb event;
-        uint16_t next_index;
+        uint16_t event_index;
+        bool event_cycle;
         uint8_t type;
-        if (!take_event(&event, &next_index)) { return false; }
+        if (!take_event(&event, &event_index, &event_cycle)) { return false; }
         type = (uint8_t)((event.control >> MSC_TRB_TYPE_SHIFT) & MSC_TRB_TYPE_MASK);
         if (type == MSC_TRB_TYPE_PORT_STATUS_EVENT) {
-            if (!consume_port_event(&event) || !commit_event(next_index)) {
+            if (!consume_port_event(&event) ||
+                !commit_event(event_index, event_cycle)) {
                 return false;
             }
             continue;
@@ -410,7 +400,7 @@ static bool wait_control_status(struct xhci_addressed_device *device,
             return false;
         }
         ++device->transfer_events;
-        return commit_event(next_index);
+        return commit_event(event_index, event_cycle);
     }
     return false;
 }
@@ -517,13 +507,15 @@ static bool wait_command(uint64_t expected_command) {
     uint32_t attempt;
     for (attempt = 0U; attempt < MSC_EVENT_WAIT_LIMIT; ++attempt) {
         struct xhci_trb event;
-        uint16_t next_index;
+        uint16_t event_index;
+        bool event_cycle;
         uint8_t completed_slot = 0U;
         uint8_t type;
-        if (!take_event(&event, &next_index)) { return false; }
+        if (!take_event(&event, &event_index, &event_cycle)) { return false; }
         type = (uint8_t)((event.control >> MSC_TRB_TYPE_SHIFT) & MSC_TRB_TYPE_MASK);
         if (type == MSC_TRB_TYPE_PORT_STATUS_EVENT) {
-            if (!consume_port_event(&event) || !commit_event(next_index)) {
+            if (!consume_port_event(&event) ||
+                !commit_event(event_index, event_cycle)) {
                 return false;
             }
             continue;
@@ -536,7 +528,7 @@ static bool wait_command(uint64_t expected_command) {
             return false;
         }
         ++msc_runtime.state->command_completions;
-        return commit_event(next_index);
+        return commit_event(event_index, event_cycle);
     }
     return false;
 }
@@ -595,15 +587,17 @@ static bool wait_bulk(uint8_t endpoint_id, uint64_t ring_physical,
     uint32_t attempt;
     for (attempt = 0U; attempt < MSC_EVENT_WAIT_LIMIT; ++attempt) {
         struct xhci_trb event;
-        uint16_t next_index;
+        uint16_t event_index;
+        bool event_cycle;
         uint8_t type;
         enum xhci_shared_transfer_owner owner = XHCI_SHARED_TRANSFER_REJECT;
         uint32_t storage_actual = 0U;
         bool storage_short = false;
-        if (!take_event(&event, &next_index)) { return false; }
+        if (!take_event(&event, &event_index, &event_cycle)) { return false; }
         type = (uint8_t)((event.control >> MSC_TRB_TYPE_SHIFT) & MSC_TRB_TYPE_MASK);
         if (type == MSC_TRB_TYPE_PORT_STATUS_EVENT) {
-            if (!consume_port_event(&event) || !commit_event(next_index)) {
+            if (!consume_port_event(&event) ||
+                !commit_event(event_index, event_cycle)) {
                 return false;
             }
             continue;
@@ -622,12 +616,12 @@ static bool wait_bulk(uint8_t endpoint_id, uint64_t ring_physical,
             *actual = storage_actual;
             *short_packet = storage_short;
             ++msc_runtime.device->transfer_events;
-            return commit_event(next_index);
+            return commit_event(event_index, event_cycle);
         }
         if (owner == XHCI_SHARED_TRANSFER_HID) {
             if (!xhci_consume_hid_transfer_event(msc_runtime.state, &event,
                                                  true) ||
-                !commit_event(next_index)) {
+                !commit_event(event_index, event_cycle)) {
                 return false;
             }
             continue;

@@ -123,10 +123,14 @@ def main():
     runtime_hid_post = function_body(
         breadcrumbs,
         "void boring_m61_runtime_hid_post(")
+    runtime_xhci_observe = function_body(
+        breadcrumbs,
+        "void boring_m61_runtime_xhci_observe(")
     if (console.count("x86_64_out8") != 0 or
-            breadcrumbs.count("x86_64_out8") != 3 or
+            breadcrumbs.count("x86_64_out8") != 4 or
             framebuffer_fault.count("x86_64_out8") != 1 or
-            runtime_hid_post.count("x86_64_out8") != 1):
+            runtime_hid_post.count("x86_64_out8") != 1 or
+            runtime_xhci_observe.count("x86_64_out8") != 1):
         raise RuntimeError(
             "M61 direct port-0x80 diagnostics escaped their bounded seams")
     if (present.count("M61_HANDOFF_POST(") != 6 or

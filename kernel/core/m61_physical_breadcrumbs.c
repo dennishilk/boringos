@@ -54,10 +54,12 @@ enum m61_handoff_gap_post_code {
 
 static bool m61_runtime_hid_armed;
 static uint8_t m61_runtime_hid_highest;
+static uint8_t m61_runtime_xhci_observed;
 
 void boring_m61_runtime_hid_arm(void) {
     m61_runtime_hid_highest =
         (uint8_t)((uint8_t)M61_RUNTIME_HID_POST_A_SERVICE_LOOP - 1U);
+    m61_runtime_xhci_observed = 0U;
     m61_runtime_hid_armed = true;
 }
 
@@ -69,6 +71,25 @@ void boring_m61_runtime_hid_post(uint8_t code) {
         return;
     }
     m61_runtime_hid_highest = code;
+    x86_64_out8((uint16_t)M61_HANDOFF_POST_PORT, code);
+}
+
+void boring_m61_runtime_xhci_observe(uint8_t code) {
+    uint8_t bit;
+    if (!m61_runtime_hid_armed ||
+        (m61_runtime_hid_highest >=
+         (uint8_t)M61_RUNTIME_HID_POST_B_TRANSFER_EVENT)) {
+        return;
+    }
+    switch (code) {
+        case M61_RUNTIME_XHCI_POST_HID_ENDPOINTS_ARMED: bit = 1U << 0U; break;
+        case M61_RUNTIME_XHCI_POST_ANY_CYCLE_READY_EVENT: bit = 1U << 1U; break;
+        case M61_RUNTIME_XHCI_POST_PORT_STATUS_AT_HEAD: bit = 1U << 2U; break;
+        case M61_RUNTIME_XHCI_POST_OTHER_EVENT_AT_HEAD: bit = 1U << 3U; break;
+        default: return;
+    }
+    if ((m61_runtime_xhci_observed & bit) != 0U) { return; }
+    m61_runtime_xhci_observed = (uint8_t)(m61_runtime_xhci_observed | bit);
     x86_64_out8((uint16_t)M61_HANDOFF_POST_PORT, code);
 }
 

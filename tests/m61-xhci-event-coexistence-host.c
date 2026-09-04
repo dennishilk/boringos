@@ -51,6 +51,25 @@ static struct xhci_trb transfer_event(uint8_t slot, uint8_t endpoint,
     return event;
 }
 
+static struct xhci_trb port_status_event(uint8_t port, bool cycle) {
+    struct xhci_trb event = {0};
+    event.parameter = (uint64_t)port << 24U;
+    event.status = (uint32_t)XHCI_COMPLETION_SUCCESS << 24U;
+    event.control = ((uint32_t)XHCI_TRB_TYPE_PORT_STATUS_EVENT << 10U) |
+                    (cycle ? 1U : 0U);
+    return event;
+}
+
+static uint64_t semantic_events(const struct xhci_state *state) {
+    uint64_t total = (uint64_t)state->command_completions +
+                     (uint64_t)state->port_events_consumed;
+    uint8_t index;
+    for (index = 0U; index < state->addressed_count; ++index) {
+        total += state->addressed[index].transfer_events;
+    }
+    return total;
+}
+
 static enum xhci_shared_transfer_owner classify(
     const struct xhci_state *state, const struct xhci_trb *event,
     uint32_t *actual, bool *short_packet) {
@@ -74,8 +93,13 @@ int main(void) {
     struct event_cursor cursor;
     uint32_t hid_events;
     uint32_t storage_events;
+    uint16_t dequeue_index;
+    uint16_t next_dequeue_index;
+    bool dequeue_cycle;
+    bool next_dequeue_cycle;
 
     state.addressed_count = 1U;
+    state.capabilities.max_ports = 8U;
     hid->slot_id = TEST_HID_SLOT;
     hid->device_configured = true;
     hid->hid_endpoint_ready = true;
@@ -168,6 +192,56 @@ int main(void) {
     expect(cursor.index == 0U && !cursor.cycle,
            "HID-then-Storage ordering wraps 255-to-0 coherently");
 
+    /* Exact physical hazard: a Port Status Event precedes a valid HID Event. */
+    state.command_completions = 255U;
+    state.event_dequeue_count = 255ULL;
+    expect(xhci_event_dequeue_position(&state, &dequeue_index,
+                                       &dequeue_cycle) &&
+           dequeue_index == 255U && dequeue_cycle,
+           "generic dequeue starts at event N before wrap");
+    event = port_status_event(2U, true);
+
+    /* The old HID-only gate returned here, so neither software nor ERDP could
+     * reach the valid HID completion in event N+1. */
+    expect(((event.control >> 10U) & 0x3fU) !=
+               XHCI_TRB_TYPE_TRANSFER_EVENT &&
+           xhci_event_dequeue_position(&state, &next_dequeue_index,
+                                       &next_dequeue_cycle) &&
+           next_dequeue_index == dequeue_index &&
+           next_dequeue_cycle == dequeue_cycle,
+           "old transfer-only behavior remains stuck on event N");
+
+    expect(xhci_consume_port_status_event(&state, &event),
+           "fixed path validates and accounts Port Status event N");
+    expect(xhci_event_dequeue_advance(&state, dequeue_index, dequeue_cycle,
+                                      &next_dequeue_index,
+                                      &next_dequeue_cycle) &&
+           next_dequeue_index == 0U && !next_dequeue_cycle,
+           "Port Status event advances generic dequeue across wrap once");
+    expect(state.event_dequeue_count == 256ULL &&
+           semantic_events(&state) == 256ULL,
+           "generic and semantic accounting agree after Port Status event");
+    expect(!xhci_event_dequeue_advance(&state, dequeue_index, dequeue_cycle,
+                                       &next_dequeue_index,
+                                       &next_dequeue_cycle) &&
+           state.event_dequeue_count == 256ULL,
+           "stale event N cannot advance the shared dequeue twice");
+
+    event = transfer_event(TEST_HID_SLOT, TEST_HID_ENDPOINT, TEST_HID_TRB,
+                           XHCI_COMPLETION_SUCCESS, 0U);
+    owner = classify(&state, &event, &actual, &short_packet);
+    expect(owner == XHCI_SHARED_TRANSFER_HID,
+           "valid HID Transfer Event N+1 is reached after Port Status event");
+    ++hid->transfer_events;
+    expect(xhci_event_dequeue_advance(&state, 0U, false,
+                                      &next_dequeue_index,
+                                      &next_dequeue_cycle) &&
+           next_dequeue_index == 1U && !next_dequeue_cycle,
+           "HID Transfer Event N+1 advances the same shared dequeue once");
+    expect(state.event_dequeue_count == 257ULL &&
+           semantic_events(&state) == 257ULL,
+           "generic and semantic accounting agree after N then N+1");
+
     event = transfer_event(TEST_HID_SLOT, TEST_HID_ENDPOINT,
                            TEST_HID_TRB + XHCI_TRB_SIZE,
                            XHCI_COMPLETION_SUCCESS, 0U);
@@ -198,6 +272,7 @@ int main(void) {
     if (failures != 0) { return 1; }
     puts("M61 Storage-first HID-yield Event Ring accounting: PASS");
     puts("M61 HID-before-Storage shared Event Ring ordering: PASS");
+    puts("M61 Port-Status-before-HID generic dequeue regression: PASS");
     puts("M61 Event Ring index 255-to-0 accounting wrap: PASS");
     puts("M61 unknown/malformed shared Transfer Events: REJECTED");
     return 0;

@@ -7,6 +7,7 @@ cc -Ikernel/include \
    -std=c11 -fno-builtin -fno-tree-loop-distribute-patterns \
    -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
    -Wstrict-prototypes -Wmissing-prototypes \
-   tests/m61-xhci-event-coexistence-host.c kernel/core/usb_hid.c \
+   tests/m61-xhci-event-coexistence-host.c kernel/core/xhci.c \
+   kernel/core/usb_hid.c \
    -o build/m61-xhci-event-coexistence-host
 build/m61-xhci-event-coexistence-host
