@@ -12,7 +12,7 @@ import runpy
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "build/m62-desktop-capacity"
-SOURCE_IMAGE = ROOT / "build/boringos-m61-usb.img"
+SOURCE_IMAGE = ROOT / "build/boringos-m61-usb-qemu.img"
 STRESS_IMAGE = OUT / "boringos-m62-stress.img"
 QMP = runpy.run_path(str(ROOT / "tests/qmp-input.py"))
 EXPECTED_BYTES = 100663296
