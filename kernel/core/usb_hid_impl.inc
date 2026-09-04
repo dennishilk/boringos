@@ -1,7 +1,7 @@
 #include <boring/usb_hid.h>
 #include <boring/xhci.h>
 
-#if !__STDC_HOSTED__
+#if !__STDC_HOSTED__ || defined(BORING_USB_HID_RUNTIME_HOST_TEST)
 #include <boring/cpu.h>
 #include <boring/event_syscall.h>
 #include <boring/input.h>
@@ -208,7 +208,7 @@ bool xhci_validate_interrupt_transfer_event(
     return false;
 }
 
-#if !__STDC_HOSTED__
+#if !__STDC_HOSTED__ || defined(BORING_USB_HID_RUNTIME_HOST_TEST)
 
 #define M52_MMIO_WINDOW_SIZE XHCI_MMIO_WINDOW_SIZE
 #define M52_RUNTIME_INTERRUPTER0 0x20U
@@ -451,28 +451,39 @@ static bool m52_decode_report(struct xhci_addressed_device *device,
         &device->hid_runtime[endpoint_index];
     const struct xhci_hid_endpoint_descriptor *descriptor =
         &device->hid_configuration.endpoints[endpoint_index];
-    if (descriptor->protocol == 1U) {
+    if (runtime->decoded_reports == UINT32_MAX) { return false; }
+    if (descriptor->report_format == XHCI_HID_REPORT_BOOT_KEYBOARD) {
+        struct usb_hid_keyboard_state next_state = runtime->keyboard_state;
         struct usb_hid_key_transition transitions[USB_HID_BOOT_KEYS * 2U];
         const uint8_t previous_modifiers = runtime->keyboard_state.modifiers;
         size_t count = 0U;
+        size_t presses = 0U;
+        size_t releases = 0U;
         uint8_t modifiers = 0U;
         size_t index;
-        if (!usb_hid_keyboard_decode(&runtime->keyboard_state, report,
+        if (!usb_hid_keyboard_decode(&next_state, report,
                                      (size_t)length, transitions,
                                      USB_HID_BOOT_KEYS * 2U, &count,
                                      &modifiers)) {
             return false;
         }
         for (index = 0U; index < count; ++index) {
+            if (transitions[index].down) {
+                ++presses;
+            } else {
+                ++releases;
+            }
+        }
+        if ((UINT32_MAX - runtime->key_presses < (uint32_t)presses) ||
+            (UINT32_MAX - runtime->key_releases < (uint32_t)releases)) {
+            return false;
+        }
+        runtime->keyboard_state = next_state;
+        runtime->key_presses += (uint32_t)presses;
+        runtime->key_releases += (uint32_t)releases;
+        for (index = 0U; index < count; ++index) {
             runtime->last_key_usage = transitions[index].usage;
             runtime->last_key_down = transitions[index].down;
-            if (transitions[index].down) {
-                if (runtime->key_presses == UINT32_MAX) { return false; }
-                ++runtime->key_presses;
-            } else {
-                if (runtime->key_releases == UINT32_MAX) { return false; }
-                ++runtime->key_releases;
-            }
         }
         for (index = 0U; index < count; ++index) {
             if (!transitions[index].down) {
@@ -488,7 +499,7 @@ static bool m52_decode_report(struct xhci_addressed_device *device,
                                 true);
             }
         }
-    } else if (descriptor->protocol == 2U) {
+    } else if (descriptor->report_format == XHCI_HID_REPORT_BOOT_MOUSE) {
         struct usb_hid_mouse_report decoded;
         const uint8_t previous_buttons = runtime->last_pointer_buttons;
         if (!usb_hid_mouse_decode(report, (size_t)length, &decoded) ||
@@ -502,7 +513,8 @@ static bool m52_decode_report(struct xhci_addressed_device *device,
         ++runtime->pointer_reports;
         m53_publish_pointer_move((int32_t)decoded.dx, (int32_t)decoded.dy);
         m53_publish_pointer_buttons(previous_buttons, decoded.buttons);
-    } else if (descriptor->protocol == 0U) {
+    } else if (descriptor->report_format ==
+               XHCI_HID_REPORT_QEMU_ABSOLUTE_TABLET) {
         struct usb_hid_absolute_tablet_report decoded;
         const bool previous_valid = runtime->pointer_valid;
         const uint16_t previous_x = runtime->last_pointer_x;
@@ -525,7 +537,6 @@ static bool m52_decode_report(struct xhci_addressed_device *device,
     } else {
         return false;
     }
-    if (runtime->decoded_reports == UINT32_MAX) { return false; }
     ++runtime->decoded_reports;
     return true;
 }
@@ -565,25 +576,23 @@ static bool m52_complete_event(struct xhci_state *active,
                                        &buffer_virtual) ||
                 (runtime->completed_transfers == UINT32_MAX) ||
                 (UINT32_MAX - runtime->report_bytes < actual) ||
-                (device->transfer_events == UINT32_MAX)) {
+                (device->transfer_events == UINT32_MAX) ||
+                (short_packet && (runtime->short_packets == UINT32_MAX)) ||
+                (*completed == UINT32_MAX)) {
                 return false;
             }
             m52_barrier();
+            if (!m52_decode_report(device, endpoint_index,
+                                   (const uint8_t *)buffer_virtual, actual)) {
+                return false;
+            }
             runtime->transfer_outstanding = false;
             runtime->expected_trb_physical = 0ULL;
             runtime->last_report_length = actual;
             ++runtime->completed_transfers;
             runtime->report_bytes += actual;
-            if (short_packet) {
-                if (runtime->short_packets == UINT32_MAX) { return false; }
-                ++runtime->short_packets;
-            }
+            if (short_packet) { ++runtime->short_packets; }
             ++device->transfer_events;
-            if (!m52_decode_report(device, endpoint_index,
-                                   (const uint8_t *)buffer_virtual, actual)) {
-                return false;
-            }
-            if (*completed == UINT32_MAX) { return false; }
             ++*completed;
             return true;
         }

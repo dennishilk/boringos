@@ -36,6 +36,16 @@
 #define XHCI_USB_DESCRIPTOR_ENDPOINT 5U
 #define XHCI_USB_CLASS_HID 3U
 #define XHCI_USB_ENDPOINT_TRANSFER_INTERRUPT 3U
+#define XHCI_USB_HID_SUBCLASS_BOOT 1U
+#define XHCI_USB_HID_PROTOCOL_KEYBOARD 1U
+#define XHCI_USB_HID_PROTOCOL_MOUSE 2U
+
+enum xhci_hid_report_format {
+    XHCI_HID_REPORT_UNSUPPORTED = 0,
+    XHCI_HID_REPORT_BOOT_KEYBOARD,
+    XHCI_HID_REPORT_BOOT_MOUSE,
+    XHCI_HID_REPORT_QEMU_ABSOLUTE_TABLET
+};
 
 struct xhci_trb {
     uint64_t parameter;
@@ -59,7 +69,9 @@ struct xhci_hid_endpoint_descriptor {
     uint16_t max_packet;
     uint8_t interface_number;
     uint8_t alternate_setting;
+    uint8_t interface_subclass;
     uint8_t protocol;
+    enum xhci_hid_report_format report_format;
     uint8_t endpoint_address;
     uint8_t endpoint_id;
     uint8_t interval;
@@ -123,6 +135,7 @@ struct xhci_addressed_device {
     uint32_t short_packets;
     uint32_t evaluate_context_completions;
     uint32_t set_configuration_completions;
+    uint32_t set_protocol_completions;
     uint32_t configure_endpoint_completions;
     uint16_t ep0_producer_index;
     uint16_t ep0_max_packet;
@@ -231,9 +244,16 @@ bool xhci_usb_endpoint_id(uint8_t endpoint_address, uint8_t *endpoint_id);
 bool xhci_parse_hid_configuration(
     const uint8_t *bytes, uint16_t received, uint8_t speed,
     struct xhci_hid_configuration *configuration);
+bool xhci_select_supported_hid_configuration(
+    const struct xhci_hid_configuration *parsed,
+    uint16_t vendor_id, uint16_t product_id,
+    struct xhci_hid_configuration *supported);
 bool xhci_build_set_configuration_control_td(
     struct xhci_control_td *td, uint64_t ep0_ring_physical,
     uint16_t producer_index, bool producer_cycle, uint8_t configuration_value);
+bool xhci_build_hid_set_protocol_control_td(
+    struct xhci_control_td *td, uint64_t ep0_ring_physical,
+    uint16_t producer_index, bool producer_cycle, uint8_t interface_number);
 bool xhci_validate_no_data_control_event(
     const struct xhci_trb *event, uint64_t ep0_ring_physical,
     uint8_t expected_slot_id, uint64_t expected_status_trb_physical);

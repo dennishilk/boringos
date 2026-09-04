@@ -23,6 +23,8 @@
 #define XHCI_TRB_IDT (1U << 6)
 #define XHCI_TRB_DIRECTION_IN (1U << 16)
 #define XHCI_SETUP_TRT_IN_DATA (3U << 16)
+#define XHCI_QEMU_HID_VENDOR_ID 0x0627U
+#define XHCI_QEMU_HID_PRODUCT_ID 0x0001U
 
 static uint8_t read8(const volatile uint8_t *base, uint32_t offset) {
     return base[offset];
@@ -569,6 +571,7 @@ bool xhci_parse_hid_configuration(
     bool current_hid = false;
     uint8_t current_interface = 0U;
     uint8_t current_alternate = 0U;
+    uint8_t current_subclass = 0U;
     uint8_t current_protocol = 0U;
 
     if ((bytes == NULL) || (configuration == NULL) || (received < 9U) ||
@@ -596,6 +599,7 @@ bool xhci_parse_hid_configuration(
             if (descriptor_length < 9U) { return false; }
             current_interface = bytes[offset + 2U];
             current_alternate = bytes[offset + 3U];
+            current_subclass = bytes[offset + 6U];
             current_protocol = bytes[offset + 7U];
             current_hid = (current_alternate == 0U) &&
                           (bytes[offset + 5U] == XHCI_USB_CLASS_HID);
@@ -632,7 +636,15 @@ bool xhci_parse_hid_configuration(
             }
             endpoint.interface_number = current_interface;
             endpoint.alternate_setting = current_alternate;
+            endpoint.interface_subclass = current_subclass;
             endpoint.protocol = current_protocol;
+            if ((current_subclass == XHCI_USB_HID_SUBCLASS_BOOT) &&
+                (current_protocol == XHCI_USB_HID_PROTOCOL_KEYBOARD)) {
+                endpoint.report_format = XHCI_HID_REPORT_BOOT_KEYBOARD;
+            } else if ((current_subclass == XHCI_USB_HID_SUBCLASS_BOOT) &&
+                       (current_protocol == XHCI_USB_HID_PROTOCOL_MOUSE)) {
+                endpoint.report_format = XHCI_HID_REPORT_BOOT_MOUSE;
+            }
             endpoint.endpoint_id = endpoint_id;
             endpoint.interval = bytes[offset + 6U];
             parsed.endpoints[parsed.endpoint_count] = endpoint;
@@ -645,15 +657,62 @@ bool xhci_parse_hid_configuration(
     return true;
 }
 
-bool xhci_build_set_configuration_control_td(
+bool xhci_select_supported_hid_configuration(
+    const struct xhci_hid_configuration *parsed,
+    uint16_t vendor_id, uint16_t product_id,
+    struct xhci_hid_configuration *supported) {
+    struct xhci_hid_configuration selected = {0};
+    uint8_t index;
+
+    if ((parsed == NULL) || (supported == NULL) ||
+        (parsed->configuration_value == 0U) ||
+        (parsed->endpoint_count == 0U) ||
+        (parsed->endpoint_count > XHCI_MAX_HID_ENDPOINTS)) {
+        return false;
+    }
+    selected.configuration_value = parsed->configuration_value;
+    for (index = 0U; index < parsed->endpoint_count; ++index) {
+        struct xhci_hid_endpoint_descriptor endpoint =
+            parsed->endpoints[index];
+        enum xhci_hid_report_format format = XHCI_HID_REPORT_UNSUPPORTED;
+
+        /* Preserve only the exact usb-tablet fixture used by the established
+         * QEMU acceptance; protocol 0 alone never selects that decoder. */
+        if ((endpoint.interface_subclass == XHCI_USB_HID_SUBCLASS_BOOT) &&
+            (endpoint.protocol == XHCI_USB_HID_PROTOCOL_KEYBOARD)) {
+            format = XHCI_HID_REPORT_BOOT_KEYBOARD;
+        } else if ((endpoint.interface_subclass ==
+                    XHCI_USB_HID_SUBCLASS_BOOT) &&
+                   (endpoint.protocol == XHCI_USB_HID_PROTOCOL_MOUSE)) {
+            format = XHCI_HID_REPORT_BOOT_MOUSE;
+        } else if ((vendor_id == XHCI_QEMU_HID_VENDOR_ID) &&
+                   (product_id == XHCI_QEMU_HID_PRODUCT_ID) &&
+                   (endpoint.interface_number == 0U) &&
+                   (endpoint.alternate_setting == 0U) &&
+                   (endpoint.interface_subclass == 0U) &&
+                   (endpoint.protocol == 0U) &&
+                   (endpoint.endpoint_address == 0x81U) &&
+                   (endpoint.endpoint_id == 3U) &&
+                   (endpoint.max_packet == 8U)) {
+            format = XHCI_HID_REPORT_QEMU_ABSOLUTE_TABLET;
+        }
+        if (format == XHCI_HID_REPORT_UNSUPPORTED) { continue; }
+        endpoint.report_format = format;
+        selected.endpoints[selected.endpoint_count] = endpoint;
+        ++selected.endpoint_count;
+    }
+    *supported = selected;
+    return true;
+}
+
+static bool build_no_data_control_td(
     struct xhci_control_td *td, uint64_t ep0_ring_physical,
-    uint16_t producer_index, bool producer_cycle, uint8_t configuration_value) {
+    uint16_t producer_index, bool producer_cycle, const uint8_t setup[8]) {
     struct xhci_control_td built = {0};
-    uint8_t setup[8] = {0U, 9U, configuration_value, 0U, 0U, 0U, 0U, 0U};
     uint64_t parameter = 0ULL;
     uint8_t index;
     uint32_t cycle;
-    if ((td == NULL) || (configuration_value == 0U) ||
+    if ((td == NULL) || (setup == NULL) ||
         (ep0_ring_physical == 0ULL) ||
         ((ep0_ring_physical & 0x3fULL) != 0ULL) ||
         (producer_index > XHCI_EP0_RING_USABLE - 2U)) {
@@ -683,6 +742,26 @@ bool xhci_build_set_configuration_control_td(
     }
     *td = built;
     return true;
+}
+
+bool xhci_build_set_configuration_control_td(
+    struct xhci_control_td *td, uint64_t ep0_ring_physical,
+    uint16_t producer_index, bool producer_cycle, uint8_t configuration_value) {
+    const uint8_t setup[8] = {
+        0U, 9U, configuration_value, 0U, 0U, 0U, 0U, 0U
+    };
+    return (configuration_value != 0U) && build_no_data_control_td(
+        td, ep0_ring_physical, producer_index, producer_cycle, setup);
+}
+
+bool xhci_build_hid_set_protocol_control_td(
+    struct xhci_control_td *td, uint64_t ep0_ring_physical,
+    uint16_t producer_index, bool producer_cycle, uint8_t interface_number) {
+    const uint8_t setup[8] = {
+        0x21U, 0x0bU, 0U, 0U, interface_number, 0U, 0U, 0U
+    };
+    return build_no_data_control_td(td, ep0_ring_physical, producer_index,
+                                    producer_cycle, setup);
 }
 
 bool xhci_validate_no_data_control_event(

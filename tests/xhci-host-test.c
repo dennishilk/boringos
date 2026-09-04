@@ -99,6 +99,9 @@ static void keyboard_test(void) {
                                   12U, &count, &modifiers) &&
           (count == 1U) && (transitions[0].usage == 4U) &&
           !transitions[0].down, "key A release");
+    check(usb_hid_keyboard_decode(&state, b_only, sizeof(b_only), transitions,
+                                  12U, &count, &modifiers) && (count == 0U),
+          "valid unchanged keyboard report consumed without transition");
     check(!usb_hid_keyboard_decode(&state, rollover, sizeof(rollover),
                                    transitions, 12U, &count, &modifiers),
           "rollover rejection");
@@ -477,6 +480,8 @@ static void m51_configuration_test(void) {
     };
     struct xhci_hid_configuration parsed = {0};
     struct xhci_hid_configuration good;
+    struct xhci_hid_configuration supported;
+    struct xhci_hid_configuration generic;
     struct xhci_control_td td;
     struct xhci_control_td td_before;
     struct xhci_trb event;
@@ -490,7 +495,11 @@ static void m51_configuration_test(void) {
                                        3U, &parsed), "M51 HID descriptor walk");
     check((parsed.configuration_value == 1U) && (parsed.endpoint_count == 1U) &&
           (parsed.endpoints[0].interface_number == 0U) &&
+          (parsed.endpoints[0].interface_subclass ==
+           XHCI_USB_HID_SUBCLASS_BOOT) &&
           (parsed.endpoints[0].protocol == 1U) &&
+          (parsed.endpoints[0].report_format ==
+           XHCI_HID_REPORT_BOOT_KEYBOARD) &&
           (parsed.endpoints[0].endpoint_address == 0x81U) &&
           (parsed.endpoints[0].endpoint_id == 3U) &&
           (parsed.endpoints[0].max_packet == 8U) &&
@@ -498,6 +507,26 @@ static void m51_configuration_test(void) {
           (parsed.endpoints[0].xhci_interval == 9U),
           "M51 dynamic HID endpoint facts");
     good = parsed;
+    check(xhci_select_supported_hid_configuration(
+              &good, 0x1234U, 0x5678U, &supported) &&
+          (supported.endpoint_count == 1U) &&
+          (supported.endpoints[0].report_format ==
+           XHCI_HID_REPORT_BOOT_KEYBOARD),
+          "M61 Boot HID interface selected explicitly");
+    generic = good;
+    generic.endpoints[0].interface_subclass = 0U;
+    generic.endpoints[0].protocol = 0U;
+    generic.endpoints[0].report_format = XHCI_HID_REPORT_UNSUPPORTED;
+    check(xhci_select_supported_hid_configuration(
+              &generic, 0x1234U, 0x5678U, &supported) &&
+          (supported.endpoint_count == 0U),
+          "M61 generic protocol-0 HID is not a tablet");
+    check(xhci_select_supported_hid_configuration(
+              &generic, 0x0627U, 0x0001U, &supported) &&
+          (supported.endpoint_count == 1U) &&
+          (supported.endpoints[0].report_format ==
+           XHCI_HID_REPORT_QEMU_ABSOLUTE_TABLET),
+          "M61 explicit QEMU absolute-tablet contract preserved");
     check(xhci_usb_endpoint_id(0x81U, &value) && value == 3U &&
           xhci_usb_endpoint_id(0x02U, &value) && value == 4U &&
           !xhci_usb_endpoint_id(0x80U, &value) &&
@@ -565,6 +594,21 @@ static void m51_configuration_test(void) {
               &td, 0x20000ULL, XHCI_EP0_RING_USABLE - 1U, true, 1U) &&
           memcmp(&td, &td_before, sizeof(td)) == 0,
           "M51 no-data ring overflow rejected");
+
+    check(xhci_build_hid_set_protocol_control_td(
+              &td, 0x20000ULL, 9U, true, 5U),
+          "M61 HID SET_PROTOCOL(BOOT) TD");
+    check((td.setup.parameter == 0x0000000500000b21ULL) &&
+          (((td.setup.control >> 10U) & 0x3fU) ==
+           XHCI_TRB_TYPE_SETUP_STAGE) &&
+          (((td.setup.control >> 16U) & 3U) == 0U) &&
+          (td.data_physical == 0ULL) &&
+          (((td.status.control >> 10U) & 0x3fU) ==
+           XHCI_TRB_TYPE_STATUS_STAGE) &&
+          ((td.status.control & (1U << 16U)) != 0U) &&
+          ((td.status.control & (1U << 5U)) != 0U) &&
+          (td.next_producer_index == 11U) && td.next_producer_cycle,
+          "M61 HID SET_PROTOCOL request is 21/0B/0000/interface/0000");
 
     event.parameter = 0x20010ULL;
     event.status = (uint32_t)XHCI_COMPLETION_SUCCESS << 24U;

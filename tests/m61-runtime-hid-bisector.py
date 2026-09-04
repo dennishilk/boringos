@@ -54,6 +54,7 @@ assert poll.index("m60_rearm_hid_endpoints(active, mmio)") < poll.index("M61_RUN
 assert poll.index("xhci_event_dequeue_position(active") < poll.index("M61_RUNTIME_XHCI_POST_ANY_CYCLE_READY_EVENT")
 assert poll.index("type == XHCI_TRB_TYPE_PORT_STATUS_EVENT") < poll.index("M61_RUNTIME_XHCI_POST_PORT_STATUS_AT_HEAD") < poll.index("xhci_consume_port_status_event(active, &event)")
 assert poll.index("M61_RUNTIME_XHCI_POST_OTHER_EVENT_AT_HEAD") < poll.index("M61_RUNTIME_HID_POST_B_TRANSFER_EVENT") < poll.index("m60_consume_hid_event_mapped(active, &event, &completed)")
+assert poll.index("m60_consume_hid_event_mapped(active, &event, &completed)") < poll.index("xhci_event_dequeue_advance(active")
 assert poll.index("xhci_event_dequeue_advance(active") < poll.index("m52_mmio_write64(mmio, interrupter + 0x18U")
 legacy_poll=u[u.index("static bool m52_poll_hid_reports_limit("):u.index("bool xhci_poll_hid_reports(")]
 assert "m52_consumed_events" not in u
@@ -70,7 +71,26 @@ assert "uint64_t event_dequeue_count;" in xh
 assert "++state->event_dequeue_count;" in x
 complete=u[u.index("static bool m52_complete_event("):u.index("static bool m52_poll_hid_reports_limit(")]
 assert complete.index("xhci_validate_interrupt_transfer_event(") < complete.index("M61_RUNTIME_HID_POST_C_EVENT_VALIDATED") < complete.index("m52_decode_report(")
+assert complete.index("m52_decode_report(") < complete.index("runtime->transfer_outstanding = false;") < complete.index("runtime->expected_trb_physical = 0ULL;")
+assert complete.index("(*completed == UINT32_MAX)") < complete.index("m52_decode_report(")
 assert complete.count("return true;")==1
+decode=u[u.index("static bool m52_decode_report("):u.index("static bool m52_complete_event(")]
+assert "descriptor->report_format == XHCI_HID_REPORT_BOOT_KEYBOARD" in decode
+assert "descriptor->report_format == XHCI_HID_REPORT_BOOT_MOUSE" in decode
+assert "XHCI_HID_REPORT_QEMU_ABSOLUTE_TABLET" in decode
+assert "descriptor->protocol == 0U" not in decode
+configuration=a[a.index("static bool configure_hid_device("):a.index("static bool discover_device_descriptors(")]
+assert configuration.index("xhci_select_supported_hid_configuration(") < configuration.index("ep0_submit_set_configuration(") < configuration.index("configure_hid_boot_protocols(")
+protocol=a[a.index("static bool ep0_submit_hid_set_protocol("):a.index("static bool configure_hid_boot_protocols(")]
+assert "xhci_build_hid_set_protocol_control_td(" in protocol
+assert protocol.index("device->control_outstanding = true;") < protocol.index("event_dispatch_wait(XHCI_EXPECT_CONTROL_NODATA_STATUS") < protocol.index("++device->set_protocol_completions;")
+parser=x[x.index("bool xhci_parse_hid_configuration("):x.index("bool xhci_select_supported_hid_configuration(")]
+selector=x[x.index("bool xhci_select_supported_hid_configuration("):x.index("static bool build_no_data_control_td(")]
+assert "current_subclass = bytes[offset + 6U];" in parser
+assert "endpoint.interface_subclass = current_subclass;" in parser
+assert "XHCI_USB_HID_SUBCLASS_BOOT" in selector
+assert "XHCI_HID_REPORT_QEMU_ABSOLUTE_TABLET" in selector
+assert "if (format == XHCI_HID_REPORT_UNSUPPORTED) { continue; }" in selector
 push=i[i.index("static bool input_push("):i.index("bool boring_input_init(")]
 assert push.index("++input_state.count;") < push.index("M61_RUNTIME_HID_POST_D_INPUT_QUEUED") < push.index("return true;")
 assert "watch->events = (input.queued_events != 0U) ? BORING_EVENT_READ : 0U;" in e
@@ -83,6 +103,8 @@ print("POST_A=C9 POST_B=CA POST_C=CB POST_D=CC POST_E=CD")
 print("XHCI_ARMED=5E XHCI_READY=5F XHCI_PORT_HEAD=CE XHCI_OTHER_HEAD=CF")
 print("ACTIVE_M60_CA_PATH=PASS")
 print("GENERIC_EVENT_DEQUEUE_BEFORE_ERDP=PASS")
+print("HID_DECODE_BEFORE_ENDPOINT_COMMIT=PASS")
+print("BOOT_PROTOCOL_AND_PROTOCOL0_CLASSIFICATION=PASS")
 print("POST37_ARM_ORDER=PASS")
 print("POST_D_AFTER_INPUT_COUNT_INCREMENT=PASS")
 print("INPUT_READINESS_AND_OWNER=PASS")

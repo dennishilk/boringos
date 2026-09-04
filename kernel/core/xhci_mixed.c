@@ -9,11 +9,13 @@ static uint16_t read_le16(const uint8_t *bytes) {
 }
 
 enum xhci_hid_classification xhci_classify_hid_configuration(
-    const uint8_t *bytes, uint16_t received, uint8_t speed) {
+    const uint8_t *bytes, uint16_t received, uint8_t speed,
+    uint16_t vendor_id, uint16_t product_id) {
     uint16_t total;
     uint32_t offset = 0U;
     bool claims_hid = false;
     struct xhci_hid_configuration configuration;
+    struct xhci_hid_configuration supported;
 
     if ((bytes == NULL) || (received < 9U) ||
         (received > XHCI_DESCRIPTOR_BUFFER_BYTES) ||
@@ -52,8 +54,13 @@ enum xhci_hid_classification xhci_classify_hid_configuration(
     if (!claims_hid) { return XHCI_HID_CLASS_NOT_HID; }
 
     if (!xhci_parse_hid_configuration(bytes, received, speed,
-                                      &configuration)) {
+                                      &configuration) ||
+        !xhci_select_supported_hid_configuration(
+            &configuration, vendor_id, product_id, &supported)) {
         return XHCI_HID_CLASS_INVALID;
+    }
+    if (supported.endpoint_count == 0U) {
+        return XHCI_HID_CLASS_NOT_HID;
     }
     return XHCI_HID_CLASS_SUPPORTED;
 }

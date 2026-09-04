@@ -1040,6 +1040,93 @@ static bool ep0_submit_set_configuration(
     return true;
 }
 
+static bool ep0_submit_hid_set_protocol(
+    struct xhci_addressed_device *device, uint8_t interface_number) {
+    void *ep0_virtual = NULL;
+    volatile struct xhci_trb *ring;
+    struct xhci_control_td td;
+    struct xhci_dispatch_result result;
+    uint16_t start_index;
+    uint32_t doorbell;
+    if ((device == NULL) || !device->addressed || !device->descriptors_ready ||
+        device->control_outstanding || runtime_state.command_outstanding ||
+        (device->slot_id == 0U) ||
+        (device->set_protocol_completions == UINT32_MAX) ||
+        (active_state.capabilities.doorbell_offset > XHCI_MMIO_WINDOW_SIZE - 4U) ||
+        ((uint32_t)device->slot_id >
+         (XHCI_MMIO_WINDOW_SIZE - active_state.capabilities.doorbell_offset - 4U) / 4U) ||
+        !vmm_pmm_frame_to_hhdm(device->ep0_ring_physical, &ep0_virtual) ||
+        !xhci_build_hid_set_protocol_control_td(
+            &td, device->ep0_ring_physical, device->ep0_producer_index,
+            device->ep0_producer_cycle, interface_number)) {
+        return false;
+    }
+    ring = (volatile struct xhci_trb *)ep0_virtual;
+    start_index = device->ep0_producer_index;
+    ring[start_index] = td.setup;
+    ring[(uint16_t)(start_index + 1U)] = td.status;
+    if (start_index == XHCI_EP0_RING_USABLE - 2U) {
+        ring[XHCI_EP0_RING_USABLE].parameter = device->ep0_ring_physical;
+        ring[XHCI_EP0_RING_USABLE].status = 0U;
+        ring[XHCI_EP0_RING_USABLE].control =
+            ((uint32_t)XHCI_TRB_TYPE_LINK << XHCI_TRB_TYPE_SHIFT) |
+            XHCI_TRB_TOGGLE_CYCLE |
+            (device->ep0_producer_cycle ? XHCI_TRB_CYCLE : 0U);
+    }
+    device->expected_data_trb_physical = 0ULL;
+    device->expected_status_trb_physical = td.status_physical;
+    device->outstanding_length = 0U;
+    device->control_outstanding = true;
+    device->ep0_producer_index = td.next_producer_index;
+    device->ep0_producer_cycle = td.next_producer_cycle;
+    memory_barrier();
+    doorbell = active_state.capabilities.doorbell_offset +
+               ((uint32_t)device->slot_id * 4U);
+    mmio_write32(runtime_state.mmio, doorbell, 1U);
+    if (!event_dispatch_wait(XHCI_EXPECT_CONTROL_NODATA_STATUS, 0ULL,
+                             device, &result)) {
+        device->control_outstanding = false;
+        device->expected_status_trb_physical = 0ULL;
+        return false;
+    }
+    device->control_outstanding = false;
+    device->expected_status_trb_physical = 0ULL;
+    ++device->set_protocol_completions;
+    return true;
+}
+
+static bool configure_hid_boot_protocols(
+    struct xhci_addressed_device *device,
+    const struct xhci_hid_configuration *configuration) {
+    uint8_t index;
+    if ((device == NULL) || (configuration == NULL)) { return false; }
+    for (index = 0U; index < configuration->endpoint_count; ++index) {
+        const struct xhci_hid_endpoint_descriptor *endpoint =
+            &configuration->endpoints[index];
+        uint8_t previous;
+        bool already_selected = false;
+        if ((endpoint->report_format != XHCI_HID_REPORT_BOOT_KEYBOARD) &&
+            (endpoint->report_format != XHCI_HID_REPORT_BOOT_MOUSE)) {
+            continue;
+        }
+        for (previous = 0U; previous < index; ++previous) {
+            const struct xhci_hid_endpoint_descriptor *candidate =
+                &configuration->endpoints[previous];
+            if (((candidate->report_format == XHCI_HID_REPORT_BOOT_KEYBOARD) ||
+                 (candidate->report_format == XHCI_HID_REPORT_BOOT_MOUSE)) &&
+                (candidate->interface_number == endpoint->interface_number)) {
+                already_selected = true;
+                break;
+            }
+        }
+        if (!already_selected && !ep0_submit_hid_set_protocol(
+                device, endpoint->interface_number)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool command_configure_hid(struct xhci_addressed_device *device) {
     struct xhci_trb command;
     uint64_t command_physical;
@@ -1058,6 +1145,7 @@ static bool command_configure_hid(struct xhci_addressed_device *device) {
 }
 
 static bool configure_hid_device(struct xhci_addressed_device *device) {
+    struct xhci_hid_configuration parsed_configuration;
     struct xhci_hid_configuration configuration;
     uint64_t rings[XHCI_MAX_HID_ENDPOINTS] = {0ULL};
     void *input_virtual = NULL;
@@ -1070,8 +1158,15 @@ static bool configure_hid_device(struct xhci_addressed_device *device) {
         !descriptor_buffer_bytes(device, &descriptor_bytes) ||
         !xhci_parse_hid_configuration(
             descriptor_bytes, device->descriptors.configuration_length,
-            device->speed, &configuration) ||
-        !ep0_submit_set_configuration(device, configuration.configuration_value)) {
+            device->speed, &parsed_configuration) ||
+        !xhci_select_supported_hid_configuration(
+            &parsed_configuration, device->descriptors.vendor_id,
+            device->descriptors.product_id, &configuration)) {
+        return false;
+    }
+    if (configuration.endpoint_count == 0U) { return true; }
+    if (!ep0_submit_set_configuration(device, configuration.configuration_value) ||
+        !configure_hid_boot_protocols(device, &configuration)) {
         return false;
     }
     for (index = 0U; index < configuration.endpoint_count; ++index) {

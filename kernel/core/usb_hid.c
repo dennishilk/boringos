@@ -150,6 +150,7 @@ static enum m60_hid_classification m60_classify_hid_device(
     uint32_t offset = 0U;
     bool claims_hid = false;
     struct xhci_hid_configuration parsed;
+    struct xhci_hid_configuration supported;
 
     if ((device == NULL) || !device->addressed || !device->descriptors_ready ||
         (device->descriptor_buffer_physical == 0ULL) ||
@@ -191,9 +192,13 @@ static enum m60_hid_classification m60_classify_hid_device(
     }
     if (offset != total) { return M60_HID_INVALID; }
     if (!claims_hid) { return M60_HID_NOT_HID; }
-    if (!xhci_parse_hid_configuration(bytes, total, device->speed, &parsed)) {
+    if (!xhci_parse_hid_configuration(bytes, total, device->speed, &parsed) ||
+        !xhci_select_supported_hid_configuration(
+            &parsed, device->descriptors.vendor_id,
+            device->descriptors.product_id, &supported)) {
         return M60_HID_INVALID;
     }
+    if (supported.endpoint_count == 0U) { return M60_HID_NOT_HID; }
     return M60_HID_SUPPORTED;
 }
 

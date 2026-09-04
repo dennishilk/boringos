@@ -42,7 +42,8 @@ bool xhci_configure_hid_devices_mixed(struct xhci_state *state) {
         }
         classification = xhci_classify_hid_configuration(
             (const uint8_t *)descriptor_virtual,
-            device->descriptors.configuration_length, device->speed);
+            device->descriptors.configuration_length, device->speed,
+            device->descriptors.vendor_id, device->descriptors.product_id);
         if (classification == XHCI_HID_CLASS_INVALID) { return false; }
         if (classification == XHCI_HID_CLASS_SUPPORTED) {
             hid_original_index[hid_count] = index;
