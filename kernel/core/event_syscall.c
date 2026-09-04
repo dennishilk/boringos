@@ -20,6 +20,11 @@
 #include <boring/xhci.h>
 #endif
 
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+void boring_m61_note_event_query(struct process *process, uint32_t handle,
+                                 long result, uint64_t peer_pid);
+#endif
+
 /* No consumption, allocation or authority transfer occurs during a wait. */
 static bool user_copy(uintptr_t address, void *buffer, size_t size, bool out) {
     struct process *process = process_current();
@@ -314,5 +319,11 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
         !user_copy((uintptr_t)frame->rdi, watches, count * sizeof(watches[0]), true)) {
         result = -(long)BORING_SYSCALL_EFAULT;
     }
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+    if ((result >= 0L) && (frame->rdx == BORING_EVENT_QUERY) && (count == 1U)) {
+        boring_m61_note_event_query(process, watches[0].handle, result,
+                                    watches[0].peer_pid);
+    }
+#endif
     frame->result = (uint64_t)(int64_t)result;
 }
