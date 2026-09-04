@@ -296,6 +296,17 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
             }
             x86_64_interrupts_enable();
             task_yield();
+
+            /*
+             * The yield can run a peer that makes any watched object ready.
+             * Re-poll with interrupts disabled before deciding to sleep; the
+             * pre-yield poll/service result is not a valid sleep predicate.
+             */
+            x86_64_interrupts_disable();
+            result = poll_watches(process, watches, count);
+            if (result != 0L) {
+                break;
+            }
             if (!serviced) {
                 x86_64_enable_and_halt();
                 x86_64_interrupts_disable();

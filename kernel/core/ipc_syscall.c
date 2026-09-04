@@ -158,7 +158,7 @@ static void m61_note_service_accept(struct process *process,
     uint64_t peer_pid = 0ULL;
 
     if ((result != BORING_IPC_RESULT_OK) || m61_display_accept_posted ||
-        !m61_manager_request_posted || (process == NULL) ||
+        (process == NULL) ||
         !m61_process_name_ends_with(process, "boring-display") ||
         (boring_ipc_poll(process, endpoint, &events, &peer_pid) !=
          BORING_IPC_RESULT_OK) || (peer_pid != m61_wm_pid)) {

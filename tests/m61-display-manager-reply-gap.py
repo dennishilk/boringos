@@ -144,13 +144,40 @@ if "incoming_queue(connection, entry->side)->count != 0U" not in IPC:
     fail("accepted endpoint queue is not polled for READ")
 
 m54_yield = event.find("task_yield();")
-m54_halt = event.find("x86_64_enable_and_halt();", m54_yield)
+m54_repoll_disable = event.find("x86_64_interrupts_disable();", m54_yield)
+m54_repoll = event.find(
+    "result = poll_watches(process, watches, count);",
+    m54_repoll_disable,
+)
+m54_ready_gate = event.find("if (result != 0L) {", m54_repoll)
+m54_ready_break = event.find("break;", m54_ready_gate)
+m54_halt = event.find("x86_64_enable_and_halt();", m54_ready_break)
 m54_continue = event.find("continue;", m54_halt)
-if not (0 <= m54_yield < m54_halt < m54_continue < event.find(
-        "if (!arm_fd_watches", m54_continue)):
-    fail("M54 HID wait branch does not return to the next poll")
+if not (
+    0 <= m54_yield < m54_repoll_disable < m54_repoll <
+    m54_ready_gate < m54_ready_break < m54_halt < m54_continue <
+    event.find("if (!arm_fd_watches", m54_continue)
+):
+    fail("M54 event wait can sleep on readiness sampled before task_yield")
+if event.count("result = poll_watches(process, watches, count);") < 2:
+    fail("M54 event wait missing post-yield readiness re-poll")
 if "!timer_init(100U)" not in DESKTOP:
-    fail("M54 physical desktop lost its 100 Hz wake source")
+    fail("M54 physical desktop lost its 100 Hz fallback wake source")
+
+accept_witness = function_body(
+    IPC_SYSCALL,
+    "static void m61_note_service_accept(",
+)
+if "!m61_manager_request_posted" in accept_witness:
+    fail("C4 incorrectly depends on DISPLAY_MANAGER request timing")
+for token in (
+    'm61_process_name_ends_with(process, "boring-display")',
+    "boring_ipc_poll(process, endpoint, &events, &peer_pid)",
+    "(peer_pid != m61_wm_pid)",
+    "M61_DISPLAY_WM_ACCEPTED",
+):
+    if token not in accept_witness:
+        fail(f"C4 exact accepted-WM identity proof changed: {token}")
 
 if not ELF.is_file():
     fail("build/kernel.elf missing; run the M61 build first")
@@ -202,6 +229,8 @@ print("C5=DISPLAY_RECEIVED_EXACT_MANAGER_REQUEST")
 print("C6=CONTROL_VALIDATION_AND_ENDPOINT_PEER_PASSED")
 print("C7=WM_PROBE_AUTHENTICATION_PASSED")
 print("C8=CONTROL_REPLY_SEND_RETURNED_OK")
-print("M54_STALE_STATE_CAN_BLOCK_INDEFINITELY=NO")
+print("M54_POST_YIELD_REPOLL_BEFORE_HLT=PASS")
+print("M54_YIELD_READY_EVENT_NOT_LOST=PASS")
+print("C4_ACCEPT_WITNESS_TIMING_INDEPENDENT=PASS")
 print("DISPLAY_MANAGER_AUTHENTICATION_WEAKENED=NO")
 print("M61_MANAGER_REPLY_LINKED_POSTS=PASS")
