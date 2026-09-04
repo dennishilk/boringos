@@ -45,7 +45,7 @@ jobs:
           sh tests/m61-physical-handoff-bisector.sh
           env -u GITHUB_SHA sh tests/m61-build-usb-image.sh
           test "$(stat -c %s build/boringos-m61-usb.img)" = "100663296"
-          sha256sum -c build/boringos-m61-usb.img.sha256
+          (cd build && sha256sum -c boringos-m61-usb.img.sha256)
       - name: Stress real persistent desktop above eight processes
         run: python3 tests/m62-desktop-capacity-qemu.py
       - name: Prepare one M62 physical USB artifact
