@@ -96,6 +96,7 @@ handoff_wrapper = r'''void __wrap_boring_boot_console_desktop_handoff(void) {
     }
     M61_POST(M61_POST_DESKTOP_WITNESS_WRITTEN);
     boring_m61_runtime_hid_arm();
+    boring_m61_post37_witness((uint8_t)M61_POST37_ARM_RETURNED);
 }
 
 '''

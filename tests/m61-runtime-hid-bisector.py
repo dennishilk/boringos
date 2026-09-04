@@ -12,6 +12,7 @@ c=(R/"kernel/core/usb_hid.c").read_text()
 i=(R/"kernel/core/input.c").read_text()
 s=(R/"kernel/core/syscall.c").read_text()
 d=(R/"user/boring-display/server.c").read_text()
+b=(R/"tests/m61-build.sh").read_text()
 a=(R/"kernel/arch/x86_64/xhci.c").read_text()
 m=(R/"kernel/core/usb_mass_storage_impl.inc").read_text()
 x=(R/"kernel/core/xhci.c").read_text()
@@ -26,6 +27,24 @@ want={
  "M61_RUNTIME_HID_POST_D_INPUT_QUEUED":0xCC,
  "M61_RUNTIME_HID_POST_E_INPUT_READ":0xCD}
 assert codes==want, codes
+control={n:int(v,16) for n,v in re.findall(
+ r"^\s*(M61_POST37_[A-Z_]+)\s*=\s*0x([0-9a-fA-F]{2}),?$",h,re.M)}
+want_control={
+ "M61_POST37_ARM_RETURNED":0x20,
+ "M61_POST37_FRAMEBUFFER_PRESENT_RETURNED":0x21,
+ "M61_POST37_DISPLAY_PRESENT_RETURNED":0x22,
+ "M61_POST37_DISPLAY_EVENT_LOOP_REENTRY":0x23,
+ "M61_POST37_EVENT_SYSCALL_ENTRY":0x24,
+ "M61_POST37_INPUT_OWNER_TRUE":0x25,
+ "M61_POST37_FAST_READY":0x26,
+ "M61_POST37_READY_IPC_LISTENER":0x27,
+ "M61_POST37_READY_IPC_ENDPOINT":0x28,
+ "M61_POST37_READY_INPUT":0x29,
+ "M61_POST37_READY_FD":0x2A,
+ "M61_POST37_READY_IPC_HUP":0x2B,
+ "M61_POST37_POLL_ERROR":0x2C,
+ "M61_POST37_INPUT_OWNER_FALSE":0x2D}
+assert control==want_control, control
 observations={n:int(v,16) for n,v in re.findall(
  r"^\s*(M61_RUNTIME_XHCI_POST_[A-Z_]+)\s*=\s*0x([0-9a-fA-F]{2}),?$",h,re.M)}
 want_observations={
@@ -37,15 +56,47 @@ assert observations==want_observations, observations
 claimed=set(range(0x30,0x5E))|set(range(0x61,0xC9))|set(range(0xD0,0xFF))
 assert len(set(codes.values())|set(observations.values()))==9
 assert not((set(codes.values())|set(observations.values()))&claimed)
+assert not(set(control.values()) & (claimed | set(codes.values()) | set(observations.values())))
+assert list(control.values()) == list(range(0x20,0x2E))
 assert "code != (uint8_t)(m61_runtime_hid_highest + 1U)" in t
 assert "void boring_m61_runtime_xhci_observe(uint8_t code)" in t
 assert "m61_runtime_hid_highest >=\n         (uint8_t)M61_RUNTIME_HID_POST_B_TRANSFER_EVENT" in t
-assert "M61_POST(M61_POST_DESKTOP_WITNESS_WRITTEN);\n    boring_m61_runtime_hid_arm();" in w
+assert "m61_post37_observed = 0U;" in t
+post37=t[t.index("void boring_m61_post37_witness("):t.index("void boring_m61_runtime_hid_post(")]
+assert "!m61_runtime_hid_armed" in post37
+assert "m61_runtime_hid_highest >=\n         (uint8_t)M61_RUNTIME_HID_POST_A_SERVICE_LOOP" in post37
+assert "m61_post37_observed & bit" in post37 and "m61_post37_observed | bit" in post37
+assert post37.count("x86_64_out8(")==1
+assert "M61_POST(M61_POST_DESKTOP_WITNESS_WRITTEN);\n    boring_m61_runtime_hid_arm();\n    boring_m61_post37_witness((uint8_t)M61_POST37_ARM_RETURNED);" in w
+fb_return=t[t.index("enum boring_framebuffer_user_result __wrap_boring_framebuffer_user_present("):t.index("static uint8_t framebuffer_fault_post_code(")]
+assert fb_return.index("boring_boot_console_desktop_handoff();") < fb_return.index("M61_POST37_FRAMEBUFFER_PRESENT_RETURNED") < fb_return.index("return result;",fb_return.index("M61_POST37_FRAMEBUFFER_PRESENT_RETURNED"))
+assert "-DBORING_M61_PHYSICAL_BREADCRUMBS=1" in b
 
+dispatch=e[e.index("void x86_64_syscall_dispatch_events("):]
+assert "boring_m61_runtime_hid_is_armed() &&\n            m61_post37_is_display_process(process)" in dispatch
+assert dispatch.index("M61_POST37_EVENT_SYSCALL_ENTRY") < dispatch.index("result = poll_watches(process, watches, count);")
+assert "m61_post37_classify_ready(process, watches, count, result);" in dispatch
+assert "M61_POST37_POLL_ERROR" in dispatch
+assert "!boring_m61_runtime_hid_is_armed() &&\n        (result >= 0L) && (frame->rdx == BORING_EVENT_QUERY)" in dispatch
+ready=e[e.index("static void m61_post37_classify_ready("):e.index("/* No consumption, allocation or authority transfer occurs during a wait. */")]
+for token in ("M61_POST37_FAST_READY","M61_POST37_READY_IPC_HUP",
+              "M61_POST37_READY_IPC_LISTENER","M61_POST37_READY_IPC_ENDPOINT",
+              "M61_POST37_READY_INPUT","M61_POST37_READY_FD"):
+    assert token in ready
+assert "watch->peer_pid == 0ULL" in ready
 owner=e[e.index("if (m54_is_input_owner(process)) {"):e.index("        if (!arm_fd_watches",e.index("if (m54_is_input_owner(process)) {"))]
-assert owner.index("M61_RUNTIME_HID_POST_A_SERVICE_LOOP") < owner.index("xhci_service_hid_reports(&usb_state)")
+assert owner.index("M61_POST37_INPUT_OWNER_TRUE") < owner.index("M61_RUNTIME_HID_POST_A_SERVICE_LOOP") < owner.index("xhci_service_hid_reports(&usb_state)")
+assert "M61_POST37_INPUT_OWNER_FALSE" in owner
 assert "task_yield();" in owner and owner.count("result = poll_watches(process, watches, count);")>=1
 assert "x86_64_enable_and_halt();" not in owner
+present_probe=d[d.index("static void m61_post37_present_return_probe("):d.index("static void present(")]
+assert "BORING_EVENT_QUERY" in present_probe and "boring_event_wait(&watch, 1U" in present_probe
+loop_probe=d[d.index("static void m61_post37_loop_reentry_probe("):d.index("static void present(")]
+assert loop_probe.count("BORING_EVENT_IPC") == 2 and "boring_event_wait(watches, 2U" in loop_probe
+control_flow=d[d.index("static void control("):d.index("static void receive(")]
+assert control_flow.index("present();") < control_flow.index("control_reply(endpoint, status, r->surface);") < control_flow.index("m61_post37_present_return_probe(endpoint);")
+main_flow=d[d.index("int boring_main(void) {"):]
+assert main_flow.index("m61_post37_loop_reentry_probe((uint32_t)listener);") < main_flow.index("boring_event_wait(watches, count, 0U)")
 
 submit=u[u.index("static bool m52_submit_endpoint("):u.index("static uint32_t m53_usage_keycode")]
 assert submit.index("runtime->expected_trb_physical = trb_physical;") < submit.index("runtime->transfer_outstanding = true;") < submit.rindex("return true;")
@@ -106,5 +157,18 @@ print("GENERIC_EVENT_DEQUEUE_BEFORE_ERDP=PASS")
 print("HID_DECODE_BEFORE_ENDPOINT_COMMIT=PASS")
 print("BOOT_PROTOCOL_AND_PROTOCOL0_CLASSIFICATION=PASS")
 print("POST37_ARM_ORDER=PASS")
+print("POST37_ARM_RETURN_WITNESS=PASS")
+print("FRAMEBUFFER_PRESENT_RETURN_WITNESS=PASS")
+print("DISPLAY_PRESENT_RETURN_WITNESS=PASS")
+print("DISPLAY_EVENT_LOOP_REENTRY_WITNESS=PASS")
+print("POST37_EVENT_SYSCALL_ENTRY_WITNESS=PASS")
+print("POST37_INPUT_OWNER_TRUE_WITNESS=PASS")
+print("FAST_READY_CLASSIFICATION=PASS")
+print("POST37_WITNESSES_CANDIDATE_GATED=PASS")
+print("POST37_WITNESSES_ONE_SHOT=PASS")
+print("C9_CAN_SUPERSEDE_CONTROL_FLOW_BISECTOR=PASS")
+print("EXISTING_C9_CA_CB_CC_CD_PRESERVED=PASS")
+print("XHCI_EVENT_DEQUEUE_FIX_PRESERVED=PASS")
+print("PHYSICAL_HID_REPORT_HANDLING_FIX_PRESERVED=PASS")
 print("POST_D_AFTER_INPUT_COUNT_INCREMENT=PASS")
 print("INPUT_READINESS_AND_OWNER=PASS")

@@ -21,6 +21,7 @@
 #endif
 
 #if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+#include <boring/framebuffer_user.h>
 #include <boring/m61_runtime_hid.h>
 #define M61_RUNTIME_HID_WITNESS(code) \
     boring_m61_runtime_hid_post((uint8_t)(code))
@@ -28,6 +29,47 @@ void boring_m61_note_event_query(struct process *process, uint32_t handle,
                                  long result, uint64_t peer_pid);
 #else
 #define M61_RUNTIME_HID_WITNESS(code) do { } while (0)
+#endif
+
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+static bool m61_post37_is_display_process(const struct process *process) {
+    struct boring_framebuffer_user_stats framebuffer;
+    return (process != NULL) &&
+           boring_framebuffer_user_get_stats(&framebuffer) &&
+           framebuffer.claimed && (framebuffer.owner_pid == process->pid);
+}
+
+static void m61_post37_classify_ready(
+    struct process *process, struct boring_event_watch *watches,
+    size_t count, long result) {
+    size_t index;
+
+    if ((result <= 0L) || !boring_m61_runtime_hid_is_armed() ||
+        !m61_post37_is_display_process(process)) {
+        return;
+    }
+    boring_m61_post37_witness((uint8_t)M61_POST37_FAST_READY);
+    for (index = 0U; index < count; ++index) {
+        const struct boring_event_watch *watch = &watches[index];
+        if (watch->events == 0U) { continue; }
+        if (watch->kind == BORING_EVENT_IPC) {
+            if ((watch->events & BORING_EVENT_HUP) != 0U) {
+                boring_m61_post37_witness(
+                    (uint8_t)M61_POST37_READY_IPC_HUP);
+            } else if ((watch->events & BORING_EVENT_READ) != 0U) {
+                boring_m61_post37_witness((uint8_t)(
+                    watch->peer_pid == 0ULL ?
+                    M61_POST37_READY_IPC_LISTENER :
+                    M61_POST37_READY_IPC_ENDPOINT));
+            }
+        } else if (watch->kind == BORING_EVENT_INPUT) {
+            boring_m61_post37_witness((uint8_t)M61_POST37_READY_INPUT);
+        } else if (watch->kind == BORING_EVENT_FD) {
+            boring_m61_post37_witness((uint8_t)M61_POST37_READY_FD);
+        }
+        break;
+    }
+}
 #endif
 
 /* No consumption, allocation or authority transfer occurs during a wait. */
@@ -255,13 +297,48 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
         return;
     }
     process = process_current();
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+    {
+        const bool m61_post37_display =
+            boring_m61_runtime_hid_is_armed() &&
+            m61_post37_is_display_process(process);
+        if (m61_post37_display && (frame->rdx == BORING_EVENT_QUERY)) {
+            boring_m61_post37_witness((uint8_t)(
+                ((count == 1U) && (watches[0].kind == BORING_EVENT_IPC)) ?
+                M61_POST37_DISPLAY_PRESENT_RETURNED :
+                M61_POST37_DISPLAY_EVENT_LOOP_REENTRY));
+        } else if (m61_post37_display) {
+            boring_m61_post37_witness(
+                (uint8_t)M61_POST37_EVENT_SYSCALL_ENTRY);
+        }
+    }
+#endif
     for (;;) {
         x86_64_interrupts_disable();
         result = poll_watches(process, watches, count);
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+        if ((frame->rdx != BORING_EVENT_QUERY) &&
+            boring_m61_runtime_hid_is_armed() &&
+            m61_post37_is_display_process(process)) {
+            if (result > 0L) {
+                m61_post37_classify_ready(process, watches, count, result);
+            } else if (result < 0L) {
+                boring_m61_post37_witness(
+                    (uint8_t)M61_POST37_POLL_ERROR);
+            }
+        }
+#endif
         if ((result != 0L) || (frame->rdx == BORING_EVENT_QUERY)) { break; }
 #if defined(BORING_M54_USB_ONLY_DESKTOP)
         if (m54_is_input_owner(process)) {
             struct xhci_state usb_state = {0};
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+            if (boring_m61_runtime_hid_is_armed() &&
+                m61_post37_is_display_process(process)) {
+                boring_m61_post37_witness(
+                    (uint8_t)M61_POST37_INPUT_OWNER_TRUE);
+            }
+#endif
             M61_RUNTIME_HID_WITNESS(M61_RUNTIME_HID_POST_A_SERVICE_LOOP);
             const bool serviced = xhci_service_hid_reports(&usb_state);
             static bool m54_initial_service_witness;
@@ -314,6 +391,13 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
              */
             continue;
         }
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+        if (boring_m61_runtime_hid_is_armed() &&
+            m61_post37_is_display_process(process)) {
+            boring_m61_post37_witness(
+                (uint8_t)M61_POST37_INPUT_OWNER_FALSE);
+        }
+#endif
 #endif
         if (!arm_fd_watches(process, watches, count)) {
             result = -(long)BORING_SYSCALL_EINVAL;
@@ -332,7 +416,9 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
         result = -(long)BORING_SYSCALL_EFAULT;
     }
 #if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
-    if ((result >= 0L) && (frame->rdx == BORING_EVENT_QUERY) && (count == 1U)) {
+    if (!boring_m61_runtime_hid_is_armed() &&
+        (result >= 0L) && (frame->rdx == BORING_EVENT_QUERY) &&
+        (count == 1U)) {
         boring_m61_note_event_query(process, watches[0].handle, result,
                                     watches[0].peer_pid);
     }

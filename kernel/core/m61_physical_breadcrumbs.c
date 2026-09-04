@@ -53,14 +53,38 @@ enum m61_handoff_gap_post_code {
     x86_64_out8((uint16_t)M61_HANDOFF_POST_PORT, (uint8_t)(code))
 
 static bool m61_runtime_hid_armed;
+static uint16_t m61_post37_observed;
 static uint8_t m61_runtime_hid_highest;
 static uint8_t m61_runtime_xhci_observed;
 
 void boring_m61_runtime_hid_arm(void) {
+    m61_post37_observed = 0U;
     m61_runtime_hid_highest =
         (uint8_t)((uint8_t)M61_RUNTIME_HID_POST_A_SERVICE_LOOP - 1U);
     m61_runtime_xhci_observed = 0U;
     m61_runtime_hid_armed = true;
+}
+
+bool boring_m61_runtime_hid_is_armed(void) {
+    return m61_runtime_hid_armed;
+}
+
+void boring_m61_post37_witness(uint8_t code) {
+    uint8_t offset;
+    uint16_t bit;
+
+    if (!m61_runtime_hid_armed ||
+        (m61_runtime_hid_highest >=
+         (uint8_t)M61_RUNTIME_HID_POST_A_SERVICE_LOOP) ||
+        (code < (uint8_t)M61_POST37_ARM_RETURNED) ||
+        (code > (uint8_t)M61_POST37_INPUT_OWNER_FALSE)) {
+        return;
+    }
+    offset = (uint8_t)(code - (uint8_t)M61_POST37_ARM_RETURNED);
+    bit = (uint16_t)(1U << offset);
+    if ((m61_post37_observed & bit) != 0U) { return; }
+    m61_post37_observed = (uint16_t)(m61_post37_observed | bit);
+    x86_64_out8((uint16_t)M61_HANDOFF_POST_PORT, code);
 }
 
 void boring_m61_runtime_hid_post(uint8_t code) {
@@ -909,6 +933,8 @@ enum boring_framebuffer_user_result __wrap_boring_framebuffer_user_present(
         serial_stage(stage_number, '+', label);
         M61_HANDOFF_POST(M61_HANDOFF_POST_SERIAL_RETURNED);
         boring_boot_console_desktop_handoff();
+        boring_m61_post37_witness(
+            (uint8_t)M61_POST37_FRAMEBUFFER_PRESENT_RETURNED);
         return result;
     }
 

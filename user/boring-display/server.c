@@ -13,7 +13,28 @@ static uint32_t peers[DISPLAY_PEERS];
 static uint32_t composition;
 static uint8_t *pixels;
 static bool input_pending, manager_seen;
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+static bool m61_post37_present_return_probed;
+static bool m61_post37_loop_reentry_pending;
+#endif
 int boring_main(void);
+
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+static void m61_post37_present_return_probe(uint32_t endpoint) {
+    struct boring_event_watch watch = {
+        BORING_EVENT_IPC, endpoint, 0U, 0U, 0ULL
+    };
+    (void)boring_event_wait(&watch, 1U, BORING_EVENT_QUERY);
+}
+
+static void m61_post37_loop_reentry_probe(uint32_t listener) {
+    struct boring_event_watch watches[2] = {
+        {BORING_EVENT_IPC, listener, 0U, 0U, 0ULL},
+        {BORING_EVENT_IPC, listener, 0U, 0U, 0ULL}
+    };
+    (void)boring_event_wait(watches, 2U, BORING_EVENT_QUERY);
+}
+#endif
 
 static void present(void) {
     if (!display_managed_compose(&managed, &core, pixels, (size_t)core.byte_size) ||
@@ -96,6 +117,9 @@ static void old_request(uint32_t endpoint, const struct boring_display_request *
 
 static void control(uint32_t endpoint, const struct display_control *r) {
     uint32_t status = display_control_validate(r, sizeof(*r));
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+    bool m61_post37_present_completed = false;
+#endif
     long peer = boring_endpoint_peer(endpoint);
     if ((status == BORING_DISPLAY_STATUS_OK) && (peer <= 0L)) { forget_peer(endpoint); return; }
     if (status == BORING_DISPLAY_STATUS_OK) {
@@ -120,10 +144,22 @@ static void control(uint32_t endpoint, const struct display_control *r) {
             status = BORING_DISPLAY_STATUS_ACCESS;
         } else {
             status = display_managed_control(&managed, &core, endpoint, (uint64_t)peer, r);
-            if ((status == BORING_DISPLAY_STATUS_OK) && (r->type == DISPLAY_PRESENT)) { present(); }
+            if ((status == BORING_DISPLAY_STATUS_OK) && (r->type == DISPLAY_PRESENT)) {
+                present();
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+                m61_post37_present_completed = true;
+#endif
+            }
         }
     }
     control_reply(endpoint, status, r->surface);
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+    if (m61_post37_present_completed && !m61_post37_present_return_probed) {
+        m61_post37_present_return_probe(endpoint);
+        m61_post37_present_return_probed = true;
+        m61_post37_loop_reentry_pending = true;
+    }
+#endif
 }
 
 static void receive(uint32_t endpoint) {
@@ -205,6 +241,12 @@ int boring_main(void) {
         if (manager_seen && (managed.manager_endpoint == 0U) && (live == 0U)) {
             desktop_say("display: session drained; exiting with claims\n"); boring_exit(0);
         }
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+        if (m61_post37_loop_reentry_pending) {
+            m61_post37_loop_reentry_probe((uint32_t)listener);
+            m61_post37_loop_reentry_pending = false;
+        }
+#endif
         if (boring_event_wait(watches, count, 0U) <= 0L) { desktop_fail("display event wait"); }
         for (index = 0U; index < count; ++index) {
             if (watches[index].events == 0U) { continue; }
