@@ -83,8 +83,12 @@ def main():
         "-device", "qemu-xhci,id=xhci,p3=0",
         "-device", "usb-storage,bus=xhci.0,port=1,drive=m62usb,removable=on,bootindex=1",
         "-device", "usb-kbd,bus=xhci.0,port=2,id=m62kbd",
+        "-device", "usb-tablet,bus=xhci.0,port=3,id=m62tablet",
         "-boot", "menu=off,strict=on", "-vga", "std", "-display", "none",
         "-serial", f"file:{serial}", "-monitor", "none", "-qmp", "stdio",
+        "-trace", "enable=usb_xhci_slot_address",
+        "-trace", "enable=usb_xhci_xfer_start",
+        "-trace", "enable=usb_xhci_xfer_success",
         "-no-reboot", "-no-shutdown",
     ]
     (OUT / "qemu-command.json").write_text(json.dumps(command, indent=2) + "\n")
