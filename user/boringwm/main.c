@@ -10,7 +10,10 @@ static struct wm_core wm;
 static uint32_t display, peers[WM_PEERS], frame_number;
 static uint64_t display_pid;
 static struct display_event deferred_input;
-static bool has_input, ever_managed;
+static bool has_input;
+#ifdef BORING_BOUNDED_DESKTOP_ACCEPTANCE
+static bool ever_managed;
+#endif
 int boring_main(void);
 
 static struct display_event display_rpc(const struct display_control *request) {
@@ -121,7 +124,12 @@ static void request(uint32_t endpoint) {
                 (void)wm_remove(&wm, endpoint, token);
                 wm.focus = wm_lookup(&wm, old_focus) != NULL ? old_focus : 0U;
                 status = BORING_WM_ACCESS; token = 0U;
-            } else { changed = true; ever_managed = true; }
+            } else {
+                changed = true;
+#ifdef BORING_BOUNDED_DESKTOP_ACCEPTANCE
+                ever_managed = true;
+#endif
+            }
         }
     } else if (status == BORING_WM_OK) {
         token = data.m.token; status = wm_authority(&wm, endpoint, token);
@@ -240,7 +248,9 @@ int boring_main(void) {
         struct boring_event_watch watches[WM_PEERS + 2U] = {0};
         size_t count = 0U, index;
         if (has_input) { struct display_event message = deferred_input; has_input = false; handle_input(&message); }
+#ifdef BORING_BOUNDED_DESKTOP_ACCEPTANCE
         if (ever_managed && (wm.count == 0U)) { desktop_say("wm: session empty; clean exit\n"); boring_exit(0); }
+#endif
         watches[count++] = (struct boring_event_watch){BORING_EVENT_IPC, (uint32_t)listener, 0U, 0U, 0ULL};
         watches[count++] = (struct boring_event_watch){BORING_EVENT_IPC, display, 0U, 0U, 0ULL};
         for (index = 0U; index < WM_PEERS; ++index) {

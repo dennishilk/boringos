@@ -149,6 +149,16 @@ jobs:
           grep -Fqx 'NORMAL_FRAMEBUFFER_RUNTIME_PROVEN=YES' "$desktop"
           grep -Fqx 'BOOT_CONSOLE_OVERLAY_ABSENT=YES' "$desktop"
           grep -Fqx 'EXTRA_EARLY_PRESENT_ADDED=NO' "$desktop"
+          lifecycle=build/m61-bootable-persistent-usb/first-boot/desktop-lifecycle-proof.txt
+          grep -Fqx 'M61_EMPTY_DESKTOP_PERSISTS_AFTER_LAST_WINDOW=YES' "$lifecycle"
+          grep -Fqx 'M61_WM_DOES_NOT_EXIT_ON_ZERO_CLIENTS=YES' "$lifecycle"
+          grep -Fqx 'M61_DISPLAY_DOES_NOT_DRAIN_ON_NORMAL_EMPTY_DESKTOP=YES' "$lifecycle"
+          grep -Fqx 'MANUAL_TERMINAL_RELAUNCH_AFTER_EMPTY=YES' "$lifecycle"
+          grep -Fqx 'MANUAL_EDIT_RELAUNCH_AFTER_EMPTY=YES' "$lifecycle"
+          grep -Fqx 'BORING_FILES_INCLUDED_IN_M61_ROOT=YES' "$lifecycle"
+          grep -Fqx 'SUPER_F_LAUNCHER_TARGET_PRESENT=YES' "$lifecycle"
+          source_proof=build/m61-empty-desktop-verifier.txt
+          grep -Fqx 'HISTORICAL_M38_DRAIN_ACCEPTANCE_PRESERVED=YES' "$source_proof"
           printf '%s\n' 'SERIAL_TRACE_PROVEN=YES'
           printf '%s\n' 'DIAGNOSTIC_FRAMEBUFFER_WRITES_BYPASSED=YES'
           printf '%s\n' 'SAFE_GRAPHICAL_BOOT_CONSOLE_PROVEN=YES'
@@ -182,6 +192,7 @@ jobs:
             build/boringos-m61-usb.img.sha256
             build/m61-usb-image.txt
             build/m61-qemu-twin-proof.txt
+            build/m61-empty-desktop-verifier.txt
             build/m61-bundle/geometry.txt
             build/m61-bundle/boringfsck-before.txt
             build/m61-bundle/serial-failopen-host.txt

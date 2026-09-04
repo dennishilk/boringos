@@ -10,9 +10,10 @@ HOST_CFLAGS='-std=c11 -fno-builtin -fno-tree-loop-distribute-patterns -Wall -Wex
 rm -rf build/user
 make TEST_MODE=m36-desktop RUNTIME_USER_CPPFLAGS="$USER_CPPFLAGS" \
     boringfsck user-boringfetch user-shell user-boring-terminal user-boringwm \
-    user-boring-edit user-cat
+    user-boring-edit user-cat user-boring-files
 
-python3 tests/m61-empty-desktop-verifier.py
+python3 tests/m61-empty-desktop-verifier.py | \
+    tee build/m61-empty-desktop-verifier.txt
 strings build/user/boringwm.elf | \
     grep -Fqx 'wm: Super+Return spawned /bin/boring-terminal'
 if strings build/user/boringwm.elf | \
@@ -20,7 +21,17 @@ if strings build/user/boringwm.elf | \
     echo 'M61 build FAILED: automatic terminal spawn string remains' >&2
     exit 1
 fi
+if strings build/user/boringwm.elf | grep -Fq 'wm: session empty; clean exit'; then
+    echo 'M61 build FAILED: bounded WM drain leaked into persistent runtime' >&2
+    exit 1
+fi
+if strings build/user/boring-display-wm.elf | \
+    grep -Fq 'display: session drained; exiting with claims'; then
+    echo 'M61 build FAILED: bounded display drain leaked into persistent runtime' >&2
+    exit 1
+fi
 printf '%s\n' 'M61 exact BoringWM ELF empty desktop/manual launcher: PASS'
+sh tests/files-build-audit.sh
 
 mkdir -p build/user/boring-init-desktop
 cc $USER_CFLAGS -c user/boring-init/desktop.c \
@@ -34,7 +45,7 @@ ld -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 
 BUILDER=build/boringfs-m61-bundle
 cc -Ilibs/boringfs/include $HOST_CFLAGS \
-   tests/boringfs-m39-bundle.c libs/boringfs/codec.c libs/boringfs/validate.c \
+   tests/boringfs-m40-bundle.c libs/boringfs/codec.c libs/boringfs/validate.c \
    -o "$BUILDER"
 OUT=build/m61-bundle
 rm -rf "$OUT"
@@ -42,22 +53,30 @@ mkdir -p "$OUT"
 "$BUILDER" "$OUT/boringos-root.img" build/user/boringfetch.elf \
     build/user/boring-terminal.elf build/user/boring-shell.elf \
     build/user/boring-display-wm.elf build/user/boringwm.elf \
-    build/user/boring-edit.elf build/user/cat.elf > "$OUT/geometry.txt"
+    build/user/boring-edit.elf build/user/cat.elf \
+    build/user/boring-files.elf > "$OUT/geometry.txt"
 build/boringfsck "$OUT/boringos-root.img" > "$OUT/boringfsck-before.txt"
 grep -Fqx 'Status: VALID' "$OUT/boringfsck-before.txt"
 build/boringfsck --cat /bin/boring-terminal "$OUT/boringos-root.img" \
     > "$OUT/boring-terminal.embedded.elf"
 build/boringfsck --cat /bin/boring-shell "$OUT/boringos-root.img" \
     > "$OUT/boring-shell.embedded.elf"
+build/boringfsck --cat /bin/boring-files "$OUT/boringos-root.img" \
+    > "$OUT/boring-files.embedded.elf"
 test -s "$OUT/boring-terminal.embedded.elf"
 test -s "$OUT/boring-shell.embedded.elf"
+test -s "$OUT/boring-files.embedded.elf"
 cmp -s build/user/boring-terminal.elf "$OUT/boring-terminal.embedded.elf"
 cmp -s build/user/boring-shell.elf "$OUT/boring-shell.embedded.elf"
+cmp -s build/user/boring-files.elf "$OUT/boring-files.embedded.elf"
 TERMINAL_ELF_MAGIC=$(od -An -tx1 -N4 "$OUT/boring-terminal.embedded.elf" | tr -d ' \n')
 SHELL_ELF_MAGIC=$(od -An -tx1 -N4 "$OUT/boring-shell.embedded.elf" | tr -d ' \n')
+FILES_ELF_MAGIC=$(od -An -tx1 -N4 "$OUT/boring-files.embedded.elf" | tr -d ' \n')
 test "$TERMINAL_ELF_MAGIC" = 7f454c46
 test "$SHELL_ELF_MAGIC" = 7f454c46
-printf '%s\n' 'M61 BoringFS /bin/boring-terminal + /bin/boring-shell ELF identity: PASS'
+test "$FILES_ELF_MAGIC" = 7f454c46
+printf '%s\n' 'M61 BoringFS terminal/shell/files ELF identity: PASS'
+printf '%s\n' 'BORING_FILES_INCLUDED_IN_M61_ROOT=YES'
 if build/boringfsck --cat /persist/m61.txt "$OUT/boringos-root.img" \
     >"$OUT/preseed-check.stdout" 2>"$OUT/preseed-check.stderr"; then
     echo 'M61 build FAILED: /persist/m61.txt is pre-seeded' >&2

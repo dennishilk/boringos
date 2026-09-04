@@ -20,7 +20,8 @@ ld -nostdlib -static --build-id=none -z max-page-size=0x1000 \
    build/user/runtime/ipc.o build/user/boring-init-desktop/main.o \
    -o build/user/boring-init-desktop.elf
 
-cc ${USER_CFLAGS} -DBORING_M38_WM_DEATH_ACCEPTANCE \
+cc ${USER_CFLAGS} -DBORING_BOUNDED_DESKTOP_ACCEPTANCE=1 \
+    -DBORING_M38_WM_DEATH_ACCEPTANCE \
     -c user/boringwm/main.c -o build/user/boringwm-m38/main.o
 ld ${USER_LDFLAGS} \
     build/user/runtime/entry.o build/user/runtime/syscall.o \
@@ -29,7 +30,8 @@ ld ${USER_LDFLAGS} \
     build/user/boringwm/core.o build/user/boringwm-m38/main.o \
     -o build/user/boringwm-m38-death.elf
 
-cc ${USER_CFLAGS} -DBORING_M38_DISPLAY_DEATH_ACCEPTANCE \
+cc ${USER_CFLAGS} -DBORING_BOUNDED_DESKTOP_ACCEPTANCE=1 \
+    -DBORING_M38_DISPLAY_DEATH_ACCEPTANCE \
     -c user/boring-display/server.c -o build/user/boring-display-m38/server.o
 ld ${USER_LDFLAGS} \
     build/user/runtime/entry.o build/user/runtime/syscall.o \

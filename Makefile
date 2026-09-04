@@ -276,6 +276,9 @@ USER_ASFLAGS := -ffreestanding -fno-pic -fno-pie -m64 -mno-red-zone
 USER_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 	-T user/elf-smoke/linker.ld
 RUNTIME_USER_CPPFLAGS := -Iuser/runtime/include -Ikernel/include
+ifneq ($(filter $(TEST_MODE),m35-wm m35-wm-death m36-desktop),)
+RUNTIME_USER_CPPFLAGS += -DBORING_BOUNDED_DESKTOP_ACCEPTANCE=1
+endif
 RUNTIME_USER_CFLAGS := -std=c11 -ffreestanding -fno-stack-protector \
 	-fno-pic -fno-pie -fno-builtin -fno-asynchronous-unwind-tables \
 	-fno-unwind-tables -m64 -mno-red-zone -mno-80387 -mno-mmx \
@@ -284,6 +287,7 @@ RUNTIME_USER_CFLAGS := -std=c11 -ffreestanding -fno-stack-protector \
 RUNTIME_USER_ASFLAGS := -ffreestanding -fno-pic -fno-pie -m64 -mno-red-zone
 RUNTIME_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 	-T user/runtime-smoke/linker.ld
+RUNTIME_USER_CPPFLAGS_STAMP := $(USER_BUILD_DIR)/.cppflags
 INIT_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 	-T user/boring-init/linker.ld
 SHELL_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
@@ -967,15 +971,23 @@ $(USER_BUILD_DIR)/runtime/event.o: user/runtime/event.c user/runtime/include/bor
 	@mkdir -p $(dir $@)
 	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
 
-$(USER_BUILD_DIR)/boringwm/%.o: user/boringwm/%.c user/boringwm/core.h user/runtime/include/boring/wm.h user/runtime/include/boring/display_control.h user/runtime/include/boring/desktop_log.h
+.PHONY: check-runtime-user-cppflags
+check-runtime-user-cppflags:
+
+$(RUNTIME_USER_CPPFLAGS_STAMP): check-runtime-user-cppflags
+	@mkdir -p $(dir $@)
+	@printf '%s\n' '$(RUNTIME_USER_CPPFLAGS)' > $@.tmp
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv $@.tmp $@; fi
+
+$(USER_BUILD_DIR)/boringwm/%.o: user/boringwm/%.c user/boringwm/core.h user/runtime/include/boring/wm.h user/runtime/include/boring/display_control.h user/runtime/include/boring/desktop_log.h $(RUNTIME_USER_CPPFLAGS_STAMP)
 	@mkdir -p $(dir $@)
 	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
 
-$(USER_BUILD_DIR)/boringwm/death.o: user/boringwm/main.c user/boringwm/core.h user/runtime/include/boring/wm.h user/runtime/include/boring/display_control.h user/runtime/include/boring/desktop_log.h
+$(USER_BUILD_DIR)/boringwm/death.o: user/boringwm/main.c user/boringwm/core.h user/runtime/include/boring/wm.h user/runtime/include/boring/display_control.h user/runtime/include/boring/desktop_log.h $(RUNTIME_USER_CPPFLAGS_STAMP)
 	@mkdir -p $(dir $@)
 	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -DBORING_WM_DEATH_ACCEPTANCE -c $< -o $@
 
-$(USER_BUILD_DIR)/boring-display/%.o: user/boring-display/%.c user/boring-display/managed.h user/boring-display/core.h user/boring-display/wallpaper.h user/runtime/include/boring/display_control.h user/runtime/include/boring/desktop_log.h
+$(USER_BUILD_DIR)/boring-display/%.o: user/boring-display/%.c user/boring-display/managed.h user/boring-display/core.h user/boring-display/wallpaper.h user/runtime/include/boring/display_control.h user/runtime/include/boring/desktop_log.h $(RUNTIME_USER_CPPFLAGS_STAMP)
 	@mkdir -p $(dir $@)
 	$(CC) $(RUNTIME_USER_CPPFLAGS) $(RUNTIME_USER_CFLAGS) -c $< -o $@
 

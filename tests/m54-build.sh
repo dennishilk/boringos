@@ -4,7 +4,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "${ROOT}"
 
 rm -rf build/user
-make TEST_MODE=m36-desktop RUNTIME_USER_CPPFLAGS='-Iuser/runtime/include -Ikernel/include -DBORING_M54_USB_ONLY_DESKTOP=1' user-boringwm user-boring-terminal user-boringfetch
+make TEST_MODE=m36-desktop RUNTIME_USER_CPPFLAGS='-Iuser/runtime/include -Ikernel/include -DBORING_BOUNDED_DESKTOP_ACCEPTANCE=1 -DBORING_M54_USB_ONLY_DESKTOP=1' user-boringwm user-boring-terminal user-boringfetch
 mkdir -p build/user/boring-init-desktop
 cc -Iuser/runtime/include -Ikernel/include -std=c11 -ffreestanding \
    -fno-stack-protector -fno-pic -fno-pie -fno-builtin \

@@ -5,12 +5,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WM = (ROOT / "user/boringwm/main.c").read_text()
 WM_CORE = (ROOT / "user/boringwm/core.c").read_text()
+DISPLAY = (ROOT / "user/boring-display/server.c").read_text()
 BREADCRUMBS = (ROOT / "kernel/core/m61_physical_breadcrumbs.c").read_text()
 BOOT_HEADER = (ROOT / "kernel/include/boring/boot_console.h").read_text()
 BOOT_CONSOLE = (ROOT / "kernel/core/boot_console.c").read_text()
 BUILD = (ROOT / "tests/m61-build.sh").read_text()
 POST = (ROOT / "tests/m61-physical-trace-kernel.sh").read_text()
 GRAPHICS = (ROOT / "kernel/core/graphics.c").read_text()
+MAKEFILE = (ROOT / "Makefile").read_text()
+M38_BUILD = (ROOT / "tests/m38-build.sh").read_text()
 
 
 def fail(message):
@@ -54,6 +57,44 @@ for token in (
         fail(f"manual launcher mapping changed: {token}")
 if 'wm: Super+Return spawned /bin/boring-terminal' not in WM:
     fail("Super+Return terminal success witness was removed")
+if 'wm: Super+E spawned /bin/boring-edit' not in WM:
+    fail("Super+E editor success witness was removed")
+if 'wm: Super+F spawned /bin/boring-files' not in WM:
+    fail("Super+F files success witness was removed")
+
+drain_gate = "BORING_BOUNDED_DESKTOP_ACCEPTANCE"
+wm_drain = 'if (ever_managed && (wm.count == 0U)) { desktop_say("wm: session empty; clean exit\\n"); boring_exit(0); }'
+wm_gate = WM.find(f"#ifdef {drain_gate}", WM.find("int boring_main(void)"))
+wm_exit = WM.find(wm_drain, wm_gate)
+wm_end = WM.find("#endif", wm_exit)
+if not (0 <= wm_gate < wm_exit < wm_end):
+    fail("zero-client WM exit is not isolated behind the bounded acceptance gate")
+display_drain = 'if (manager_seen && (managed.manager_endpoint == 0U) && (live == 0U)) {'
+display_main = DISPLAY.find("int boring_main(void)")
+display_gate = DISPLAY.find(f"#ifdef {drain_gate}", display_main)
+display_exit = DISPLAY.find(display_drain, display_gate)
+display_end = DISPLAY.find("#endif", display_exit)
+if not (0 <= display_main < display_gate < display_exit < display_end):
+    fail("empty display drain is not isolated behind the bounded acceptance gate")
+if f"RUNTIME_USER_CPPFLAGS += -D{drain_gate}=1" not in MAKEFILE:
+    fail("historical desktop builds lost their bounded-session acceptance gate")
+for token in ("RUNTIME_USER_CPPFLAGS_STAMP", "check-runtime-user-cppflags"):
+    if token not in MAKEFILE:
+        fail(f"desktop acceptance flag rebuild contract missing: {token}")
+if M38_BUILD.count(f"-D{drain_gate}=1") != 2:
+    fail("M38 death variants do not preserve the bounded-session drain gate")
+if drain_gate in BUILD:
+    fail("M61 runtime must not enable the historical bounded-session gate")
+
+for token in (
+    "user-boring-files",
+    "tests/boringfs-m40-bundle.c",
+    "build/user/boring-files.elf",
+    "build/boringfsck --cat /bin/boring-files",
+    "BORING_FILES_INCLUDED_IN_M61_ROOT=YES",
+):
+    if token not in BUILD:
+        fail(f"M61 boring-files packaging contract missing: {token}")
 
 wm_main = function_body(WM, "int boring_main(void)")
 manager = wm_main.find("hello.version = BORING_DISPLAY_CONTROL_VERSION; hello.type = DISPLAY_MANAGER;")
@@ -136,3 +177,11 @@ print("DESKTOP_PRESENT_NO_LONGER_REQUIRES_TERMINAL=YES")
 print("POST_6F_STILL_REQUIRES_REAL_PRESENT_SUCCESS=YES")
 print("POST_90_91_UNCHANGED=YES")
 print("OBSOLETE_WM_TERMINAL_BISECTOR_REMOVED=YES")
+print("M61_EMPTY_DESKTOP_PERSISTS_AFTER_LAST_WINDOW=YES")
+print("M61_WM_DOES_NOT_EXIT_ON_ZERO_CLIENTS=YES")
+print("M61_DISPLAY_DOES_NOT_DRAIN_ON_NORMAL_EMPTY_DESKTOP=YES")
+print("HISTORICAL_M38_DRAIN_ACCEPTANCE_PRESERVED=YES")
+print("MANUAL_TERMINAL_RELAUNCH_AFTER_EMPTY=YES")
+print("MANUAL_EDIT_RELAUNCH_AFTER_EMPTY=YES")
+print("BORING_FILES_INCLUDED_IN_M61_ROOT=YES")
+print("SUPER_F_LAUNCHER_TARGET_PRESENT=YES")

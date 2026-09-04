@@ -148,7 +148,8 @@ def run_session(name, expect_existing):
             if any(marker in current for marker in (
                     "M37 desktop FAILED", "boring-init: FAILED", "Fatal exception",
                     "syscall fatal", "display: FAILED", "wm: FAILED",
-                    "boring-terminal: FAILED", "m61-root: FAIL CLOSED")):
+                    "boring-terminal: FAILED", "boring-edit FAILED",
+                    "boring-files FAILED", "m61-root: FAIL CLOSED")):
                 raise RuntimeError(f"guest failure while waiting for {description}\n{current[-16000:]}")
             if vm.poll() is not None:
                 raise RuntimeError(f"QEMU exited ({vm.returncode}) while waiting for {description}")
@@ -504,20 +505,94 @@ def run_session(name, expect_existing):
             frame = cat_persisted()
             settled_capture(frame)
 
+        before_empty = frames()[-1]["frame"]
         key("q", super_key=True)
         witness("boring-terminal: graceful cleanup complete")
-        witness("boring-init: desktop session drained")
-        witness("m61-root: BOT/read/write/flush=")
-        witness("m61-root: canonical HID dropped=0")
-        witness("M61 USB root persistence flush complete.")
-        witness("M54 USB-only graphical desktop acceptance passed.")
-        witness("M37 native desktop session startup acceptance passed.")
+        empty = latest(0, before_empty)
+
+        current = text()
+        forbidden_exit = (
+            "wm: session empty; clean exit",
+            "display: manager disconnected; display survives",
+            "display: session drained; exiting with claims",
+            "boring-init: desktop WM exited status",
+            "boring-init: desktop display exited status",
+            "boring-init: desktop session state DRAINING",
+        )
+        present = [marker for marker in forbidden_exit if marker in current]
+        if present:
+            raise RuntimeError(
+                f"normal empty desktop entered a bounded drain path: {present!r}")
+
+        terminal_launches = current.count(
+            "wm: Super+Return spawned /bin/boring-terminal")
+        terminal_sources = current.count(
+            "boring-spawn: VFS executable source /bin/boring-terminal")
+        terminal_ready = current.count(
+            "boring-terminal: Ring3 managed client + PTY + boring-shell ready")
+        key("ret", super_key=True)
+        witness("wm: Super+Return spawned /bin/boring-terminal",
+                terminal_launches + 1)
+        witness("boring-spawn: VFS executable source /bin/boring-terminal",
+                terminal_sources + 1)
+        witness("boring-terminal: Ring3 managed client + PTY + boring-shell ready",
+                terminal_ready + 1)
+        relaunched_terminal = latest(1, empty["frame"])
+
+        terminal_cleanup = text().count(
+            "boring-terminal: graceful cleanup complete")
+        key("q", super_key=True)
+        witness("boring-terminal: graceful cleanup complete",
+                terminal_cleanup + 1)
+        after_terminal = latest(0, relaunched_terminal["frame"])
+
+        editor_launches = text().count(
+            "wm: Super+E spawned /bin/boring-edit")
+        editor_sources = text().count(
+            "boring-spawn: VFS executable source /bin/boring-edit")
+        editor_ready = text().count("boring-edit: Ring3 managed client ready")
+        key("e", super_key=True)
+        witness("wm: Super+E spawned /bin/boring-edit", editor_launches + 1)
+        witness("boring-spawn: VFS executable source /bin/boring-edit",
+                editor_sources + 1)
+        witness("boring-edit: Ring3 managed client ready", editor_ready + 1)
+        relaunched_editor = latest(1, after_terminal["frame"])
+
+        editor_cleanup = text().count("boring-edit: graceful cleanup complete")
+        key("q", super_key=True)
+        witness("boring-edit: graceful cleanup complete", editor_cleanup + 1)
+        after_editor = latest(0, relaunched_editor["frame"])
+
+        files_launches = text().count(
+            "wm: Super+F spawned /bin/boring-files")
+        files_sources = text().count(
+            "boring-spawn: VFS executable source /bin/boring-files")
+        files_ready = text().count("boring-files: Ring3 managed client ready")
+        key("f", super_key=True)
+        witness("wm: Super+F spawned /bin/boring-files", files_launches + 1)
+        witness("boring-spawn: VFS executable source /bin/boring-files",
+                files_sources + 1)
+        witness("boring-files: Ring3 managed client ready", files_ready + 1)
+        latest(1, after_editor["frame"])
+
         final_text = text()
         if ("m61-root: FAIL CLOSED" in final_text or "VirtIO block:" in final_text or
                 "m57-desktop:" in final_text or "AHCI:" in final_text):
             raise RuntimeError("M61 final log contains a forbidden root path")
+        present = [marker for marker in forbidden_exit if marker in final_text]
+        if present:
+            raise RuntimeError(
+                f"persistent desktop exited during relaunch acceptance: {present!r}")
+        (out / "desktop-lifecycle-proof.txt").write_text(
+            "M61_EMPTY_DESKTOP_PERSISTS_AFTER_LAST_WINDOW=YES\n"
+            "M61_WM_DOES_NOT_EXIT_ON_ZERO_CLIENTS=YES\n"
+            "M61_DISPLAY_DOES_NOT_DRAIN_ON_NORMAL_EMPTY_DESKTOP=YES\n"
+            "MANUAL_TERMINAL_RELAUNCH_AFTER_EMPTY=YES\n"
+            "MANUAL_EDIT_RELAUNCH_AFTER_EMPTY=YES\n"
+            "BORING_FILES_INCLUDED_IN_M61_ROOT=YES\n"
+            "SUPER_F_LAUNCHER_TARGET_PRESENT=YES\n")
         (out / "SUCCESS.txt").write_text(
-            f"M61 {name} same-USB UEFI/root desktop SUCCESS after real flush\n")
+            f"M61 {name} same-USB UEFI/root persistent desktop SUCCESS\n")
     except Exception as exc:
         if vm.poll() is None:
             try:

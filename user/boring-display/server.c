@@ -230,17 +230,25 @@ int boring_main(void) {
     present(); desktop_say("display: M35 service and M31 input ready\n");
     for (;;) {
         struct boring_event_watch watches[DISPLAY_PEERS + 2U] = {0};
-        size_t count = 0U, index, live = 0U;
+        size_t count = 0U, index;
+#ifdef BORING_BOUNDED_DESKTOP_ACCEPTANCE
+        size_t live = 0U;
+#endif
         watches[count++] = (struct boring_event_watch){BORING_EVENT_IPC, (uint32_t)listener, 0U, 0U, 0ULL};
         if (!input_pending) { watches[count++] = (struct boring_event_watch){BORING_EVENT_INPUT, 0U, 0U, 0U, 0ULL}; }
         for (index = 0U; index < DISPLAY_PEERS; ++index) {
             if (peers[index] != 0U) {
-                watches[count++] = (struct boring_event_watch){BORING_EVENT_IPC, peers[index], 0U, 0U, 0ULL}; ++live;
+                watches[count++] = (struct boring_event_watch){BORING_EVENT_IPC, peers[index], 0U, 0U, 0ULL};
+#ifdef BORING_BOUNDED_DESKTOP_ACCEPTANCE
+                ++live;
+#endif
             }
         }
+#ifdef BORING_BOUNDED_DESKTOP_ACCEPTANCE
         if (manager_seen && (managed.manager_endpoint == 0U) && (live == 0U)) {
             desktop_say("display: session drained; exiting with claims\n"); boring_exit(0);
         }
+#endif
 #if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
         if (m61_post37_loop_reentry_pending) {
             m61_post37_loop_reentry_probe((uint32_t)listener);

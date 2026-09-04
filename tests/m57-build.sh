@@ -3,7 +3,7 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
-USER_CPPFLAGS='-Iuser/runtime/include -Ikernel/include -DBORING_M54_USB_ONLY_DESKTOP=1'
+USER_CPPFLAGS='-Iuser/runtime/include -Ikernel/include -DBORING_BOUNDED_DESKTOP_ACCEPTANCE=1 -DBORING_M54_USB_ONLY_DESKTOP=1'
 USER_CFLAGS='-Iuser/runtime/include -Ikernel/include -std=c11 -ffreestanding -fno-stack-protector -fno-pic -fno-pie -fno-builtin -fno-asynchronous-unwind-tables -fno-unwind-tables -m64 -mno-red-zone -mno-80387 -mno-mmx -mno-sse -mno-sse2 -O2 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes'
 
 rm -rf build/user
