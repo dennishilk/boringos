@@ -15,6 +15,7 @@
 #include <boring/heap.h>
 #include <boring/input.h>
 #include <boring/ipc.h>
+#include <boring/m61_runtime_hid.h>
 #include <boring/io.h>
 #include <boring/irq.h>
 #include <boring/pci_inventory.h>
@@ -50,6 +51,26 @@ enum m61_handoff_gap_post_code {
 
 #define M61_HANDOFF_POST(code) \
     x86_64_out8((uint16_t)M61_HANDOFF_POST_PORT, (uint8_t)(code))
+
+static bool m61_runtime_hid_armed;
+static uint8_t m61_runtime_hid_highest;
+
+void boring_m61_runtime_hid_arm(void) {
+    m61_runtime_hid_highest =
+        (uint8_t)((uint8_t)M61_RUNTIME_HID_POST_A_SERVICE_LOOP - 1U);
+    m61_runtime_hid_armed = true;
+}
+
+void boring_m61_runtime_hid_post(uint8_t code) {
+    if (!m61_runtime_hid_armed ||
+        (code < (uint8_t)M61_RUNTIME_HID_POST_A_SERVICE_LOOP) ||
+        (code > (uint8_t)M61_RUNTIME_HID_POST_E_INPUT_READ) ||
+        (code != (uint8_t)(m61_runtime_hid_highest + 1U))) {
+        return;
+    }
+    m61_runtime_hid_highest = code;
+    x86_64_out8((uint16_t)M61_HANDOFF_POST_PORT, code);
+}
 
 enum m61_framebuffer_fault_post_code {
     M61_FRAMEBUFFER_FAULT_PAGE = 0x30,

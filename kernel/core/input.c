@@ -4,6 +4,9 @@
 
 #include <boring/cpu.h>
 #include <boring/input.h>
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+#include <boring/m61_runtime_hid.h>
+#endif
 
 struct boring_input_state {
     struct boring_input_event queue[BORING_INPUT_QUEUE_CAPACITY];
@@ -79,6 +82,10 @@ static bool input_push(const struct boring_input_event *event) {
            (size_t)BORING_INPUT_QUEUE_CAPACITY;
     input_state.queue[tail] = *event;
     ++input_state.count;
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+    boring_m61_runtime_hid_post(
+        (uint8_t)M61_RUNTIME_HID_POST_D_INPUT_QUEUED);
+#endif
     input_state.owner_waiting = false;
     return true;
 }

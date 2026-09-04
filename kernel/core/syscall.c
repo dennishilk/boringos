@@ -10,6 +10,9 @@
 #include <boring/fd.h>
 #include <boring/framebuffer.h>
 #include <boring/input.h>
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+#include <boring/m61_runtime_hid.h>
+#endif
 #include <boring/process.h>
 #include <boring/pci_inventory.h>
 #include <boring/pmm.h>
@@ -2047,6 +2050,10 @@ static uint64_t syscall_input_read(uint64_t user_events, uint64_t max_events) {
             return syscall_error(syscall_input_error(result));
         }
         if (count != 0U) {
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+            boring_m61_runtime_hid_post(
+                (uint8_t)M61_RUNTIME_HID_POST_E_INPUT_READ);
+#endif
             break;
         }
         if (!boring_input_wait_prepare(process->pid)) {

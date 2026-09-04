@@ -21,6 +21,7 @@
 #endif
 
 #if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+#include <boring/m61_runtime_hid.h>
 void boring_m61_note_event_query(struct process *process, uint32_t handle,
                                  long result, uint64_t peer_pid);
 #endif
@@ -265,6 +266,10 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
 #if defined(BORING_M54_USB_ONLY_DESKTOP)
         if (m54_is_input_owner(process)) {
             struct xhci_state usb_state = {0};
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+            boring_m61_runtime_hid_post(
+                (uint8_t)M61_RUNTIME_HID_POST_A_SERVICE_LOOP);
+#endif
             const bool serviced = xhci_service_hid_reports(&usb_state);
             static bool m54_initial_service_witness;
             if (!m54_initial_service_witness) {

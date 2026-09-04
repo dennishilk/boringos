@@ -33,6 +33,7 @@ text = replace_once(
     "#include <boring/framebuffer_user.h>\n#include <boring/heap.h>\n",
     "#include <boring/framebuffer_user.h>\n"
     "#include <boring/graphics.h>\n"
+    "#include <boring/m61_runtime_hid.h>\n"
     "#include <boring/heap.h>\n",
     "graphics include",
 )
@@ -94,6 +95,7 @@ handoff_wrapper = r'''void __wrap_boring_boot_console_desktop_handoff(void) {
         return;
     }
     M61_POST(M61_POST_DESKTOP_WITNESS_WRITTEN);
+    boring_m61_runtime_hid_arm();
 }
 
 '''

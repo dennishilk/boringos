@@ -115,6 +115,7 @@ make TEST_MODE=m36-desktop \
 
 nm build/kernel.elf | grep -Fq 'boring_m61_physical_breadcrumbs_enabled'
 python3 tests/m61-display-manager-reply-gap.py
+python3 tests/m61-runtime-hid-bisector.py
 grep -Fqx 'timeout: 5' limine-m61-usb.conf
 grep -Fqx 'mouse: no' limine-m61-usb.conf
 printf '%s\n' 'M61 physical framebuffer breadcrumbs: ENABLED'

@@ -5,6 +5,9 @@
 #include <boring/cpu.h>
 #include <boring/event_syscall.h>
 #include <boring/input.h>
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+#include <boring/m61_runtime_hid.h>
+#endif
 #include <boring/pmm.h>
 #include <boring/vmm.h>
 #endif
@@ -565,6 +568,10 @@ static bool m52_complete_event(struct xhci_state *active,
                     &actual, &short_packet)) {
                 continue;
             }
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+            boring_m61_runtime_hid_post(
+                (uint8_t)M61_RUNTIME_HID_POST_C_EVENT_VALIDATED);
+#endif
             if ((actual == 0U) ||
                 !vmm_pmm_frame_to_hhdm(runtime->report_buffer_physical,
                                        &buffer_virtual) ||
@@ -677,6 +684,12 @@ static bool m52_poll_hid_reports_limit(struct xhci_state *state,
              ((uint64_t)event_index * XHCI_TRB_SIZE)) | (1ULL << 3U));
         type = (uint8_t)((event.control >> M52_TRB_TYPE_SHIFT) &
                          M52_TRB_TYPE_MASK);
+#if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
+        if (type == M52_TRB_TYPE_TRANSFER_EVENT) {
+            boring_m61_runtime_hid_post(
+                (uint8_t)M61_RUNTIME_HID_POST_B_TRANSFER_EVENT);
+        }
+#endif
         if (type == M52_TRB_TYPE_PORT_STATUS_EVENT) {
             goto out;
         }
