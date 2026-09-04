@@ -109,10 +109,16 @@ event = function_body(
 )
 copy_back = event.find(
     "!user_copy((uintptr_t)frame->rdi, watches, count * sizeof(watches[0]), true)")
-query_gate = event.find("(frame->rdx == BORING_EVENT_QUERY) && (count == 1U)")
+runtime_mask = event.find(
+    "!boring_m61_runtime_hid_is_armed()", copy_back)
+query_gate = event.find("(frame->rdx == BORING_EVENT_QUERY)", copy_back)
+query_count = event.find("(count == 1U)", query_gate)
 auth_note = event.find("boring_m61_note_event_query(")
 result_store = event.rfind("frame->result =")
-if not (0 <= copy_back < query_gate < auth_note < result_store):
+if not (
+    0 <= copy_back < runtime_mask < query_gate < query_count <
+    auth_note < result_store
+):
     fail("probe-auth witness is not after successful query copy-back")
 
 control = function_body(DISPLAY, "static void control(")
