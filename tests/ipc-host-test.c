@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <boring/heap.h>
 #include <boring/ipc.h>
 #include <boring/event_abi.h>
 #include <boring/process.h>
@@ -14,6 +15,15 @@
 static unsigned retained_references;
 static bool receiver_handle_table_full;
 static uint32_t next_receiver_handle = 0x1000U;
+
+void *kmalloc(size_t size) {
+    return malloc(size);
+}
+
+bool kfree(void *ptr) {
+    free(ptr);
+    return true;
+}
 
 static void fail(const char *message) {
     (void)fprintf(stderr, "ipc-host-test: FAIL: %s\n", message);
