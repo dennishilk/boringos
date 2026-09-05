@@ -17,7 +17,7 @@
 #define M64_USB_MAX_BLOCK 4096U
 #define M64_USB_INPUT_PID 64ULL
 #define M64_USB_EXPECTED_EVENTS 7U
-#define M64_USB_POLL_LIMIT 12U
+#define M64_USB_SERVICE_LIMIT 4096U
 
 static uint8_t before[M64_USB_MAX_BLOCK];
 static uint8_t after[M64_USB_MAX_BLOCK];
@@ -110,6 +110,8 @@ static void verify_cross_controller_input(uint8_t keyboard_index,
     struct boring_input_event events[BORING_INPUT_READ_MAX];
     size_t count = 0U;
     uint32_t attempt;
+    bool keyboard_progress = false;
+    bool pointer_progress = false;
     bool saw_key = false;
     bool saw_move = false;
     bool saw_down = false;
@@ -123,7 +125,7 @@ static void verify_cross_controller_input(uint8_t keyboard_index,
     serial_write_string(
         "M64 multi-controller HID ready; inject real USB input now.\n");
 
-    for (attempt = 0U; attempt < M64_USB_POLL_LIMIT; ++attempt) {
+    for (attempt = 0U; attempt < M64_USB_SERVICE_LIMIT; ++attempt) {
         struct xhci_state *keyboard = xhci_get_controller(keyboard_index);
         struct xhci_state *pointer = xhci_get_controller(pointer_index);
         if (!boring_input_get_stats(&stats) ||
@@ -134,18 +136,24 @@ static void verify_cross_controller_input(uint8_t keyboard_index,
             (stats.modifiers == 0U)) {
             break;
         }
-        if (keyboard == NULL) {
-            fail("keyboard controller lookup");
+        if ((keyboard == NULL) || (pointer == NULL)) {
+            fail("cross-controller HID registry");
         }
-        if (!xhci_poll_hid_reports(keyboard, 1U)) {
-            fail("keyboard controller HID Interrupt-IN");
+
+        /*
+         * Multi-controller HID must be serviced cooperatively. A blocking
+         * poll of controller A before controller B would leave B unarmed
+         * while QMP is already delivering pointer reports.
+         */
+        if (xhci_service_hid_reports(keyboard)) {
+            keyboard_progress = true;
         }
-        if (pointer == NULL) {
-            fail("pointer controller lookup");
+        if (xhci_service_hid_reports(pointer)) {
+            pointer_progress = true;
         }
-        if (!xhci_poll_hid_reports(pointer, 1U)) {
-            fail("pointer controller HID Interrupt-IN");
-        }
+    }
+    if (!keyboard_progress || !pointer_progress) {
+        fail("cross-controller HID Interrupt-IN");
     }
     if (!boring_input_get_stats(&stats) ||
         (stats.queued_events != M64_USB_EXPECTED_EVENTS) ||

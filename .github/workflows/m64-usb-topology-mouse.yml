@@ -1,17 +1,54 @@
 name: M64 USB topology mouse
+
 on:
   push:
     branches: [agent/m64-usb-topology-mouse]
   workflow_dispatch:
+
 permissions:
   contents: read
+
 jobs:
-  mixed-hid-diagnostic:
+  phase-a-foundation:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4
       - name: Install focused QEMU dependencies
         run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 xorriso
-      - name: Mixed controller HID diagnostic only
+      - name: Multi-xHCI host/model acceptance
+        run: make xhci-host-test
+      - name: Sanitized xHCI host/model acceptance
+        run: |
+          mkdir -p build
+          cc -Ikernel/include -std=c11 -fno-builtin \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/xhci-host-test.c kernel/core/xhci.c kernel/core/usb_hid.c \
+            -o build/xhci-host-test-sanitized
+          ASAN_OPTIONS=detect_leaks=0 ./build/xhci-host-test-sanitized
+      - name: Bounded hub topology host acceptance
+        run: |
+          mkdir -p build
+          cc -Ikernel/include -std=c11 -fno-builtin \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            tests/usb-topology-host-test.c kernel/core/usb_topology.c \
+            -o build/usb-topology-host-test
+          ./build/usb-topology-host-test
+      - name: Sanitized hub topology host acceptance
+        run: |
+          cc -Ikernel/include -std=c11 -fno-builtin \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/usb-topology-host-test.c kernel/core/usb_topology.c \
+            -o build/usb-topology-host-test-sanitized
+          ASAN_OPTIONS=detect_leaks=0 ./build/usb-topology-host-test-sanitized
+      - name: Real q35 xHCI controller regression
+        run: ./tests/m48-xhci-qemu.sh
+      - name: Real three-controller q35 ownership
+        run: ./tests/m64-multi-xhci-qemu.sh
+      - name: Cross-controller storage and HID
         run: ./tests/m64-multi-usb-qemu.sh
