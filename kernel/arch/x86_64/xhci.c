@@ -1372,6 +1372,84 @@ out:
     return success;
 }
 
+static bool xhci_state_identity_matches(
+    const struct xhci_state *left, const struct xhci_state *right) {
+    return (left != NULL) && (right != NULL) &&
+           (left->controller_index == right->controller_index) &&
+           (left->device.bdf.bus == right->device.bdf.bus) &&
+           (left->device.bdf.device == right->device.bdf.device) &&
+           (left->device.bdf.function == right->device.bdf.function) &&
+           (left->mmio_physical == right->mmio_physical) &&
+           (left->command_ring_physical == right->command_ring_physical) &&
+           (left->event_ring_physical == right->event_ring_physical);
+}
+
+static struct xhci_controller *controller_from_state(
+    const struct xhci_state *state) {
+    struct xhci_controller *controller;
+    if ((state == NULL) ||
+        (state->controller_index >= controller_registry_count)) {
+        return NULL;
+    }
+    controller = &controller_registry[state->controller_index];
+    if ((controller->status != XHCI_CONTROLLER_RUNNING) ||
+        !controller->state.controller_running ||
+        !xhci_state_identity_matches(state, &controller->state)) {
+        return NULL;
+    }
+    return controller;
+}
+
+bool xhci_init(struct xhci_state *state) {
+    const struct boring_pci_inventory *inventory;
+    struct pci_device devices[XHCI_MAX_CONTROLLERS];
+    uint8_t discovered = 0U;
+    uint8_t index;
+    bool truncated = false;
+    bool all_running = true;
+
+    if ((state == NULL) || (controller_registry_count != 0U)) {
+        return false;
+    }
+    inventory = boring_pci_inventory_get();
+    if ((inventory == NULL) ||
+        !xhci_collect_controller_devices(inventory, devices,
+                                         &discovered, &truncated) ||
+        (discovered == 0U)) {
+        return false;
+    }
+    controller_registry_count = discovered;
+    controller_registry_truncated = truncated;
+    if (truncated) { all_running = false; }
+    for (index = 0U; index < discovered; ++index) {
+        if (!initialize_controller(&controller_registry[index],
+                                   &devices[index], index)) {
+            all_running = false;
+        }
+    }
+    *state = controller_registry[0].state;
+    return all_running && controller_registry[0].state.controller_running;
+}
+
+uint8_t xhci_controller_count(void) {
+    return controller_registry_count;
+}
+
+bool xhci_controller_registry_truncated(void) {
+    return controller_registry_truncated;
+}
+
+struct xhci_state *xhci_get_controller(uint8_t index) {
+    if (index >= controller_registry_count) { return NULL; }
+    return &controller_registry[index].state;
+}
+
+enum xhci_controller_init_status xhci_get_controller_status(uint8_t index) {
+    if (index >= controller_registry_count) { return XHCI_CONTROLLER_EMPTY; }
+    return controller_registry[index].status;
+}
+
+
 bool xhci_address_connected(struct xhci_state *state) {
     uint8_t port_index;
     if ((state == NULL) || !active_state.controller_running ||
