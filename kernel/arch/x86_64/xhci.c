@@ -693,60 +693,60 @@ static bool command_enable_slot(struct xhci_controller *controller, uint8_t *slo
            command_wait(controller, command_physical, slot_id);
 }
 
-static bool command_disable_slot(uint8_t slot_id) {
+static bool command_disable_slot(struct xhci_controller *controller, uint8_t slot_id) {
     uint64_t command_physical;
     uint8_t completed_slot;
-    if ((slot_id == 0U) || (slot_id > active_state.capabilities.max_slots)) {
+    if ((slot_id == 0U) || (slot_id > controller->state.capabilities.max_slots)) {
         return false;
     }
-    return command_submit(0ULL, 0U,
+    return command_submit(controller, 0ULL, 0U,
                           ((uint32_t)XHCI_TRB_TYPE_DISABLE_SLOT <<
                            XHCI_TRB_TYPE_SHIFT) |
                           ((uint32_t)slot_id << XHCI_COMMAND_SLOT_SHIFT),
                           &command_physical) &&
-           command_wait(command_physical, &completed_slot) &&
+           command_wait(controller, command_physical, &completed_slot) &&
            (completed_slot == slot_id);
 }
 
-static bool command_address_device(uint8_t slot_id,
+static bool command_address_device(struct xhci_controller *controller, uint8_t slot_id,
                                    uint64_t input_context_physical) {
     uint64_t command_physical;
     uint8_t completed_slot;
-    if ((slot_id == 0U) || (slot_id > active_state.capabilities.max_slots) ||
+    if ((slot_id == 0U) || (slot_id > controller->state.capabilities.max_slots) ||
         ((input_context_physical & 0x3fULL) != 0ULL)) {
         return false;
     }
-    return command_submit(input_context_physical, 0U,
+    return command_submit(controller, input_context_physical, 0U,
                           ((uint32_t)XHCI_TRB_TYPE_ADDRESS_DEVICE <<
                            XHCI_TRB_TYPE_SHIFT) |
                           ((uint32_t)slot_id << XHCI_COMMAND_SLOT_SHIFT),
                           &command_physical) &&
-           command_wait(command_physical, &completed_slot) &&
+           command_wait(controller, command_physical, &completed_slot) &&
            (completed_slot == slot_id);
 }
 
-static bool command_evaluate_ep0(struct xhci_addressed_device *device,
+static bool command_evaluate_ep0(struct xhci_controller *controller, struct xhci_addressed_device *device,
                                  uint16_t max_packet) {
     void *input_virtual = NULL;
     uint64_t command_physical;
     uint8_t completed_slot;
     if ((device == NULL) || !device->addressed || device->control_outstanding ||
-        runtime_state.command_outstanding ||
+        controller->runtime.command_outstanding ||
         !vmm_pmm_frame_to_hhdm(device->input_context_physical, &input_virtual) ||
         !xhci_build_evaluate_ep0_context(
             input_virtual, (uint32_t)PMM_PAGE_SIZE,
-            active_state.capabilities.context_64_bytes,
-            active_state.capabilities.max_slots, device->slot_id, max_packet,
+            controller->state.capabilities.context_64_bytes,
+            controller->state.capabilities.max_slots, device->slot_id, max_packet,
             device->ep0_ring_physical)) {
         return false;
     }
     memory_barrier();
-    if (!command_submit(device->input_context_physical, 0U,
+    if (!command_submit(controller, device->input_context_physical, 0U,
                         ((uint32_t)XHCI_TRB_TYPE_EVALUATE_CONTEXT <<
                          XHCI_TRB_TYPE_SHIFT) |
                         ((uint32_t)device->slot_id << XHCI_COMMAND_SLOT_SHIFT),
                         &command_physical) ||
-        !command_wait(command_physical, &completed_slot) ||
+        !command_wait(controller, command_physical, &completed_slot) ||
         (completed_slot != device->slot_id)) {
         return false;
     }
@@ -757,21 +757,21 @@ static bool command_evaluate_ep0(struct xhci_addressed_device *device,
     return true;
 }
 
-static bool root_port_reset(uint8_t root_port_id, uint8_t *speed) {
+static bool root_port_reset(struct xhci_controller *controller, uint8_t root_port_id, uint8_t *speed) {
     uint32_t current;
     uint32_t attempt;
-    const uint32_t offset = port_offset(root_port_id);
+    const uint32_t offset = port_offset(controller, root_port_id);
     if ((speed == NULL) || (root_port_id == 0U) ||
-        (root_port_id > active_state.capabilities.max_ports)) {
+        (root_port_id > controller->state.capabilities.max_ports)) {
         return false;
     }
-    current = mmio_read32(runtime_state.mmio, offset);
+    current = mmio_read32(controller->runtime.mmio, offset);
     if ((current & XHCI_PORTSC_CCS) == 0U) { return false; }
     if ((current & XHCI_PORTSC_PED) == 0U) {
-        mmio_write32(runtime_state.mmio, offset,
+        mmio_write32(controller->runtime.mmio, offset,
                      (current & XHCI_PORTSC_PRESERVE_MASK) | XHCI_PORTSC_PR);
         for (attempt = 0U; attempt < XHCI_WAIT_LIMIT; ++attempt) {
-            current = mmio_read32(runtime_state.mmio, offset);
+            current = mmio_read32(controller->runtime.mmio, offset);
             if (((current & XHCI_PORTSC_PR) == 0U) &&
                 ((current & XHCI_PORTSC_PED) != 0U)) {
                 break;
@@ -780,7 +780,7 @@ static bool root_port_reset(uint8_t root_port_id, uint8_t *speed) {
         }
         if (attempt == XHCI_WAIT_LIMIT) { return false; }
     }
-    current = mmio_read32(runtime_state.mmio, offset);
+    current = mmio_read32(controller->runtime.mmio, offset);
     if (((current & XHCI_PORTSC_CCS) == 0U) ||
         ((current & XHCI_PORTSC_PED) == 0U)) {
         return false;
@@ -788,7 +788,7 @@ static bool root_port_reset(uint8_t root_port_id, uint8_t *speed) {
     *speed = (uint8_t)((current >> XHCI_PORTSC_SPEED_SHIFT) &
                        XHCI_PORTSC_SPEED_MASK);
     if ((*speed == 0U) || (*speed > 5U)) { return false; }
-    mmio_write32(runtime_state.mmio, offset,
+    mmio_write32(controller->runtime.mmio, offset,
                  (current & XHCI_PORTSC_PRESERVE_MASK) |
                  (current & XHCI_PORTSC_CHANGE_MASK));
     return true;
@@ -807,7 +807,7 @@ static void device_frames_release(struct xhci_addressed_device *device) {
     for (index = 0U; index < sizeof(*device); ++index) { bytes[index] = 0U; }
 }
 
-static bool address_root_port(uint8_t root_port_id,
+static bool address_root_port(struct xhci_controller *controller, uint8_t root_port_id,
                               struct xhci_addressed_device *device) {
     void *input_virtual = NULL;
     void *device_virtual = NULL;
@@ -818,13 +818,13 @@ static bool address_root_port(uint8_t root_port_id,
     uint16_t initial_max_packet;
     bool slot_enabled = false;
 
-    if ((device == NULL) || !root_port_reset(root_port_id, &speed) ||
+    if ((device == NULL) || !root_port_reset(controller, root_port_id, &speed) ||
         !xhci_ep0_max_packet(speed, &initial_max_packet) ||
-        !command_enable_slot(&slot_id)) {
+        !command_enable_slot(controller, &slot_id)) {
         return false;
     }
     slot_enabled = true;
-    if ((slot_id == 0U) || (slot_id > active_state.capabilities.max_slots) ||
+    if ((slot_id == 0U) || (slot_id > controller->state.capabilities.max_slots) ||
         !frame_alloc_zero(&device->input_context_physical, &input_virtual) ||
         !frame_alloc_zero(&device->device_context_physical, &device_virtual) ||
         !frame_alloc_zero(&device->ep0_ring_physical, &ep0_virtual)) {
@@ -838,16 +838,16 @@ static bool address_root_port(uint8_t root_port_id,
         XHCI_TRB_TOGGLE_CYCLE | XHCI_TRB_CYCLE;
     if (!xhci_build_address_input_context(
             input_virtual, (uint32_t)PMM_PAGE_SIZE,
-            active_state.capabilities.context_64_bytes,
-            active_state.capabilities.max_slots, slot_id,
-            active_state.capabilities.max_ports, root_port_id, speed,
+            controller->state.capabilities.context_64_bytes,
+            controller->state.capabilities.max_slots, slot_id,
+            controller->state.capabilities.max_ports, root_port_id, speed,
             device->ep0_ring_physical)) {
         goto fail;
     }
-    runtime_state.dcbaa[slot_id] = device->device_context_physical;
+    controller->runtime.dcbaa[slot_id] = device->device_context_physical;
     memory_barrier();
-    if (!command_address_device(slot_id, device->input_context_physical)) {
-        runtime_state.dcbaa[slot_id] = 0ULL;
+    if (!command_address_device(controller, slot_id, device->input_context_physical)) {
+        controller->runtime.dcbaa[slot_id] = 0ULL;
         memory_barrier();
         goto fail;
     }
@@ -855,6 +855,7 @@ static bool address_root_port(uint8_t root_port_id,
     device->root_port_id = root_port_id;
     device->slot_id = slot_id;
     device->speed = speed;
+    device->controller_index = controller->state.controller_index;
     device->ep0_producer_index = 0U;
     device->ep0_producer_cycle = true;
     device->ep0_max_packet = initial_max_packet;
@@ -862,12 +863,12 @@ static bool address_root_port(uint8_t root_port_id,
     return true;
 
 fail:
-    if (slot_enabled) { (void)command_disable_slot(slot_id); }
+    if (slot_enabled) { (void)command_disable_slot(controller, slot_id); }
     device_frames_release(device);
     return false;
 }
 
-static bool ep0_submit_get_descriptor(struct xhci_addressed_device *device,
+static bool ep0_submit_get_descriptor(struct xhci_controller *controller, struct xhci_addressed_device *device,
                                       uint8_t descriptor_type,
                                       uint8_t descriptor_index,
                                       uint16_t length,
@@ -885,14 +886,14 @@ static bool ep0_submit_get_descriptor(struct xhci_addressed_device *device,
     size_t index;
 
     if ((device == NULL) || (actual_length == NULL) || !device->addressed ||
-        device->control_outstanding || runtime_state.command_outstanding ||
+        device->control_outstanding || controller->runtime.command_outstanding ||
         (device->descriptor_buffer_physical == 0ULL) ||
         (length == 0U) || (length > XHCI_DESCRIPTOR_BUFFER_BYTES) ||
         (device->slot_id == 0U) ||
-        (active_state.capabilities.doorbell_offset >
+        (controller->state.capabilities.doorbell_offset >
          XHCI_MMIO_WINDOW_SIZE - 4U) ||
         ((uint32_t)device->slot_id >
-         (XHCI_MMIO_WINDOW_SIZE - active_state.capabilities.doorbell_offset -
+         (XHCI_MMIO_WINDOW_SIZE - controller->state.capabilities.doorbell_offset -
           4U) / 4U) ||
         !vmm_pmm_frame_to_hhdm(device->ep0_ring_physical, &ep0_virtual) ||
         !vmm_pmm_frame_to_hhdm(device->descriptor_buffer_physical,
@@ -926,18 +927,18 @@ static bool ep0_submit_get_descriptor(struct xhci_addressed_device *device,
     device->ep0_producer_index = td.next_producer_index;
     device->ep0_producer_cycle = td.next_producer_cycle;
     memory_barrier();
-    doorbell = active_state.capabilities.doorbell_offset +
+    doorbell = controller->state.capabilities.doorbell_offset +
                ((uint32_t)device->slot_id * 4U);
-    mmio_write32(runtime_state.mmio, doorbell, 1U);
+    mmio_write32(controller->runtime.mmio, doorbell, 1U);
 
-    if (!event_dispatch_wait(XHCI_EXPECT_CONTROL_FIRST, 0ULL, device, &first)) {
+    if (!event_dispatch_wait(controller, XHCI_EXPECT_CONTROL_FIRST, 0ULL, device, &first)) {
         device->control_outstanding = false;
         return false;
     }
     actual = first.actual_length;
     if (first.short_packet) {
         if (device->short_packets != UINT32_MAX) { ++device->short_packets; }
-        if (!event_dispatch_wait(XHCI_EXPECT_CONTROL_STATUS, 0ULL, device,
+        if (!event_dispatch_wait(controller, XHCI_EXPECT_CONTROL_STATUS, 0ULL, device,
                                  &status)) {
             device->control_outstanding = false;
             return false;
