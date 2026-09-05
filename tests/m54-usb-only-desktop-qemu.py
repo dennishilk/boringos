@@ -12,7 +12,9 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "build/m54-usb-only-desktop-reference"
+HUB_MOUSE = os.environ.get("M66_USB_HUB_MOUSE", "0") == "1"
+OUT = ROOT / ("build/m66-usb-hub-desktop-reference"
+              if HUB_MOUSE else "build/m54-usb-only-desktop-reference")
 QMP = runpy.run_path(str(ROOT / "tests/qmp-input.py"))
 WM = runpy.run_path(str(ROOT / "tests/validate-wm-screenshot.py"))
 TERM = runpy.run_path(str(ROOT / "tests/validate-m36-terminal-screenshot.py"))
@@ -30,7 +32,8 @@ def run():
                        stdout=out, stderr=subprocess.STDOUT, check=True)
     bundle_env = os.environ.copy()
     bundle_env["M37_BUNDLE_EXTRA_USER_CPPFLAGS"] = \
-        "-DBORING_M54_USB_ONLY_DESKTOP=1"
+        ("-DBORING_M54_USB_ONLY_DESKTOP=1 -DBORING_M66_USB_HUB_MOUSE=1"
+         if HUB_MOUSE else "-DBORING_M54_USB_ONLY_DESKTOP=1")
     with (OUT / "bundle.log").open("w") as out:
         subprocess.run(["sh", "tests/m37-bundle-test.sh"], cwd=ROOT,
                        env=bundle_env, stdout=out, stderr=subprocess.STDOUT,
@@ -45,15 +48,23 @@ def run():
     }, indent=2) + "\n")
 
     qemu_log = (OUT / "qemu.log").open("w")
+    usb_devices = ([
+        "-device", "qemu-xhci,id=xhci,p3=0",
+        "-device", "usb-hub,id=hub,bus=xhci.0,port=1",
+        "-device", "usb-mouse,bus=xhci.0,port=1.1",
+        "-device", "usb-kbd,bus=xhci.0,port=2",
+    ] if HUB_MOUSE else [
+        "-device", "qemu-xhci,id=xhci",
+        "-device", "usb-kbd,bus=xhci.0",
+        "-device", "usb-tablet,bus=xhci.0",
+    ])
     vm = subprocess.Popen([
         os.environ.get("QEMU", "qemu-system-x86_64"),
         "-M", "q35,i8042=off", "-cpu", os.environ.get("QEMU_CPU", "qemu64,apic=off"),
         "-m", "256M", "-cdrom", str(iso), "-boot", "d", "-vga", "std",
         "-drive", f"file={root_image},if=none,format=raw,id=boringdisk,readonly=on",
         "-device", "virtio-blk-pci,drive=boringdisk,disable-legacy=on",
-        "-device", "qemu-xhci,id=xhci",
-        "-device", "usb-kbd,bus=xhci.0",
-        "-device", "usb-tablet,bus=xhci.0",
+    ] + usb_devices + [
         "-trace", "enable=usb_xhci_xfer_*",
         "-trace", "enable=usb_xhci_queue_event",
         "-display", "none", "-serial", f"file:{serial}", "-monitor", "none",
@@ -131,6 +142,9 @@ def run():
     def usb_abs(axis, value):
         return {"type": "abs", "data": {"axis": axis, "value": value}}
 
+    def usb_rel(axis, value):
+        return {"type": "rel", "data": {"axis": axis, "value": value}}
+
     def usb_button(name, down):
         return {"type": "btn", "data": {"down": down, "button": name}}
 
@@ -183,8 +197,10 @@ def run():
         try:
             ppm = OUT / f"{name}.ppm"
             qmp("screendump", {"filename": str(ppm)})
+            cursor_x = width // 2 + 23 if HUB_MOUSE else width - 1
+            cursor_y = height // 2 - 17 if HUB_MOUSE else height - 1
             meta = dict(frame, width=width, height=height,
-                        cursor_x=width - 1, cursor_y=height - 1)
+                        cursor_x=cursor_x, cursor_y=cursor_y)
             (OUT / f"{name}.json").write_text(json.dumps(meta, indent=2) + "\n")
             decoded = TERM["validate"](ppm, meta, mode)
             (OUT / f"{name}.txt").write_text("\n".join(
@@ -267,17 +283,25 @@ def run():
         display_pid, wm_pid = startup_pids()
         if (display_pid, wm_pid) != (2, 3):
             raise RuntimeError(f"unexpected startup PIDs: display={display_pid} wm={wm_pid}")
-        witness("m54-desktop: q35 i8042-free xHCI USB keyboard/tablet path online")
-
-        # Baseline is decoded by M53 without producing a synthetic move; the
-        # next real tablet report becomes the relative canonical cursor event.
-        usb_inject([usb_abs("x", 10000), usb_abs("y", 20000)])
-        usb_inject([usb_abs("x", 12345), usb_abs("y", 23456)])
-        usb_inject([usb_button("left", True)])
-        usb_inject([usb_button("left", False)])
-        witness("display: M54 USB tablet movement reached Ring3 desktop")
-        witness("display: M54 USB left button down reached Ring3 desktop")
-        witness("display: M54 USB left button up reached Ring3 desktop")
+        if HUB_MOUSE:
+            witness("m66-desktop: q35 xHCI USB keyboard/hub mouse path online")
+            usb_inject([usb_rel("x", 23), usb_rel("y", -17)])
+            usb_inject([usb_button("left", True)])
+            usb_inject([usb_button("left", False)])
+            witness("display: M66 USB hub mouse movement reached Ring3 desktop")
+            witness("display: M66 USB hub left button down reached Ring3 desktop")
+            witness("display: M66 USB hub left button up reached Ring3 desktop")
+        else:
+            witness("m54-desktop: q35 i8042-free xHCI USB keyboard/tablet path online")
+            # Baseline is decoded by M53 without producing a synthetic move;
+            # the next real tablet report becomes the relative cursor event.
+            usb_inject([usb_abs("x", 10000), usb_abs("y", 20000)])
+            usb_inject([usb_abs("x", 12345), usb_abs("y", 23456)])
+            usb_inject([usb_button("left", True)])
+            usb_inject([usb_button("left", False)])
+            witness("display: M54 USB tablet movement reached Ring3 desktop")
+            witness("display: M54 USB left button down reached Ring3 desktop")
+            witness("display: M54 USB left button up reached Ring3 desktop")
 
         key("ret", super_key=True)
         witness("wm: Super+Return spawned /bin/boring-terminal")
@@ -323,11 +347,15 @@ def run():
         witness("m37-desktop: IPC/input/framebuffer/M32/PTY desktop resources drained")
         witness("m37-desktop: all spawned desktop tasks/processes reaped; PID 1 remains")
         witness("M54 USB-only graphical desktop acceptance passed.")
+        if HUB_MOUSE:
+            witness("M66 USB-hub mouse Ring3 desktop acceptance passed.")
         witness("M37 native desktop session startup acceptance passed.")
+        label = ("M66 USB-hub mouse Ring3 desktop SUCCESS"
+                 if HUB_MOUSE else "M54 USB-only graphical desktop SUCCESS")
         (OUT / "SUCCESS.txt").write_text(
-            "M54 USB-only graphical desktop SUCCESS\n"
+            label + "\n"
             "PID1 SPAWN from persistent BoringFS -> display -> WM -> Super+Return terminal -> PTY shell -> boringfetch; dual focus/input; explicit display/WM waitpid drain with PID1 remaining.\n")
-        print(f"M54 USB-only desktop acceptance passed; evidence: {OUT}")
+        print(f"{label}; evidence: {OUT}")
     except Exception as exc:
         if vm.poll() is None:
             try:

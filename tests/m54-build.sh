@@ -3,8 +3,15 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "${ROOT}"
 
+USB_CPPFLAGS='-DBORING_M54_USB_ONLY_DESKTOP=1'
+if [ "${M66_USB_HUB_MOUSE:-0}" = 1 ]; then
+    USB_CPPFLAGS="${USB_CPPFLAGS} -DBORING_M66_USB_HUB_MOUSE=1"
+fi
+
 rm -rf build/user
-make TEST_MODE=m36-desktop RUNTIME_USER_CPPFLAGS='-Iuser/runtime/include -Ikernel/include -DBORING_BOUNDED_DESKTOP_ACCEPTANCE=1 -DBORING_M54_USB_ONLY_DESKTOP=1' user-boringwm user-boring-terminal user-boringfetch
+make TEST_MODE=m36-desktop \
+    RUNTIME_USER_CPPFLAGS="-Iuser/runtime/include -Ikernel/include -DBORING_BOUNDED_DESKTOP_ACCEPTANCE=1 ${USB_CPPFLAGS}" \
+    user-boringwm user-boring-terminal user-boringfetch
 mkdir -p build/user/boring-init-desktop
 cc -Iuser/runtime/include -Ikernel/include -std=c11 -ffreestanding \
    -fno-stack-protector -fno-pic -fno-pie -fno-builtin \
@@ -34,7 +41,7 @@ fi
 rm -rf build/kernel build/iso_root
 rm -f build/kernel.elf build/boringos.iso build/.test-mode
 make TEST_MODE=m36-desktop \
-    TEST_CPPFLAGS='-DBORING_M36_DESKTOP_ACCEPTANCE=1 -DBORING_M37_DESKTOP_ACCEPTANCE=1 -DBORING_M54_USB_ONLY_DESKTOP=1' \
+    TEST_CPPFLAGS="-DBORING_M36_DESKTOP_ACCEPTANCE=1 -DBORING_M37_DESKTOP_ACCEPTANCE=1 ${USB_CPPFLAGS}" \
     TEST_HARNESS_C='kernel/core/m37_desktop_test.c kernel/core/m37_desktop_test_adapter.c' \
     BOOT_USER_ELF=build/user/boring-init-desktop.elf \
     BOOT_USER_NAME=boring-init.elf \

@@ -1508,7 +1508,6 @@ static bool configure_and_enumerate_hub(
     uint8_t configuration_value;
     uint16_t actual;
     uint8_t port;
-    bool child_found = false;
 
     if ((controller == NULL) || (hub == NULL) || !hub->descriptors_ready ||
         (hub->descriptors.device_class != 9U) ||
@@ -1575,9 +1574,8 @@ static bool configure_and_enumerate_hub(
             return false;
         }
         ++controller->state.downstream_devices_addressed;
-        child_found = true;
     }
-    return child_found;
+    return true;
 }
 
 static bool initialize_controller(struct xhci_controller *controller,

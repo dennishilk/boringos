@@ -186,7 +186,17 @@ static void input(void) {
     struct boring_input_event event;
     struct display_event message = {0};
     if (boring_input_read(&event, 1U) != 1L) { desktop_fail("display M31 read"); }
-#ifdef BORING_M54_USB_ONLY_DESKTOP
+#if defined(BORING_M66_USB_HUB_MOUSE)
+    if (event.type == BORING_INPUT_EVENT_MOUSE_MOVE) {
+        desktop_say(
+            "display: M66 USB hub mouse movement reached Ring3 desktop\n");
+    } else if ((event.type == BORING_INPUT_EVENT_MOUSE_BUTTON) &&
+               (event.code == BORING_MOUSE_BUTTON_LEFT)) {
+        desktop_say(event.value1 != 0 ?
+            "display: M66 USB hub left button down reached Ring3 desktop\n" :
+            "display: M66 USB hub left button up reached Ring3 desktop\n");
+    }
+#elif defined(BORING_M54_USB_ONLY_DESKTOP)
     if (event.type == BORING_INPUT_EVENT_MOUSE_MOVE) {
         desktop_say("display: M54 USB tablet movement reached Ring3 desktop\n");
     } else if ((event.type == BORING_INPUT_EVENT_MOUSE_BUTTON) &&

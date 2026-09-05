@@ -137,6 +137,28 @@ static void init_entry(void *argument) {
 }
 
 #if defined(BORING_M54_USB_ONLY_DESKTOP)
+static bool m54_enumerate_optional_hubs(struct xhci_state *state) {
+    bool hub_present = false;
+    uint8_t device_index;
+
+    if ((state == NULL) || (state->addressed_count == 0U) ||
+        (state->addressed_count > XHCI_MAX_ADDRESSED_DEVICES)) {
+        return false;
+    }
+    for (device_index = 0U; device_index < state->addressed_count;
+         ++device_index) {
+        const struct xhci_addressed_device *device =
+            &state->addressed[device_index];
+        if (device->descriptors_ready &&
+            (device->descriptors.device_class == 9U)) {
+            hub_present = true;
+            break;
+        }
+    }
+    if (!hub_present) { return true; }
+    return xhci_enumerate_hubs(state) && xhci_discover_descriptors(state);
+}
+
 static bool m54_hid_protocols_ready(const struct xhci_state *state) {
     bool keyboard = false;
     bool pointer = false;
@@ -148,7 +170,8 @@ static bool m54_hid_protocols_ready(const struct xhci_state *state) {
     }
     for (device_index = 0U; device_index < state->addressed_count;
          ++device_index) {
-        const struct xhci_addressed_device *device = &state->addressed[device_index];
+        const struct xhci_addressed_device *device =
+            &state->addressed[device_index];
         uint8_t endpoint_index;
         if (!device->device_configured || !device->hid_endpoint_ready) {
             continue;
@@ -156,11 +179,13 @@ static bool m54_hid_protocols_ready(const struct xhci_state *state) {
         for (endpoint_index = 0U;
              endpoint_index < device->hid_configuration.endpoint_count;
              ++endpoint_index) {
-            const uint8_t protocol =
-                device->hid_configuration.endpoints[endpoint_index].protocol;
-            if (protocol == 1U) {
+            const enum xhci_hid_report_format report_format =
+                device->hid_configuration.endpoints[endpoint_index].report_format;
+            if (report_format == XHCI_HID_REPORT_BOOT_KEYBOARD) {
                 keyboard = true;
-            } else if ((protocol == 0U) || (protocol == 2U)) {
+            } else if ((report_format == XHCI_HID_REPORT_BOOT_MOUSE) ||
+                       (report_format ==
+                        XHCI_HID_REPORT_QEMU_ABSOLUTE_TABLET)) {
                 pointer = true;
             }
         }
@@ -192,15 +217,17 @@ static bool m54_usb_runtime_evidence(void) {
              ++endpoint_index) {
             const struct xhci_hid_endpoint_runtime *runtime =
                 &device->hid_runtime[endpoint_index];
-            const uint8_t protocol =
-                device->hid_configuration.endpoints[endpoint_index].protocol;
+            const enum xhci_hid_report_format report_format =
+                device->hid_configuration.endpoints[endpoint_index].report_format;
             completions += runtime->completed_transfers;
             decoded += runtime->decoded_reports;
-            if (protocol == 1U) {
+            if (report_format == XHCI_HID_REPORT_BOOT_KEYBOARD) {
                 keyboard = true;
                 key_presses += runtime->key_presses;
                 key_releases += runtime->key_releases;
-            } else if ((protocol == 0U) || (protocol == 2U)) {
+            } else if ((report_format == XHCI_HID_REPORT_BOOT_MOUSE) ||
+                       (report_format ==
+                        XHCI_HID_REPORT_QEMU_ABSOLUTE_TABLET)) {
                 pointer = true;
                 pointer_reports += runtime->pointer_reports;
                 if (runtime->last_pointer_buttons != 0U) {
@@ -217,10 +244,17 @@ static bool m54_usb_runtime_evidence(void) {
     serial_write_string("/"); serial_write_u64(key_releases);
     serial_write_string("/"); serial_write_u64(pointer_reports);
     serial_write_string("\n");
+#if defined(BORING_M66_USB_HUB_MOUSE)
+    return keyboard && pointer && pointer_buttons_released &&
+           (completions == decoded) && (decoded >= 7ULL) &&
+           (key_presses != 0ULL) && (key_releases != 0ULL) &&
+           (pointer_reports >= 3ULL);
+#else
     return keyboard && pointer && pointer_buttons_released &&
            (completions == decoded) && (decoded >= 8ULL) &&
            (key_presses != 0ULL) && (key_releases != 0ULL) &&
            (pointer_reports >= 4ULL);
+#endif
 }
 
 #ifndef BORING_M54_HID_READY_POLICY
@@ -240,13 +274,19 @@ static bool input_hardware_init(void) {
         !xhci_init(&state) ||
         !xhci_address_connected(&state) ||
         !xhci_discover_descriptors(&state) ||
+        !m54_enumerate_optional_hubs(&state) ||
         !xhci_configure_hid_devices(&state) ||
         !(m54_hid_protocols_ready(&state),
           BORING_M54_HID_READY_POLICY(&state))) {
         return false;
     }
+#if defined(BORING_M66_USB_HUB_MOUSE)
+    serial_write_string(
+        "m66-desktop: q35 xHCI USB keyboard/hub mouse path online\n");
+#else
     serial_write_string(
         "m54-desktop: q35 i8042-free xHCI USB keyboard/tablet path online\n");
+#endif
     return true;
 #else
     struct i8042_state state = {false};
@@ -483,6 +523,10 @@ void m37_desktop_test_finish_from_pid1(void) {
     if (m54_usb_evidence) {
         serial_write_string(
             "M54 USB-only graphical desktop acceptance passed.\n");
+#if defined(BORING_M66_USB_HUB_MOUSE)
+        serial_write_string(
+            "M66 USB-hub mouse Ring3 desktop acceptance passed.\n");
+#endif
     }
 #endif
     serial_write_string(
