@@ -17,18 +17,6 @@ bool usb_mass_storage_init_legacy(struct xhci_state *state);
 #undef usb_mass_storage_init
 #undef USB_MASS_STORAGE_RUNTIME
 
-static bool m60_same_xhci_topology(const struct xhci_state *caller,
-                                   const struct xhci_state *active) {
-    return (caller != NULL) && (active != NULL) &&
-           caller->controller_running && active->controller_running &&
-           (caller->controller_index == active->controller_index) &&
-           (caller->device.bdf.bus == active->device.bdf.bus) &&
-           (caller->device.bdf.device == active->device.bdf.device) &&
-           (caller->device.bdf.function == active->device.bdf.function) &&
-           (caller->mmio_physical == active->mmio_physical) &&
-           (caller->event_ring_physical == active->event_ring_physical);
-}
-
 bool usb_mass_storage_init(struct xhci_state *state) {
     uint8_t index;
     if (state == NULL) { return false; }
