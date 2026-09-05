@@ -800,6 +800,7 @@ static void device_frames_release(struct xhci_addressed_device *device) {
     for (index = 0U; index < XHCI_MAX_HID_ENDPOINTS; ++index) {
         frame_release(device->hid_ring_physical[index]);
     }
+    frame_release(device->hub_control_buffer_physical);
     frame_release(device->descriptor_buffer_physical);
     frame_release(device->ep0_ring_physical);
     frame_release(device->device_context_physical);
@@ -807,18 +808,21 @@ static void device_frames_release(struct xhci_addressed_device *device) {
     for (index = 0U; index < sizeof(*device); ++index) { bytes[index] = 0U; }
 }
 
-static bool address_root_port(struct xhci_controller *controller, uint8_t root_port_id,
+static bool address_root_port(struct xhci_controller *controller,
+                              uint8_t root_port_id,
                               struct xhci_addressed_device *device) {
     void *input_virtual = NULL;
     void *device_virtual = NULL;
     void *ep0_virtual = NULL;
     struct xhci_trb *ep0_ring;
+    struct boring_usb_topology topology;
     uint8_t slot_id = 0U;
     uint8_t speed;
     uint16_t initial_max_packet;
     bool slot_enabled = false;
 
     if ((device == NULL) || !root_port_reset(controller, root_port_id, &speed) ||
+        !boring_usb_topology_root(&topology, root_port_id, speed) ||
         !xhci_ep0_max_packet(speed, &initial_max_packet) ||
         !command_enable_slot(controller, &slot_id)) {
         return false;
@@ -836,22 +840,24 @@ static bool address_root_port(struct xhci_controller *controller, uint8_t root_p
     ep0_ring[XHCI_EP0_RING_USABLE].control =
         ((uint32_t)XHCI_TRB_TYPE_LINK << XHCI_TRB_TYPE_SHIFT) |
         XHCI_TRB_TOGGLE_CYCLE | XHCI_TRB_CYCLE;
-    if (!xhci_build_address_input_context(
+    if (!xhci_build_address_input_context_topology(
             input_virtual, (uint32_t)PMM_PAGE_SIZE,
             controller->state.capabilities.context_64_bytes,
             controller->state.capabilities.max_slots, slot_id,
-            controller->state.capabilities.max_ports, root_port_id, speed,
+            controller->state.capabilities.max_ports, &topology,
             device->ep0_ring_physical)) {
         goto fail;
     }
     controller->runtime.dcbaa[slot_id] = device->device_context_physical;
     memory_barrier();
-    if (!command_address_device(controller, slot_id, device->input_context_physical)) {
+    if (!command_address_device(controller, slot_id,
+                                device->input_context_physical)) {
         controller->runtime.dcbaa[slot_id] = 0ULL;
         memory_barrier();
         goto fail;
     }
     (void)device_virtual;
+    device->topology = topology;
     device->root_port_id = root_port_id;
     device->slot_id = slot_id;
     device->speed = speed;
@@ -1165,12 +1171,12 @@ static bool configure_hid_device(struct xhci_controller *controller, struct xhci
             XHCI_TRB_TOGGLE_CYCLE | XHCI_TRB_CYCLE;
     }
     if (!vmm_pmm_frame_to_hhdm(device->input_context_physical, &input_virtual) ||
-        !xhci_build_configure_hid_context(
+        !xhci_build_configure_hid_context_topology(
             input_virtual, (uint32_t)PMM_PAGE_SIZE,
             controller->state.capabilities.context_64_bytes,
             controller->state.capabilities.max_slots, device->slot_id,
-            controller->state.capabilities.max_ports, device->root_port_id,
-            device->speed, &configuration, rings)) {
+            controller->state.capabilities.max_ports, &device->topology,
+            &configuration, rings)) {
         goto out;
     }
     memory_barrier();
@@ -1247,6 +1253,331 @@ fail:
     frame_release(device->descriptor_buffer_physical);
     device->descriptor_buffer_physical = 0ULL;
     return false;
+}
+
+
+static bool hub_configuration_value(struct xhci_addressed_device *device,
+                                    uint8_t *configuration_value) {
+    uint8_t *bytes = NULL;
+    if ((device == NULL) || (configuration_value == NULL) ||
+        !descriptor_buffer_bytes(device, &bytes) ||
+        (device->descriptors.configuration_length < 9U) ||
+        (bytes[0] < 9U) ||
+        (bytes[1] != XHCI_USB_DESCRIPTOR_CONFIGURATION) ||
+        (bytes[5] == 0U)) {
+        return false;
+    }
+    *configuration_value = bytes[5];
+    return true;
+}
+
+static bool ep0_submit_hub_in(struct xhci_controller *controller,
+                              struct xhci_addressed_device *device,
+                              bool descriptor_request, uint8_t port,
+                              uint16_t length, uint16_t *actual_length) {
+    void *ep0_virtual = NULL;
+    void *buffer_virtual = NULL;
+    volatile struct xhci_trb *ring;
+    uint8_t *buffer;
+    struct xhci_control_td td;
+    struct xhci_dispatch_result first;
+    struct xhci_dispatch_result status;
+    uint16_t start_index;
+    uint16_t actual;
+    uint32_t doorbell;
+    size_t index;
+
+    if ((controller == NULL) || (device == NULL) ||
+        (actual_length == NULL) || !device->addressed ||
+        device->control_outstanding || controller->runtime.command_outstanding ||
+        (device->hub_control_buffer_physical == 0ULL) ||
+        (length == 0U) || (length > XHCI_DESCRIPTOR_BUFFER_BYTES) ||
+        (device->slot_id == 0U) ||
+        (controller->state.capabilities.doorbell_offset >
+         XHCI_MMIO_WINDOW_SIZE - 4U) ||
+        !vmm_pmm_frame_to_hhdm(device->ep0_ring_physical, &ep0_virtual) ||
+        !vmm_pmm_frame_to_hhdm(device->hub_control_buffer_physical,
+                               &buffer_virtual)) {
+        return false;
+    }
+    if (descriptor_request) {
+        if (!xhci_build_hub_get_descriptor_control_td(
+                &td, device->ep0_ring_physical, device->ep0_producer_index,
+                device->ep0_producer_cycle,
+                device->hub_control_buffer_physical, length)) {
+            return false;
+        }
+    } else if (!xhci_build_hub_get_port_status_control_td(
+                   &td, device->ep0_ring_physical, device->ep0_producer_index,
+                   device->ep0_producer_cycle,
+                   device->hub_control_buffer_physical, port)) {
+        return false;
+    }
+
+    ring = (volatile struct xhci_trb *)ep0_virtual;
+    buffer = (uint8_t *)buffer_virtual;
+    for (index = 0U; index < (size_t)length; ++index) { buffer[index] = 0U; }
+    start_index = device->ep0_producer_index;
+    ring[start_index] = td.setup;
+    ring[(uint16_t)(start_index + 1U)] = td.data;
+    ring[(uint16_t)(start_index + 2U)] = td.status;
+    if (start_index == XHCI_EP0_RING_USABLE - 3U) {
+        ring[XHCI_EP0_RING_USABLE].parameter = device->ep0_ring_physical;
+        ring[XHCI_EP0_RING_USABLE].status = 0U;
+        ring[XHCI_EP0_RING_USABLE].control =
+            ((uint32_t)XHCI_TRB_TYPE_LINK << XHCI_TRB_TYPE_SHIFT) |
+            XHCI_TRB_TOGGLE_CYCLE |
+            (device->ep0_producer_cycle ? XHCI_TRB_CYCLE : 0U);
+    }
+    device->expected_data_trb_physical = td.data_physical;
+    device->expected_status_trb_physical = td.status_physical;
+    device->outstanding_length = length;
+    device->control_outstanding = true;
+    device->ep0_producer_index = td.next_producer_index;
+    device->ep0_producer_cycle = td.next_producer_cycle;
+    memory_barrier();
+    doorbell = controller->state.capabilities.doorbell_offset +
+               ((uint32_t)device->slot_id * 4U);
+    mmio_write32(controller->runtime.mmio, doorbell, 1U);
+
+    if (!event_dispatch_wait(controller, XHCI_EXPECT_CONTROL_FIRST, 0ULL,
+                             device, &first)) {
+        device->control_outstanding = false;
+        return false;
+    }
+    actual = first.actual_length;
+    if (first.short_packet &&
+        !event_dispatch_wait(controller, XHCI_EXPECT_CONTROL_STATUS, 0ULL,
+                             device, &status)) {
+        device->control_outstanding = false;
+        return false;
+    }
+    device->control_outstanding = false;
+    device->expected_data_trb_physical = 0ULL;
+    device->expected_status_trb_physical = 0ULL;
+    device->outstanding_length = 0U;
+    *actual_length = actual;
+    return true;
+}
+
+static bool ep0_submit_hub_set_port_feature(
+    struct xhci_controller *controller, struct xhci_addressed_device *device,
+    uint8_t port, uint16_t feature) {
+    void *ep0_virtual = NULL;
+    volatile struct xhci_trb *ring;
+    struct xhci_control_td td;
+    struct xhci_dispatch_result result;
+    uint16_t start_index;
+    uint32_t doorbell;
+
+    if ((controller == NULL) || (device == NULL) || !device->addressed ||
+        device->control_outstanding || controller->runtime.command_outstanding ||
+        (device->slot_id == 0U) ||
+        !vmm_pmm_frame_to_hhdm(device->ep0_ring_physical, &ep0_virtual) ||
+        !xhci_build_hub_set_port_feature_control_td(
+            &td, device->ep0_ring_physical, device->ep0_producer_index,
+            device->ep0_producer_cycle, port, feature)) {
+        return false;
+    }
+    ring = (volatile struct xhci_trb *)ep0_virtual;
+    start_index = device->ep0_producer_index;
+    ring[start_index] = td.setup;
+    ring[(uint16_t)(start_index + 1U)] = td.status;
+    if (start_index == XHCI_EP0_RING_USABLE - 2U) {
+        ring[XHCI_EP0_RING_USABLE].parameter = device->ep0_ring_physical;
+        ring[XHCI_EP0_RING_USABLE].status = 0U;
+        ring[XHCI_EP0_RING_USABLE].control =
+            ((uint32_t)XHCI_TRB_TYPE_LINK << XHCI_TRB_TYPE_SHIFT) |
+            XHCI_TRB_TOGGLE_CYCLE |
+            (device->ep0_producer_cycle ? XHCI_TRB_CYCLE : 0U);
+    }
+    device->expected_status_trb_physical = td.status_physical;
+    device->control_outstanding = true;
+    device->ep0_producer_index = td.next_producer_index;
+    device->ep0_producer_cycle = td.next_producer_cycle;
+    memory_barrier();
+    doorbell = controller->state.capabilities.doorbell_offset +
+               ((uint32_t)device->slot_id * 4U);
+    mmio_write32(controller->runtime.mmio, doorbell, 1U);
+    if (!event_dispatch_wait(controller, XHCI_EXPECT_CONTROL_NODATA_STATUS,
+                             0ULL, device, &result)) {
+        device->control_outstanding = false;
+        device->expected_status_trb_physical = 0ULL;
+        return false;
+    }
+    device->control_outstanding = false;
+    device->expected_status_trb_physical = 0ULL;
+    return true;
+}
+
+static bool configure_hub_slot(struct xhci_controller *controller,
+                               struct xhci_addressed_device *device) {
+    void *input_virtual = NULL;
+    if ((controller == NULL) || (device == NULL) ||
+        !vmm_pmm_frame_to_hhdm(device->input_context_physical,
+                               &input_virtual) ||
+        !xhci_build_hub_slot_context(
+            input_virtual, (uint32_t)PMM_PAGE_SIZE,
+            controller->state.capabilities.context_64_bytes,
+            &device->topology, &device->hub_descriptor)) {
+        return false;
+    }
+    memory_barrier();
+    return command_configure_hid(controller, device);
+}
+
+static bool address_downstream_port(
+    struct xhci_controller *controller,
+    const struct xhci_addressed_device *hub,
+    uint8_t downstream_port, uint8_t speed,
+    struct xhci_addressed_device *device) {
+    void *input_virtual = NULL;
+    void *device_virtual = NULL;
+    void *ep0_virtual = NULL;
+    struct xhci_trb *ep0_ring;
+    struct boring_usb_topology topology;
+    uint8_t slot_id = 0U;
+    uint16_t initial_max_packet;
+    bool slot_enabled = false;
+
+    if ((controller == NULL) || (hub == NULL) || (device == NULL) ||
+        !hub->hub_ready ||
+        !boring_usb_topology_child(&hub->topology, hub->slot_id,
+                                   downstream_port, speed, &topology)) {
+        return false;
+    }
+    if ((hub->speed == BORING_USB_SPEED_HIGH) &&
+        ((speed == BORING_USB_SPEED_LOW) ||
+         (speed == BORING_USB_SPEED_FULL)) &&
+        !boring_usb_topology_set_tt_mode(
+            &topology, hub->slot_id, downstream_port,
+            hub->hub_descriptor.multi_tt)) {
+        return false;
+    }
+    if (!xhci_ep0_max_packet(speed, &initial_max_packet) ||
+        !command_enable_slot(controller, &slot_id)) {
+        return false;
+    }
+    slot_enabled = true;
+    if (!frame_alloc_zero(&device->input_context_physical, &input_virtual) ||
+        !frame_alloc_zero(&device->device_context_physical, &device_virtual) ||
+        !frame_alloc_zero(&device->ep0_ring_physical, &ep0_virtual)) {
+        goto fail;
+    }
+    ep0_ring = (struct xhci_trb *)ep0_virtual;
+    ep0_ring[XHCI_EP0_RING_USABLE].parameter = device->ep0_ring_physical;
+    ep0_ring[XHCI_EP0_RING_USABLE].control =
+        ((uint32_t)XHCI_TRB_TYPE_LINK << XHCI_TRB_TYPE_SHIFT) |
+        XHCI_TRB_TOGGLE_CYCLE | XHCI_TRB_CYCLE;
+    if (!xhci_build_address_input_context_topology(
+            input_virtual, (uint32_t)PMM_PAGE_SIZE,
+            controller->state.capabilities.context_64_bytes,
+            controller->state.capabilities.max_slots, slot_id,
+            controller->state.capabilities.max_ports, &topology,
+            device->ep0_ring_physical)) {
+        goto fail;
+    }
+    controller->runtime.dcbaa[slot_id] = device->device_context_physical;
+    memory_barrier();
+    if (!command_address_device(controller, slot_id,
+                                device->input_context_physical)) {
+        controller->runtime.dcbaa[slot_id] = 0ULL;
+        memory_barrier();
+        goto fail;
+    }
+    (void)device_virtual;
+    device->topology = topology;
+    device->root_port_id = topology.root_port;
+    device->slot_id = slot_id;
+    device->speed = speed;
+    device->controller_index = controller->state.controller_index;
+    device->ep0_producer_cycle = true;
+    device->ep0_max_packet = initial_max_packet;
+    device->addressed = true;
+    return true;
+fail:
+    if (slot_enabled) { (void)command_disable_slot(controller, slot_id); }
+    device_frames_release(device);
+    return false;
+}
+
+static bool configure_and_enumerate_hub(
+    struct xhci_controller *controller, struct xhci_addressed_device *hub) {
+    void *hub_buffer_virtual = NULL;
+    uint8_t *hub_bytes;
+    uint8_t configuration_value;
+    uint16_t actual;
+    uint8_t port;
+    bool child_found = false;
+
+    if ((controller == NULL) || (hub == NULL) || !hub->descriptors_ready ||
+        (hub->descriptors.device_class != 9U) ||
+        !hub_configuration_value(hub, &configuration_value)) {
+        return false;
+    }
+    if ((hub->hub_control_buffer_physical == 0ULL) &&
+        !frame_alloc_zero(&hub->hub_control_buffer_physical,
+                          &hub_buffer_virtual)) {
+        return false;
+    }
+    if (!vmm_pmm_frame_to_hhdm(hub->hub_control_buffer_physical,
+                               &hub_buffer_virtual) ||
+        !ep0_submit_set_configuration(controller, hub, configuration_value) ||
+        !ep0_submit_hub_in(controller, hub, true, 0U,
+                           BORING_USB_HUB_DESCRIPTOR_MAX_BYTES, &actual)) {
+        return false;
+    }
+    hub_bytes = (uint8_t *)hub_buffer_virtual;
+    if (!boring_usb_parse_hub_descriptor(
+            hub_bytes, actual, &hub->hub_descriptor) ||
+        !configure_hub_slot(controller, hub)) {
+        return false;
+    }
+    hub->hub_ready = true;
+
+    for (port = 1U; port <= hub->hub_descriptor.port_count; ++port) {
+        struct boring_usb_hub_port_status status;
+        struct xhci_addressed_device *child;
+        if (!ep0_submit_hub_set_port_feature(controller, hub, port, 8U) ||
+            (controller->state.hub_ports_powered == UINT32_MAX)) {
+            return false;
+        }
+        ++controller->state.hub_ports_powered;
+        if (!ep0_submit_hub_in(controller, hub, false, port, 4U, &actual) ||
+            (actual != 4U) ||
+            !boring_usb_parse_hub_port_status(hub_bytes, actual, &status)) {
+            return false;
+        }
+        if (!status.connected) { continue; }
+        if (!ep0_submit_hub_set_port_feature(controller, hub, port, 4U) ||
+            (controller->state.hub_ports_reset == UINT32_MAX)) {
+            return false;
+        }
+        ++controller->state.hub_ports_reset;
+        if (!ep0_submit_hub_in(controller, hub, false, port, 4U, &actual) ||
+            (actual != 4U) ||
+            !boring_usb_parse_hub_port_status(hub_bytes, actual, &status) ||
+            !status.connected || !status.enabled || status.reset ||
+            (status.speed == 0U)) {
+            return false;
+        }
+        if (controller->state.addressed_count == XHCI_MAX_ADDRESSED_DEVICES) {
+            controller->state.addressing_truncated = true;
+            return false;
+        }
+        child = &controller->state.addressed[controller->state.addressed_count];
+        if (!address_downstream_port(controller, hub, port, status.speed,
+                                     child)) {
+            return false;
+        }
+        ++controller->state.addressed_count;
+        if (controller->state.downstream_devices_addressed == UINT32_MAX) {
+            return false;
+        }
+        ++controller->state.downstream_devices_addressed;
+        child_found = true;
+    }
+    return child_found;
 }
 
 static bool initialize_controller(struct xhci_controller *controller,
@@ -1487,8 +1818,10 @@ bool xhci_discover_descriptors(struct xhci_state *state) {
         return false;
     }
     for (index = 0U; index < controller->state.addressed_count; ++index) {
-        if (!discover_device_descriptors(
-                controller, &controller->state.addressed[index])) {
+        struct xhci_addressed_device *device =
+            &controller->state.addressed[index];
+        if (device->descriptors_ready) { continue; }
+        if (!discover_device_descriptors(controller, device)) {
             *state = controller->state;
             return false;
         }
@@ -1513,6 +1846,33 @@ bool xhci_configure_hid_devices(struct xhci_state *state) {
     }
     *state = controller->state;
     return true;
+}
+
+bool xhci_enumerate_hubs(struct xhci_state *state) {
+    struct xhci_controller *controller = controller_from_state(state);
+    uint8_t initial_count;
+    uint8_t index;
+    bool found = false;
+    if ((controller == NULL) || (controller->runtime.mmio == NULL) ||
+        (controller->state.addressed_count == 0U)) {
+        return false;
+    }
+    initial_count = controller->state.addressed_count;
+    for (index = 0U; index < initial_count; ++index) {
+        struct xhci_addressed_device *device =
+            &controller->state.addressed[index];
+        if (!device->descriptors_ready ||
+            (device->descriptors.device_class != 9U)) {
+            continue;
+        }
+        found = true;
+        if (!configure_and_enumerate_hub(controller, device)) {
+            *state = controller->state;
+            return false;
+        }
+    }
+    *state = controller->state;
+    return found;
 }
 
 const struct xhci_state *xhci_get_state(void) {
