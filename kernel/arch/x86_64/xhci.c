@@ -517,58 +517,58 @@ static uint32_t port_offset(struct xhci_controller *controller, uint8_t root_por
            XHCI_PORT_BASE + (((uint32_t)root_port_id - 1U) * XHCI_PORT_STRIDE);
 }
 
-static bool command_submit(uint64_t parameter, uint32_t status,
+static bool command_submit(struct xhci_controller *controller, uint64_t parameter, uint32_t status,
                            uint32_t control, uint64_t *command_physical) {
     volatile struct xhci_trb *trb;
     uint16_t index;
-    if ((runtime_state.mmio == NULL) ||
-        (runtime_state.command_ring == NULL) || (command_physical == NULL) ||
-        runtime_state.command_outstanding ||
-        (runtime_state.command_index >= XHCI_COMMAND_RING_USABLE)) {
+    if ((controller->runtime.mmio == NULL) ||
+        (controller->runtime.command_ring == NULL) || (command_physical == NULL) ||
+        controller->runtime.command_outstanding ||
+        (controller->runtime.command_index >= XHCI_COMMAND_RING_USABLE)) {
         return false;
     }
-    index = runtime_state.command_index;
-    trb = &runtime_state.command_ring[index];
+    index = controller->runtime.command_index;
+    trb = &controller->runtime.command_ring[index];
     trb->parameter = parameter;
     trb->status = status;
     trb->control = control |
-                   (runtime_state.command_cycle ? XHCI_TRB_CYCLE : 0U);
-    *command_physical = active_state.command_ring_physical +
+                   (controller->runtime.command_cycle ? XHCI_TRB_CYCLE : 0U);
+    *command_physical = controller->state.command_ring_physical +
                         ((uint64_t)index * XHCI_TRB_SIZE);
-    ++runtime_state.command_index;
-    if (runtime_state.command_index == XHCI_COMMAND_RING_USABLE) {
+    ++controller->runtime.command_index;
+    if (controller->runtime.command_index == XHCI_COMMAND_RING_USABLE) {
         volatile struct xhci_trb *link =
-            &runtime_state.command_ring[XHCI_COMMAND_RING_USABLE];
+            &controller->runtime.command_ring[XHCI_COMMAND_RING_USABLE];
         link->control = ((uint32_t)XHCI_TRB_TYPE_LINK << XHCI_TRB_TYPE_SHIFT) |
                         XHCI_TRB_TOGGLE_CYCLE |
-                        (runtime_state.command_cycle ? XHCI_TRB_CYCLE : 0U);
-        runtime_state.command_index = 0U;
-        runtime_state.command_cycle = !runtime_state.command_cycle;
+                        (controller->runtime.command_cycle ? XHCI_TRB_CYCLE : 0U);
+        controller->runtime.command_index = 0U;
+        controller->runtime.command_cycle = !controller->runtime.command_cycle;
     }
-    runtime_state.command_outstanding = true;
-    runtime_state.outstanding_command_physical = *command_physical;
+    controller->runtime.command_outstanding = true;
+    controller->runtime.outstanding_command_physical = *command_physical;
     memory_barrier();
-    mmio_write32(runtime_state.mmio,
-                 active_state.capabilities.doorbell_offset, 0U);
+    mmio_write32(controller->runtime.mmio,
+                 controller->state.capabilities.doorbell_offset, 0U);
     return true;
 }
 
-static bool event_take(struct xhci_trb *event, bool *available) {
+static bool event_take(struct xhci_controller *controller, struct xhci_trb *event, bool *available) {
     const volatile struct xhci_trb *source;
     uint32_t control;
     uint16_t event_index;
     uint16_t next_index;
     bool event_cycle;
     bool next_cycle;
-    const uint32_t interrupter = active_state.capabilities.runtime_offset +
+    const uint32_t interrupter = controller->state.capabilities.runtime_offset +
                                  XHCI_RUNTIME_INTERRUPTER0;
     if ((event == NULL) || (available == NULL) ||
-        (runtime_state.mmio == NULL) || (runtime_state.event_ring == NULL) ||
-        !xhci_event_dequeue_position(&active_state, &event_index,
+        (controller->runtime.mmio == NULL) || (controller->runtime.event_ring == NULL) ||
+        !xhci_event_dequeue_position(&controller->state, &event_index,
                                      &event_cycle)) {
         return false;
     }
-    source = &runtime_state.event_ring[event_index];
+    source = &controller->runtime.event_ring[event_index];
     control = source->control;
     if (((control & XHCI_TRB_CYCLE) != 0U) != event_cycle) {
         *available = false;
@@ -577,26 +577,26 @@ static bool event_take(struct xhci_trb *event, bool *available) {
     event->parameter = source->parameter;
     event->status = source->status;
     event->control = control;
-    if (!xhci_event_dequeue_advance(&active_state, event_index, event_cycle,
+    if (!xhci_event_dequeue_advance(&controller->state, event_index, event_cycle,
                                     &next_index, &next_cycle)) {
         return false;
     }
-    runtime_state.event_index = next_index;
-    runtime_state.event_cycle = next_cycle;
+    controller->runtime.event_index = next_index;
+    controller->runtime.event_cycle = next_cycle;
     memory_barrier();
-    mmio_write64(runtime_state.mmio, interrupter + 0x18U,
-                 (active_state.event_ring_physical +
+    mmio_write64(controller->runtime.mmio, interrupter + 0x18U,
+                 (controller->state.event_ring_physical +
                   ((uint64_t)next_index * XHCI_TRB_SIZE)) |
                  (1ULL << 3U));
     *available = true;
     return true;
 }
 
-static bool consume_port_event(const struct xhci_trb *event) {
-    return xhci_consume_port_status_event(&active_state, event);
+static bool consume_port_event(struct xhci_controller *controller, const struct xhci_trb *event) {
+    return xhci_consume_port_status_event(&controller->state, event);
 }
 
-static bool event_dispatch_wait(enum xhci_event_expectation expectation,
+static bool event_dispatch_wait(struct xhci_controller *controller, enum xhci_event_expectation expectation,
                                 uint64_t command_physical,
                                 struct xhci_addressed_device *device,
                                 struct xhci_dispatch_result *result) {
@@ -606,7 +606,7 @@ static bool event_dispatch_wait(enum xhci_event_expectation expectation,
         struct xhci_trb event;
         bool available;
         uint8_t type;
-        if (!event_take(&event, &available)) { return false; }
+        if (!event_take(controller, &event, &available)) { return false; }
         if (!available) {
             x86_64_pause();
             continue;
@@ -614,27 +614,27 @@ static bool event_dispatch_wait(enum xhci_event_expectation expectation,
         type = (uint8_t)((event.control >> XHCI_TRB_TYPE_SHIFT) &
                          XHCI_TRB_TYPE_MASK);
         if (type == XHCI_TRB_TYPE_PORT_STATUS_EVENT) {
-            if (!consume_port_event(&event)) { return false; }
+            if (!consume_port_event(controller, &event)) { return false; }
             continue;
         }
         if (expectation == XHCI_EXPECT_COMMAND) {
             uint8_t completed_slot;
-            if (!runtime_state.command_outstanding ||
-                (runtime_state.outstanding_command_physical !=
+            if (!controller->runtime.command_outstanding ||
+                (controller->runtime.outstanding_command_physical !=
                  command_physical) ||
                 (type != XHCI_TRB_TYPE_COMMAND_COMPLETION_EVENT) ||
                 !xhci_validate_command_completion(
                     &event, command_physical,
-                    active_state.capabilities.max_slots, &completed_slot)) {
+                    controller->state.capabilities.max_slots, &completed_slot)) {
                 return false;
             }
-            runtime_state.command_outstanding = false;
-            runtime_state.outstanding_command_physical = 0ULL;
+            controller->runtime.command_outstanding = false;
+            controller->runtime.outstanding_command_physical = 0ULL;
             result->slot_id = completed_slot;
             result->actual_length = 0U;
             result->short_packet = false;
-            if (active_state.command_completions != UINT32_MAX) {
-                ++active_state.command_completions;
+            if (controller->state.command_completions != UINT32_MAX) {
+                ++controller->state.command_completions;
             }
             return true;
         }
@@ -666,31 +666,31 @@ static bool event_dispatch_wait(enum xhci_event_expectation expectation,
     return false;
 }
 
-static bool command_wait(uint64_t command_physical, uint8_t *slot_id) {
+static bool command_wait(struct xhci_controller *controller, uint64_t command_physical, uint8_t *slot_id) {
     struct xhci_dispatch_result result;
     bool success;
-    if ((slot_id == NULL) || !runtime_state.command_outstanding ||
-        (runtime_state.outstanding_command_physical != command_physical)) {
+    if ((slot_id == NULL) || !controller->runtime.command_outstanding ||
+        (controller->runtime.outstanding_command_physical != command_physical)) {
         return false;
     }
-    success = event_dispatch_wait(XHCI_EXPECT_COMMAND, command_physical,
+    success = event_dispatch_wait(controller, XHCI_EXPECT_COMMAND, command_physical,
                                   NULL, &result);
     if (!success) {
-        runtime_state.command_outstanding = false;
-        runtime_state.outstanding_command_physical = 0ULL;
+        controller->runtime.command_outstanding = false;
+        controller->runtime.outstanding_command_physical = 0ULL;
         return false;
     }
     *slot_id = result.slot_id;
     return true;
 }
 
-static bool command_enable_slot(uint8_t *slot_id) {
+static bool command_enable_slot(struct xhci_controller *controller, uint8_t *slot_id) {
     uint64_t command_physical;
-    return command_submit(0ULL, 0U,
+    return command_submit(controller, 0ULL, 0U,
                           (uint32_t)XHCI_TRB_TYPE_ENABLE_SLOT <<
                           XHCI_TRB_TYPE_SHIFT,
                           &command_physical) &&
-           command_wait(command_physical, slot_id);
+           command_wait(controller, command_physical, slot_id);
 }
 
 static bool command_disable_slot(uint8_t slot_id) {
