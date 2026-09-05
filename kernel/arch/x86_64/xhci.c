@@ -969,7 +969,7 @@ static bool descriptor_buffer_bytes(struct xhci_addressed_device *device,
     return true;
 }
 
-static bool ep0_submit_set_configuration(
+static bool ep0_submit_set_configuration(struct xhci_controller *controller, 
     struct xhci_addressed_device *device, uint8_t configuration_value) {
     void *ep0_virtual = NULL;
     volatile struct xhci_trb *ring;
@@ -978,11 +978,11 @@ static bool ep0_submit_set_configuration(
     uint16_t start_index;
     uint32_t doorbell;
     if ((device == NULL) || !device->addressed || !device->descriptors_ready ||
-        device->control_outstanding || runtime_state.command_outstanding ||
+        device->control_outstanding || controller->runtime.command_outstanding ||
         (configuration_value == 0U) || (device->slot_id == 0U) ||
-        (active_state.capabilities.doorbell_offset > XHCI_MMIO_WINDOW_SIZE - 4U) ||
+        (controller->state.capabilities.doorbell_offset > XHCI_MMIO_WINDOW_SIZE - 4U) ||
         ((uint32_t)device->slot_id >
-         (XHCI_MMIO_WINDOW_SIZE - active_state.capabilities.doorbell_offset - 4U) / 4U) ||
+         (XHCI_MMIO_WINDOW_SIZE - controller->state.capabilities.doorbell_offset - 4U) / 4U) ||
         !vmm_pmm_frame_to_hhdm(device->ep0_ring_physical, &ep0_virtual) ||
         !xhci_build_set_configuration_control_td(
             &td, device->ep0_ring_physical, device->ep0_producer_index,
@@ -1008,10 +1008,10 @@ static bool ep0_submit_set_configuration(
     device->ep0_producer_index = td.next_producer_index;
     device->ep0_producer_cycle = td.next_producer_cycle;
     memory_barrier();
-    doorbell = active_state.capabilities.doorbell_offset +
+    doorbell = controller->state.capabilities.doorbell_offset +
                ((uint32_t)device->slot_id * 4U);
-    mmio_write32(runtime_state.mmio, doorbell, 1U);
-    if (!event_dispatch_wait(XHCI_EXPECT_CONTROL_NODATA_STATUS, 0ULL,
+    mmio_write32(controller->runtime.mmio, doorbell, 1U);
+    if (!event_dispatch_wait(controller, XHCI_EXPECT_CONTROL_NODATA_STATUS, 0ULL,
                              device, &result)) {
         device->control_outstanding = false;
         device->expected_status_trb_physical = 0ULL;
@@ -1024,7 +1024,7 @@ static bool ep0_submit_set_configuration(
     return true;
 }
 
-static bool ep0_submit_hid_set_protocol(
+static bool ep0_submit_hid_set_protocol(struct xhci_controller *controller, 
     struct xhci_addressed_device *device, uint8_t interface_number) {
     void *ep0_virtual = NULL;
     volatile struct xhci_trb *ring;
@@ -1033,12 +1033,12 @@ static bool ep0_submit_hid_set_protocol(
     uint16_t start_index;
     uint32_t doorbell;
     if ((device == NULL) || !device->addressed || !device->descriptors_ready ||
-        device->control_outstanding || runtime_state.command_outstanding ||
+        device->control_outstanding || controller->runtime.command_outstanding ||
         (device->slot_id == 0U) ||
         (device->set_protocol_completions == UINT32_MAX) ||
-        (active_state.capabilities.doorbell_offset > XHCI_MMIO_WINDOW_SIZE - 4U) ||
+        (controller->state.capabilities.doorbell_offset > XHCI_MMIO_WINDOW_SIZE - 4U) ||
         ((uint32_t)device->slot_id >
-         (XHCI_MMIO_WINDOW_SIZE - active_state.capabilities.doorbell_offset - 4U) / 4U) ||
+         (XHCI_MMIO_WINDOW_SIZE - controller->state.capabilities.doorbell_offset - 4U) / 4U) ||
         !vmm_pmm_frame_to_hhdm(device->ep0_ring_physical, &ep0_virtual) ||
         !xhci_build_hid_set_protocol_control_td(
             &td, device->ep0_ring_physical, device->ep0_producer_index,
@@ -1064,10 +1064,10 @@ static bool ep0_submit_hid_set_protocol(
     device->ep0_producer_index = td.next_producer_index;
     device->ep0_producer_cycle = td.next_producer_cycle;
     memory_barrier();
-    doorbell = active_state.capabilities.doorbell_offset +
+    doorbell = controller->state.capabilities.doorbell_offset +
                ((uint32_t)device->slot_id * 4U);
-    mmio_write32(runtime_state.mmio, doorbell, 1U);
-    if (!event_dispatch_wait(XHCI_EXPECT_CONTROL_NODATA_STATUS, 0ULL,
+    mmio_write32(controller->runtime.mmio, doorbell, 1U);
+    if (!event_dispatch_wait(controller, XHCI_EXPECT_CONTROL_NODATA_STATUS, 0ULL,
                              device, &result)) {
         device->control_outstanding = false;
         device->expected_status_trb_physical = 0ULL;
@@ -1079,7 +1079,7 @@ static bool ep0_submit_hid_set_protocol(
     return true;
 }
 
-static bool configure_hid_boot_protocols(
+static bool configure_hid_boot_protocols(struct xhci_controller *controller, 
     struct xhci_addressed_device *device,
     const struct xhci_hid_configuration *configuration) {
     uint8_t index;
@@ -1103,7 +1103,7 @@ static bool configure_hid_boot_protocols(
                 break;
             }
         }
-        if (!already_selected && !ep0_submit_hid_set_protocol(
+        if (!already_selected && !ep0_submit_hid_set_protocol(controller, 
                 device, endpoint->interface_number)) {
             return false;
         }
@@ -1111,24 +1111,24 @@ static bool configure_hid_boot_protocols(
     return true;
 }
 
-static bool command_configure_hid(struct xhci_addressed_device *device) {
+static bool command_configure_hid(struct xhci_controller *controller, struct xhci_addressed_device *device) {
     struct xhci_trb command;
     uint64_t command_physical;
     uint8_t completed_slot;
     if ((device == NULL) ||
         !xhci_build_configure_endpoint_command(
             &command, device->input_context_physical,
-            active_state.capabilities.max_slots, device->slot_id) ||
-        !command_submit(command.parameter, command.status, command.control,
+            controller->state.capabilities.max_slots, device->slot_id) ||
+        !command_submit(controller, command.parameter, command.status, command.control,
                         &command_physical) ||
-        !command_wait(command_physical, &completed_slot) ||
+        !command_wait(controller, command_physical, &completed_slot) ||
         (completed_slot != device->slot_id)) {
         return false;
     }
     return true;
 }
 
-static bool configure_hid_device(struct xhci_addressed_device *device) {
+static bool configure_hid_device(struct xhci_controller *controller, struct xhci_addressed_device *device) {
     struct xhci_hid_configuration parsed_configuration;
     struct xhci_hid_configuration configuration;
     uint64_t rings[XHCI_MAX_HID_ENDPOINTS] = {0ULL};
@@ -1138,7 +1138,7 @@ static bool configure_hid_device(struct xhci_addressed_device *device) {
     bool success = false;
     if ((device == NULL) || !device->addressed || !device->descriptors_ready ||
         device->device_configured || device->hid_endpoint_ready ||
-        device->control_outstanding || runtime_state.command_outstanding ||
+        device->control_outstanding || controller->runtime.command_outstanding ||
         !descriptor_buffer_bytes(device, &descriptor_bytes) ||
         !xhci_parse_hid_configuration(
             descriptor_bytes, device->descriptors.configuration_length,
@@ -1149,8 +1149,8 @@ static bool configure_hid_device(struct xhci_addressed_device *device) {
         return false;
     }
     if (configuration.endpoint_count == 0U) { return true; }
-    if (!ep0_submit_set_configuration(device, configuration.configuration_value) ||
-        !configure_hid_boot_protocols(device, &configuration)) {
+    if (!ep0_submit_set_configuration(controller, device, configuration.configuration_value) ||
+        !configure_hid_boot_protocols(controller, device, &configuration)) {
         return false;
     }
     for (index = 0U; index < configuration.endpoint_count; ++index) {
@@ -1167,14 +1167,14 @@ static bool configure_hid_device(struct xhci_addressed_device *device) {
     if (!vmm_pmm_frame_to_hhdm(device->input_context_physical, &input_virtual) ||
         !xhci_build_configure_hid_context(
             input_virtual, (uint32_t)PMM_PAGE_SIZE,
-            active_state.capabilities.context_64_bytes,
-            active_state.capabilities.max_slots, device->slot_id,
-            active_state.capabilities.max_ports, device->root_port_id,
+            controller->state.capabilities.context_64_bytes,
+            controller->state.capabilities.max_slots, device->slot_id,
+            controller->state.capabilities.max_ports, device->root_port_id,
             device->speed, &configuration, rings)) {
         goto out;
     }
     memory_barrier();
-    if (!command_configure_hid(device)) { goto out; }
+    if (!command_configure_hid(controller, device)) { goto out; }
     if (device->configure_endpoint_completions == UINT32_MAX) { goto out; }
     for (index = 0U; index < configuration.endpoint_count; ++index) {
         device->hid_ring_physical[index] = rings[index];
@@ -1192,7 +1192,7 @@ out:
     return success;
 }
 
-static bool discover_device_descriptors(struct xhci_addressed_device *device) {
+static bool discover_device_descriptors(struct xhci_controller *controller, struct xhci_addressed_device *device) {
     void *buffer_virtual = NULL;
     uint8_t *bytes;
     struct xhci_usb_descriptor_facts facts = {0U};
@@ -1207,7 +1207,7 @@ static bool discover_device_descriptors(struct xhci_addressed_device *device) {
         return false;
     }
     (void)buffer_virtual;
-    if (!ep0_submit_get_descriptor(device, XHCI_USB_DESCRIPTOR_DEVICE, 0U, 8U,
+    if (!ep0_submit_get_descriptor(controller, device, XHCI_USB_DESCRIPTOR_DEVICE, 0U, 8U,
                                    &actual) ||
         (actual != 8U) || !descriptor_buffer_bytes(device, &bytes) ||
         !xhci_validate_device_descriptor_prefix(bytes, actual, device->speed,
@@ -1215,23 +1215,23 @@ static bool discover_device_descriptors(struct xhci_addressed_device *device) {
         goto fail;
     }
     if ((descriptor_max_packet != device->ep0_max_packet) &&
-        !command_evaluate_ep0(device, descriptor_max_packet)) {
+        !command_evaluate_ep0(controller, device, descriptor_max_packet)) {
         goto fail;
     }
-    if (!ep0_submit_get_descriptor(device, XHCI_USB_DESCRIPTOR_DEVICE, 0U, 18U,
+    if (!ep0_submit_get_descriptor(controller, device, XHCI_USB_DESCRIPTOR_DEVICE, 0U, 18U,
                                    &actual) ||
         (actual != 18U) || !descriptor_buffer_bytes(device, &bytes) ||
         !xhci_validate_device_descriptor(bytes, actual, device->speed, &facts)) {
         goto fail;
     }
-    if (!ep0_submit_get_descriptor(device, XHCI_USB_DESCRIPTOR_CONFIGURATION,
+    if (!ep0_submit_get_descriptor(controller, device, XHCI_USB_DESCRIPTOR_CONFIGURATION,
                                    0U, 9U, &actual) ||
         (actual != 9U) || !descriptor_buffer_bytes(device, &bytes) ||
         !xhci_configuration_total_length(bytes, actual,
                                          &configuration_length)) {
         goto fail;
     }
-    if (!ep0_submit_get_descriptor(device, XHCI_USB_DESCRIPTOR_CONFIGURATION,
+    if (!ep0_submit_get_descriptor(controller, device, XHCI_USB_DESCRIPTOR_CONFIGURATION,
                                    0U, configuration_length, &actual) ||
         !descriptor_buffer_bytes(device, &bytes) ||
         !xhci_validate_configuration_descriptor(bytes, actual, &facts) ||
