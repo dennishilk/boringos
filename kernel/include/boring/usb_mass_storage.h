@@ -30,6 +30,13 @@ struct usb_mass_storage_configuration {
     uint8_t interface_number;
 };
 
+struct usb_mass_storage_sense {
+    uint8_t response_code;
+    uint8_t sense_key;
+    uint8_t asc;
+    uint8_t ascq;
+};
+
 struct usb_mass_storage_stats {
     uint64_t block_count;
     uint64_t byte_capacity;
@@ -39,6 +46,7 @@ struct usb_mass_storage_stats {
     uint32_t bulk_out_transfers;
     uint32_t read_commands;
     uint32_t write_commands;
+    uint32_t fua_write_commands;
     uint32_t flush_commands;
     uint32_t short_packets;
     uint8_t slot_id;
@@ -47,6 +55,8 @@ struct usb_mass_storage_stats {
     uint8_t bulk_out_address;
     uint16_t bulk_in_max_packet;
     uint16_t bulk_out_max_packet;
+    bool synchronize_cache_unsupported;
+    bool force_unit_access_writes;
     bool configured;
     bool registered;
 };
@@ -59,6 +69,10 @@ bool usb_mass_storage_validate_csw(const uint8_t *bytes, size_t length,
                                    uint32_t expected_tag,
                                    uint32_t transfer_length,
                                    uint32_t *residue, uint8_t *status);
+
+bool usb_mass_storage_parse_sense(
+    const uint8_t *bytes, size_t length,
+    struct usb_mass_storage_sense *sense_out);
 
 bool usb_mass_storage_init(struct xhci_state *state);
 const struct block_device *usb_mass_storage_get_block_device(void);

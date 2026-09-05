@@ -5,6 +5,7 @@
 #include <boring/block_device.h>
 #include <boring/cpu.h>
 #include <boring/pmm.h>
+#include <boring/serial.h>
 #include <boring/usb_mass_storage.h>
 #include <boring/vmm.h>
 #include <boring/xhci.h>
@@ -41,6 +42,17 @@
 #define MSC_SCSI_INQUIRY_BYTES 36U
 #define MSC_SCSI_SENSE_BYTES 18U
 #define MSC_SCSI_CAPACITY_BYTES 8U
+#define MSC_SCSI_WRITE_FUA (1U << 3U)
+#define MSC_SENSE_KEY_ILLEGAL_REQUEST 0x05U
+#define MSC_SENSE_ASC_INVALID_COMMAND_OPERATION_CODE 0x20U
+#define MSC_SENSE_ASCQ_INVALID_COMMAND_OPERATION_CODE 0x00U
+
+#define MSC_M63_POST_FLUSH_TRANSPORT_FAILURE 0xE1U
+#define MSC_M63_POST_FLUSH_CSW_STATUS_FAILURE 0xE2U
+#define MSC_M63_POST_FLUSH_CHECK_CONDITION 0xE3U
+#define MSC_M63_POST_FLUSH_UNSUPPORTED_COMMAND 0xE4U
+#define MSC_M63_POST_FUA_WRITE_FAILURE 0xE5U
+#define MSC_M63_POST_FUA_MODE_ACTIVE 0xE6U
 
 struct usb_msc_runtime {
     struct xhci_state *state;
@@ -64,6 +76,9 @@ struct usb_msc_runtime {
     bool bulk_in_cycle;
     bool bulk_out_cycle;
     uint32_t next_tag;
+    bool pending_write_requires_flush;
+    bool synchronize_cache_unsupported;
+    bool force_unit_access_writes;
     bool initialized;
 };
 
@@ -157,6 +172,47 @@ static void bytes_copy(void *destination, const void *source, size_t length) {
     const uint8_t *from = (const uint8_t *)source;
     size_t index;
     for (index = 0U; index < length; ++index) { to[index] = from[index]; }
+}
+
+bool usb_mass_storage_parse_sense(
+    const uint8_t *bytes, size_t length,
+    struct usb_mass_storage_sense *sense_out) {
+    struct usb_mass_storage_sense parsed = {0};
+    uint8_t response_code;
+
+    if ((bytes == NULL) || (sense_out == NULL) || (length == 0U)) {
+        return false;
+    }
+    response_code = (uint8_t)(bytes[0] & 0x7fU);
+    if ((response_code == 0x70U) || (response_code == 0x71U)) {
+        if ((length < 14U) || (bytes[7] < 6U)) { return false; }
+        parsed.sense_key = (uint8_t)(bytes[2] & 0x0fU);
+        parsed.asc = bytes[12];
+        parsed.ascq = bytes[13];
+    } else if ((response_code == 0x72U) || (response_code == 0x73U)) {
+        if (length < 4U) { return false; }
+        parsed.sense_key = (uint8_t)(bytes[1] & 0x0fU);
+        parsed.asc = bytes[2];
+        parsed.ascq = bytes[3];
+    } else {
+        return false;
+    }
+    parsed.response_code = response_code;
+    *sense_out = parsed;
+    return true;
+}
+
+static void flush_diagnostic_marker(const char *marker, uint8_t post_code) {
+    serial_write_string(marker);
+    serial_write_string("\n");
+    MSC_M61_PROGRESS(post_code);
+}
+
+static void flush_diagnostic_value(const char *marker, uint8_t value) {
+    serial_write_string(marker);
+    serial_write_string("=");
+    serial_write_hex_u64((uint64_t)value);
+    serial_write_string("\n");
 }
 
 static bool bulk_packet_size(uint8_t speed, uint16_t raw, uint16_t *packet) {
@@ -850,8 +906,8 @@ static bool scsi_read_capacity(void) {
     return true;
 }
 
-static bool scsi_rw10(bool write, uint32_t lba, uint16_t blocks,
-                      void *buffer) {
+static bool scsi_rw10(bool write, bool force_unit_access,
+                      uint32_t lba, uint16_t blocks, void *buffer) {
     uint8_t cdb[10] = {0U};
     uint32_t bytes;
     uint32_t actual = 0U;
@@ -863,6 +919,7 @@ static bool scsi_rw10(bool write, uint32_t lba, uint16_t blocks,
     }
     bytes = (uint32_t)blocks * msc_runtime.stats.logical_block_size;
     cdb[0] = write ? MSC_SCSI_WRITE_10 : MSC_SCSI_READ_10;
+    if (write && force_unit_access) { cdb[1] = MSC_SCSI_WRITE_FUA; }
     store_big32(&cdb[2], lba);
     store_big16(&cdb[7], blocks);
     if (!bot_execute(cdb, 10U, !write, buffer, bytes, &actual, &status) ||
@@ -870,8 +927,13 @@ static bool scsi_rw10(bool write, uint32_t lba, uint16_t blocks,
         return false;
     }
     if (write) {
-        if (msc_runtime.stats.write_commands == UINT32_MAX) { return false; }
+        if ((msc_runtime.stats.write_commands == UINT32_MAX) ||
+            (force_unit_access &&
+             (msc_runtime.stats.fua_write_commands == UINT32_MAX))) {
+            return false;
+        }
         ++msc_runtime.stats.write_commands;
+        if (force_unit_access) { ++msc_runtime.stats.fua_write_commands; }
     } else {
         if (msc_runtime.stats.read_commands == UINT32_MAX) { return false; }
         ++msc_runtime.stats.read_commands;
@@ -879,15 +941,78 @@ static bool scsi_rw10(bool write, uint32_t lba, uint16_t blocks,
     return true;
 }
 
+static bool scsi_request_sense(struct usb_mass_storage_sense *sense_out) {
+    uint8_t cdb[6] = { MSC_SCSI_REQUEST_SENSE, 0U, 0U, 0U,
+                       MSC_SCSI_SENSE_BYTES, 0U };
+    uint8_t sense[MSC_SCSI_SENSE_BYTES];
+    uint32_t actual = 0U;
+    uint8_t status = 0xffU;
+
+    return (sense_out != NULL) &&
+           bot_execute(cdb, 6U, true, sense, MSC_SCSI_SENSE_BYTES,
+                       &actual, &status) &&
+           (status == 0U) &&
+           usb_mass_storage_parse_sense(sense, (size_t)actual, sense_out);
+}
+
+static bool synchronize_cache_is_explicitly_unsupported(
+    const struct usb_mass_storage_sense *sense) {
+    return (sense != NULL) &&
+           (sense->sense_key == MSC_SENSE_KEY_ILLEGAL_REQUEST) &&
+           (sense->asc == MSC_SENSE_ASC_INVALID_COMMAND_OPERATION_CODE) &&
+           (sense->ascq == MSC_SENSE_ASCQ_INVALID_COMMAND_OPERATION_CODE);
+}
+
 bool usb_mass_storage_flush(void) {
     uint8_t cdb[10] = { MSC_SCSI_SYNCHRONIZE_CACHE_10, 0U, 0U, 0U, 0U,
                         0U, 0U, 0U, 0U, 0U };
     uint8_t status = 0xffU;
-    if (!msc_runtime.initialized || !scsi_no_data(cdb, 10U, &status) ||
-        (status != 0U) || (msc_runtime.stats.flush_commands == UINT32_MAX)) {
+    struct usb_mass_storage_sense sense;
+
+    if (!msc_runtime.initialized) { return false; }
+
+    if (msc_runtime.synchronize_cache_unsupported) {
+        if (msc_runtime.pending_write_requires_flush) { return false; }
+        MSC_M61_PROGRESS(MSC_M63_POST_FUA_MODE_ACTIVE);
+        return true;
+    }
+
+    if (!scsi_no_data(cdb, 10U, &status)) {
+        flush_diagnostic_marker("USB_FLUSH_TRANSPORT_FAILURE",
+                                MSC_M63_POST_FLUSH_TRANSPORT_FAILURE);
         return false;
     }
+    if (status != 0U) {
+        flush_diagnostic_marker("USB_FLUSH_CSW_STATUS_FAILURE",
+                                MSC_M63_POST_FLUSH_CSW_STATUS_FAILURE);
+        if (status != 1U) { return false; }
+
+        flush_diagnostic_marker("USB_FLUSH_CHECK_CONDITION",
+                                MSC_M63_POST_FLUSH_CHECK_CONDITION);
+        if (!scsi_request_sense(&sense)) {
+            serial_write_string("USB_FLUSH_REQUEST_SENSE_FAILURE\n");
+            return false;
+        }
+        flush_diagnostic_value("USB_FLUSH_SENSE_KEY", sense.sense_key);
+        flush_diagnostic_value("USB_FLUSH_ASC", sense.asc);
+        flush_diagnostic_value("USB_FLUSH_ASCQ", sense.ascq);
+
+        if (!synchronize_cache_is_explicitly_unsupported(&sense)) {
+            return false;
+        }
+
+        msc_runtime.synchronize_cache_unsupported = true;
+        msc_runtime.force_unit_access_writes = true;
+        msc_runtime.stats.synchronize_cache_unsupported = true;
+        msc_runtime.stats.force_unit_access_writes = true;
+        flush_diagnostic_marker("USB_FLUSH_UNSUPPORTED_COMMAND",
+                                MSC_M63_POST_FLUSH_UNSUPPORTED_COMMAND);
+        return !msc_runtime.pending_write_requires_flush;
+    }
+
+    if (msc_runtime.stats.flush_commands == UINT32_MAX) { return false; }
     ++msc_runtime.stats.flush_commands;
+    msc_runtime.pending_write_requires_flush = false;
     return true;
 }
 
@@ -903,8 +1028,8 @@ static enum block_device_result msc_backend_read(void *context,
         (block_count > max_blocks) || (first_block > UINT32_MAX)) {
         return BLOCK_DEVICE_RESULT_INVALID_ARGUMENT;
     }
-    return scsi_rw10(false, (uint32_t)first_block, (uint16_t)block_count,
-                     buffer) ? BLOCK_DEVICE_RESULT_OK :
+    return scsi_rw10(false, false, (uint32_t)first_block,
+                     (uint16_t)block_count, buffer) ? BLOCK_DEVICE_RESULT_OK :
                                BLOCK_DEVICE_RESULT_IO_ERROR;
 }
 
@@ -920,11 +1045,43 @@ static enum block_device_result msc_backend_write(void *context,
         (block_count > max_blocks) || (first_block > UINT32_MAX)) {
         return BLOCK_DEVICE_RESULT_INVALID_ARGUMENT;
     }
-    if (!scsi_rw10(true, (uint32_t)first_block, (uint16_t)block_count,
-                   (void *)(uintptr_t)buffer) ||
-        !usb_mass_storage_flush()) {
+    if (runtime->force_unit_access_writes) {
+        if (!scsi_rw10(true, true, (uint32_t)first_block,
+                       (uint16_t)block_count, (void *)(uintptr_t)buffer)) {
+            flush_diagnostic_marker("USB_FUA_WRITE_FAILURE",
+                                    MSC_M63_POST_FUA_WRITE_FAILURE);
+            return BLOCK_DEVICE_RESULT_IO_ERROR;
+        }
+        runtime->pending_write_requires_flush = false;
+        MSC_M61_PROGRESS(MSC_M63_POST_FUA_MODE_ACTIVE);
+        return BLOCK_DEVICE_RESULT_OK;
+    }
+
+    if (!scsi_rw10(true, false, (uint32_t)first_block,
+                   (uint16_t)block_count, (void *)(uintptr_t)buffer)) {
         return BLOCK_DEVICE_RESULT_IO_ERROR;
     }
+    runtime->pending_write_requires_flush = true;
+    if (usb_mass_storage_flush()) { return BLOCK_DEVICE_RESULT_OK; }
+
+    if (!runtime->force_unit_access_writes ||
+        !runtime->synchronize_cache_unsupported) {
+        return BLOCK_DEVICE_RESULT_IO_ERROR;
+    }
+
+    /*
+     * SYNCHRONIZE CACHE was rejected specifically as an unsupported opcode.
+     * The preceding WRITE(10) cannot be reported durable, so repeat the same
+     * bounded write with FUA and only then clear the pending durability state.
+     */
+    if (!scsi_rw10(true, true, (uint32_t)first_block,
+                   (uint16_t)block_count, (void *)(uintptr_t)buffer)) {
+        flush_diagnostic_marker("USB_FUA_WRITE_FAILURE",
+                                MSC_M63_POST_FUA_WRITE_FAILURE);
+        return BLOCK_DEVICE_RESULT_IO_ERROR;
+    }
+    runtime->pending_write_requires_flush = false;
+    MSC_M61_PROGRESS(MSC_M63_POST_FUA_MODE_ACTIVE);
     return BLOCK_DEVICE_RESULT_OK;
 }
 

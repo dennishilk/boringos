@@ -80,6 +80,40 @@ static void csw_fixture(uint8_t bytes[USB_MASS_STORAGE_CSW_SIZE],
     bytes[12] = status;
 }
 
+static void validate_sense_parsing(void) {
+    uint8_t fixed[18] = {0};
+    uint8_t descriptor[4] = {0};
+    struct usb_mass_storage_sense sense;
+
+    fixed[0] = 0x70U;
+    fixed[2] = 0x05U;
+    fixed[7] = 10U;
+    fixed[12] = 0x20U;
+    fixed[13] = 0x00U;
+    if (!usb_mass_storage_parse_sense(fixed, sizeof(fixed), &sense) ||
+        (sense.response_code != 0x70U) || (sense.sense_key != 0x05U) ||
+        (sense.asc != 0x20U) || (sense.ascq != 0x00U)) {
+        fail("fixed REQUEST SENSE parser");
+    }
+
+    descriptor[0] = 0x72U;
+    descriptor[1] = 0x03U;
+    descriptor[2] = 0x11U;
+    descriptor[3] = 0x22U;
+    if (!usb_mass_storage_parse_sense(descriptor, sizeof(descriptor), &sense) ||
+        (sense.response_code != 0x72U) || (sense.sense_key != 0x03U) ||
+        (sense.asc != 0x11U) || (sense.ascq != 0x22U)) {
+        fail("descriptor REQUEST SENSE parser");
+    }
+
+    fixed[0] = 0x74U;
+    if (usb_mass_storage_parse_sense(fixed, sizeof(fixed), &sense) ||
+        usb_mass_storage_parse_sense(descriptor, 3U, &sense)) {
+        fail("invalid REQUEST SENSE accepted");
+    }
+    serial_write_string("M63 REQUEST SENSE parser: PASS\n");
+}
+
 static void validate_csw_rejections(void) {
     uint8_t csw[USB_MASS_STORAGE_CSW_SIZE];
     uint32_t residue = 0U;
@@ -219,6 +253,7 @@ void usb_mass_storage_test_run(void) {
     uint32_t block_size;
     uint32_t hid_count;
 
+    validate_sense_parsing();
     validate_csw_rejections();
     block_device_init();
     if (!xhci_init(&state)) { fail("xHCI initialization"); }
