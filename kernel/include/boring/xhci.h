@@ -5,10 +5,12 @@
 #include <stdint.h>
 
 #include <boring/pci.h>
+#include <boring/pci_inventory.h>
 #include <boring/usb_hid.h>
 
 #define XHCI_MMIO_WINDOW_SIZE 65536U
 #define XHCI_MAX_PORTS 64U
+#define XHCI_MAX_CONTROLLERS 8U
 #define XHCI_MAX_ADDRESSED_DEVICES 8U
 #define XHCI_TRB_SIZE 16U
 #define XHCI_COMMAND_RING_USABLE 252U
@@ -45,6 +47,22 @@ enum xhci_hid_report_format {
     XHCI_HID_REPORT_BOOT_KEYBOARD,
     XHCI_HID_REPORT_BOOT_MOUSE,
     XHCI_HID_REPORT_QEMU_ABSOLUTE_TABLET
+};
+
+enum xhci_controller_init_status {
+    XHCI_CONTROLLER_EMPTY = 0,
+    XHCI_CONTROLLER_DISCOVERED,
+    XHCI_CONTROLLER_INVALID_BAR,
+    XHCI_CONTROLLER_PCI_ENABLE_FAILED,
+    XHCI_CONTROLLER_MMIO_MAP_FAILED,
+    XHCI_CONTROLLER_CAPABILITIES_FAILED,
+    XHCI_CONTROLLER_LEGACY_HANDOFF_FAILED,
+    XHCI_CONTROLLER_HALT_FAILED,
+    XHCI_CONTROLLER_RESET_FAILED,
+    XHCI_CONTROLLER_NOT_READY,
+    XHCI_CONTROLLER_RINGS_FAILED,
+    XHCI_CONTROLLER_START_FAILED,
+    XHCI_CONTROLLER_RUNNING
 };
 
 struct xhci_trb {
@@ -143,6 +161,7 @@ struct xhci_addressed_device {
     uint8_t root_port_id;
     uint8_t slot_id;
     uint8_t speed;
+    uint8_t controller_index;
     bool ep0_producer_cycle;
     bool control_outstanding;
     bool descriptors_ready;
@@ -177,6 +196,7 @@ struct xhci_state {
     uint32_t command_completions;
     uint32_t port_events_consumed;
     uint8_t addressed_count;
+    uint8_t controller_index;
     bool addressing_truncated;
     bool legacy_handoff_complete;
     bool controller_running;
@@ -301,8 +321,20 @@ bool xhci_classify_shared_transfer_event(
     enum xhci_shared_transfer_owner *owner,
     uint32_t *storage_actual_length, bool *storage_short_packet);
 
-/* Initializes one segment-zero xHCI controller through PCI BAR0. */
+/* Pure bounded controller discovery. Results are sorted by BDF. */
+bool xhci_collect_controller_devices(
+    const struct boring_pci_inventory *inventory,
+    struct pci_device devices[XHCI_MAX_CONTROLLERS],
+    uint8_t *count, bool *truncated);
+
+/* Initializes every discovered segment-zero xHCI controller. Controller zero
+ * remains the compatibility state returned to inherited single-controller
+ * callers. */
 bool xhci_init(struct xhci_state *state);
+uint8_t xhci_controller_count(void);
+bool xhci_controller_registry_truncated(void);
+struct xhci_state *xhci_get_controller(uint8_t index);
+enum xhci_controller_init_status xhci_get_controller_status(uint8_t index);
 #ifdef BORING_M61_PHYSICAL_BREADCRUMBS
 uint8_t boring_m61_xhci_failure_reason(void);
 #endif
