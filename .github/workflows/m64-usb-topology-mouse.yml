@@ -30,3 +30,5 @@ jobs:
           ASAN_OPTIONS=detect_leaks=0 ./build/xhci-host-test-sanitized
       - name: Real q35 xHCI controller regression
         run: ./tests/m48-xhci-qemu.sh
+      - name: Real three-controller q35 ownership
+        run: ./tests/m64-multi-xhci-qemu.sh
