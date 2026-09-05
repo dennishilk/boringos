@@ -101,10 +101,11 @@ static void tt_test(void) {
 static void hub_descriptor_test(void) {
     struct boring_usb_hub_descriptor hub;
     uint8_t descriptor[11] = {
-        9U, 0x29U, 8U, 0xa1U, 0x00U, 25U, 50U, 0x00U, 0xffU, 0U, 0U
+        11U, 0x29U, 8U, 0xa1U, 0x00U, 25U, 50U, 0x00U, 0x00U, 0xffU, 0xffU
     };
 
-    check(boring_usb_parse_hub_descriptor(descriptor, 9U, &hub),
+    check(boring_usb_parse_hub_descriptor(descriptor,
+                                          (uint16_t)sizeof(descriptor), &hub),
           "valid eight-port hub descriptor");
     check((hub.port_count == 8U) && hub.individual_port_power &&
           !hub.no_power_switching && !hub.compound && hub.multi_tt &&
@@ -112,23 +113,28 @@ static void hub_descriptor_test(void) {
           (hub.controller_current_ma == 50U), "hub descriptor fields");
 
     descriptor[1] = 0x2aU;
-    check(!boring_usb_parse_hub_descriptor(descriptor, 9U, &hub),
+    check(!boring_usb_parse_hub_descriptor(descriptor,
+                                           (uint16_t)sizeof(descriptor), &hub),
           "wrong hub descriptor type rejected");
     descriptor[1] = 0x29U;
     descriptor[2] = 0U;
-    check(!boring_usb_parse_hub_descriptor(descriptor, 9U, &hub),
+    check(!boring_usb_parse_hub_descriptor(descriptor,
+                                           (uint16_t)sizeof(descriptor), &hub),
           "zero hub ports rejected");
     descriptor[2] = 16U;
-    check(!boring_usb_parse_hub_descriptor(descriptor, 9U, &hub),
+    check(!boring_usb_parse_hub_descriptor(descriptor,
+                                           (uint16_t)sizeof(descriptor), &hub),
           "hub port bound enforced");
     descriptor[2] = 8U;
-    descriptor[0] = 8U;
-    check(!boring_usb_parse_hub_descriptor(descriptor, 9U, &hub),
+    descriptor[0] = 10U;
+    check(!boring_usb_parse_hub_descriptor(descriptor,
+                                           (uint16_t)sizeof(descriptor), &hub),
           "hub descriptor length mismatch rejected");
-    descriptor[0] = 9U;
+    descriptor[0] = 11U;
     descriptor[3] = 3U;
     descriptor[4] = 0U;
-    check(!boring_usb_parse_hub_descriptor(descriptor, 9U, &hub),
+    check(!boring_usb_parse_hub_descriptor(descriptor,
+                                           (uint16_t)sizeof(descriptor), &hub),
           "reserved power switching mode rejected");
 }
 
