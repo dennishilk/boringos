@@ -174,8 +174,6 @@ struct xhci_erst_entry {
     uint32_t reserved;
 };
 
-static struct xhci_state active_state;
-
 struct xhci_runtime {
     volatile uint8_t *mmio;
     volatile uint64_t *dcbaa;
@@ -192,7 +190,15 @@ struct xhci_runtime {
     bool command_outstanding;
 };
 
-static struct xhci_runtime runtime_state;
+struct xhci_controller {
+    struct xhci_state state;
+    struct xhci_runtime runtime;
+    enum xhci_controller_init_status status;
+};
+
+static struct xhci_controller controller_registry[XHCI_MAX_CONTROLLERS];
+static uint8_t controller_registry_count;
+static bool controller_registry_truncated;
 
 enum xhci_event_expectation {
     XHCI_EXPECT_COMMAND = 0,
@@ -232,30 +238,7 @@ static void memory_barrier(void) {
     __asm__ volatile ("mfence" ::: "memory");
 }
 
-static bool find_controller(struct pci_device *device) {
-    const struct boring_pci_inventory *inventory = boring_pci_inventory_get();
-    uint32_t index;
 
-    if ((device == NULL) || (inventory == NULL) || !inventory->complete) {
-        return false;
-    }
-    for (index = 0U; index < inventory->stored; ++index) {
-        const struct boring_pci_entry *entry = &inventory->entries[index];
-        if ((entry->class_code == XHCI_CLASS_SERIAL_BUS) &&
-            (entry->subclass == XHCI_SUBCLASS_USB) &&
-            (entry->prog_if == XHCI_PROG_IF)) {
-            device->bdf = entry->bdf;
-            device->vendor_id = entry->vendor_id;
-            device->device_id = entry->device_id;
-            device->class_code = entry->class_code;
-            device->subclass = entry->subclass;
-            device->header_type = entry->header_type;
-            device->revision = entry->revision;
-            return true;
-        }
-    }
-    return false;
-}
 
 static bool legacy_handoff(volatile uint8_t *base,
                            const struct xhci_capabilities *capabilities,
