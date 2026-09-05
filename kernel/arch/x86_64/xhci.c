@@ -317,23 +317,23 @@ static void frame_release(uint64_t physical) {
     if (physical != 0ULL) { (void)pmm_free_frame(physical); }
 }
 
-static void scratchpads_release(void) {
+static void scratchpads_release(struct xhci_controller *controller) {
     uint16_t index;
-    if ((runtime_state.dcbaa != NULL) &&
-        (runtime_state.scratchpad_array_physical != 0ULL)) {
-        runtime_state.dcbaa[0] = 0ULL;
+    if ((controller->runtime.dcbaa != NULL) &&
+        (controller->runtime.scratchpad_array_physical != 0ULL)) {
+        controller->runtime.dcbaa[0] = 0ULL;
         memory_barrier();
     }
-    for (index = 0U; index < runtime_state.scratchpad_count; ++index) {
-        frame_release(runtime_state.scratchpad_buffer_physical[index]);
-        runtime_state.scratchpad_buffer_physical[index] = 0ULL;
+    for (index = 0U; index < controller->runtime.scratchpad_count; ++index) {
+        frame_release(controller->runtime.scratchpad_buffer_physical[index]);
+        controller->runtime.scratchpad_buffer_physical[index] = 0ULL;
     }
-    frame_release(runtime_state.scratchpad_array_physical);
-    runtime_state.scratchpad_array_physical = 0ULL;
-    runtime_state.scratchpad_count = 0U;
+    frame_release(controller->runtime.scratchpad_array_physical);
+    controller->runtime.scratchpad_array_physical = 0ULL;
+    controller->runtime.scratchpad_count = 0U;
 }
 
-static bool scratchpads_initialize(
+static bool scratchpads_initialize(struct xhci_controller *controller, 
     volatile uint8_t *base, uint32_t operational,
     const struct xhci_capabilities *capabilities) {
     void *array_virtual = NULL;
@@ -347,34 +347,34 @@ static bool scratchpads_initialize(
     if ((mmio_read32(base, operational + 0x08U) & XHCI_PAGESIZE_4K) == 0U) {
         XHCI_M61_RETURN_FALSE(XHCI_M61_RINGS_FALSE_SCRATCHPAD_PAGE_SIZE);
     }
-    runtime_state.scratchpad_count = capabilities->scratchpad_count;
-    if (!frame_alloc_zero(&runtime_state.scratchpad_array_physical,
+    controller->runtime.scratchpad_count = capabilities->scratchpad_count;
+    if (!frame_alloc_zero(&controller->runtime.scratchpad_array_physical,
                           &array_virtual)) {
         XHCI_M61_RINGS_ALLOC_RETURN_FALSE(
             XHCI_M61_RINGS_FALSE_SCRATCHPAD_ARRAY_PMM,
             XHCI_M61_RINGS_FALSE_SCRATCHPAD_ARRAY_HHDM);
     }
     array = (volatile uint64_t *)array_virtual;
-    for (index = 0U; index < runtime_state.scratchpad_count; ++index) {
+    for (index = 0U; index < controller->runtime.scratchpad_count; ++index) {
         void *buffer_virtual = NULL;
-        if (!frame_alloc_zero(&runtime_state.scratchpad_buffer_physical[index],
+        if (!frame_alloc_zero(&controller->runtime.scratchpad_buffer_physical[index],
                               &buffer_virtual)) {
             XHCI_M61_RINGS_ALLOC_RETURN_FALSE(
                 XHCI_M61_RINGS_FALSE_SCRATCHPAD_BUFFER_PMM,
                 XHCI_M61_RINGS_FALSE_SCRATCHPAD_BUFFER_HHDM);
         }
         (void)buffer_virtual;
-        array[index] = runtime_state.scratchpad_buffer_physical[index];
+        array[index] = controller->runtime.scratchpad_buffer_physical[index];
     }
     memory_barrier();
-    runtime_state.dcbaa[0] = runtime_state.scratchpad_array_physical;
+    controller->runtime.dcbaa[0] = controller->runtime.scratchpad_array_physical;
     memory_barrier();
     return true;
 }
 
-static void rings_release(struct xhci_state *state) {
+static void rings_release(struct xhci_controller *controller, struct xhci_state *state) {
     if (state == NULL) { return; }
-    scratchpads_release();
+    scratchpads_release(controller);
     frame_release(state->erst_physical);
     state->erst_physical = 0ULL;
     frame_release(state->event_ring_physical);
@@ -383,12 +383,12 @@ static void rings_release(struct xhci_state *state) {
     state->command_ring_physical = 0ULL;
     frame_release(state->dcbaa_physical);
     state->dcbaa_physical = 0ULL;
-    runtime_state.dcbaa = NULL;
-    runtime_state.command_ring = NULL;
-    runtime_state.event_ring = NULL;
+    controller->runtime.dcbaa = NULL;
+    controller->runtime.command_ring = NULL;
+    controller->runtime.event_ring = NULL;
 }
 
-static bool rings_initialize(volatile uint8_t *base,
+static bool rings_initialize(struct xhci_controller *controller, volatile uint8_t *base,
                              const struct xhci_capabilities *capabilities,
                              struct xhci_state *state) {
     void *dcbaa_virtual = NULL;
@@ -407,8 +407,8 @@ static bool rings_initialize(volatile uint8_t *base,
         XHCI_M61_RINGS_ALLOC_RETURN_FALSE(XHCI_M61_RINGS_FALSE_DCBAA_PMM,
                                           XHCI_M61_RINGS_FALSE_DCBAA_HHDM);
     }
-    runtime_state.dcbaa = (volatile uint64_t *)dcbaa_virtual;
-    if (!scratchpads_initialize(base, operational, capabilities)) {
+    controller->runtime.dcbaa = (volatile uint64_t *)dcbaa_virtual;
+    if (!scratchpads_initialize(controller, base, operational, capabilities)) {
         return false;
     }
     XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_COMMAND_RING_ALLOCATION);
@@ -433,8 +433,8 @@ static bool rings_initialize(volatile uint8_t *base,
     if (!frame_alloc_zero(&state->dcbaa_physical, &dcbaa_virtual)) {
         return false;
     }
-    runtime_state.dcbaa = (volatile uint64_t *)dcbaa_virtual;
-    if (!scratchpads_initialize(base, operational, capabilities)) {
+    controller->runtime.dcbaa = (volatile uint64_t *)dcbaa_virtual;
+    if (!scratchpads_initialize(controller, base, operational, capabilities)) {
         return false;
     }
     if (!frame_alloc_zero(&state->command_ring_physical, &command_virtual) ||
@@ -475,16 +475,16 @@ static bool rings_initialize(volatile uint8_t *base,
     XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_ERDP_WRITE);
     mmio_write64(base, interrupter + 0x18U, state->event_ring_physical);
     memory_barrier();
-    runtime_state.mmio = base;
-    runtime_state.command_ring =
+    controller->runtime.mmio = base;
+    controller->runtime.command_ring =
         (volatile struct xhci_trb *)command_virtual;
-    runtime_state.event_ring = (volatile struct xhci_trb *)event_virtual;
-    runtime_state.command_index = 0U;
-    runtime_state.event_index = 0U;
-    runtime_state.command_cycle = true;
-    runtime_state.event_cycle = true;
-    runtime_state.command_outstanding = false;
-    runtime_state.outstanding_command_physical = 0ULL;
+    controller->runtime.event_ring = (volatile struct xhci_trb *)event_virtual;
+    controller->runtime.command_index = 0U;
+    controller->runtime.event_index = 0U;
+    controller->runtime.command_cycle = true;
+    controller->runtime.event_cycle = true;
+    controller->runtime.command_outstanding = false;
+    controller->runtime.outstanding_command_physical = 0ULL;
 #ifdef BORING_M61_PHYSICAL_BREADCRUMBS
     XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_DCBAAP_READBACK);
     if (mmio_read64(base, operational + 0x30U) != state->dcbaa_physical) {
@@ -504,16 +504,16 @@ static void state_clear(struct xhci_state *state) {
     for (index = 0U; index < sizeof(*state); ++index) { bytes[index] = 0U; }
 }
 
-static void runtime_clear(void) {
-    uint8_t *bytes = (uint8_t *)&runtime_state;
+static void runtime_clear(struct xhci_controller *controller) {
+    uint8_t *bytes = (uint8_t *)&controller->runtime;
     size_t index;
-    for (index = 0U; index < sizeof(runtime_state); ++index) {
+    for (index = 0U; index < sizeof(controller->runtime); ++index) {
         bytes[index] = 0U;
     }
 }
 
-static uint32_t port_offset(uint8_t root_port_id) {
-    return (uint32_t)active_state.capabilities.capability_length +
+static uint32_t port_offset(struct xhci_controller *controller, uint8_t root_port_id) {
+    return (uint32_t)controller->state.capabilities.capability_length +
            XHCI_PORT_BASE + (((uint32_t)root_port_id - 1U) * XHCI_PORT_STRIDE);
 }
 
