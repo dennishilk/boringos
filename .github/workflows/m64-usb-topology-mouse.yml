@@ -43,51 +43,61 @@ jobs:
           status=${PIPESTATUS[0]}
           echo "$status" > build/m64-multi-usb-step.status
           exit "$status"
-      - name: Diagnose build failure
+      - name: Witness test image built
+        if: steps.multi_usb.outcome == 'failure'
+        continue-on-error: true
+        run: test -s build/boringos.iso
+      - name: Witness guest serial created
+        if: steps.multi_usb.outcome == 'failure'
+        continue-on-error: true
+        run: test -s build/m64-multi-usb/serial.log
+      - name: Witness HID injection window reached
+        if: steps.multi_usb.outcome == 'failure'
+        continue-on-error: true
+        run: grep -Fq 'M64 multi-controller HID ready; inject real USB input now.' build/m64-multi-usb/serial.log
+      - name: Witness guest cross-controller PASS reached
+        if: steps.multi_usb.outcome == 'failure'
+        continue-on-error: true
+        run: grep -Fq 'M64 multi-controller USB storage/HID passed.' build/m64-multi-usb/serial.log
+      - name: Witness all guest acceptance markers
         if: steps.multi_usb.outcome == 'failure'
         continue-on-error: true
         run: |
-          grep -Eq '(error:|undefined reference|No rule to make target|make: \*\*\*)' build/m64-multi-usb-step.log && exit 1 || exit 0
-      - name: Diagnose pre-input guest exit
+          for marker in \
+            'KEYBOARD_ON_CONTROLLER_A=PASS' \
+            'STORAGE_ON_CONTROLLER_A=PASS' \
+            'HID_ON_CONTROLLER_B=PASS' \
+            'USB_STORAGE_REGRESSION=PASS' \
+            'M63_FLUSH_POLICY_REGRESSION=PASS' \
+            'CROSS_CONTROLLER_EVENT_OWNERSHIP=PASS' \
+            'CROSS_CONTROLLER_HID_INTERRUPT_IN=PASS' \
+            'CANONICAL_MOUSE_EVENT_ON_CONTROLLER_B=PASS'; do
+            grep -Fq "$marker" build/m64-multi-usb/serial.log || exit 1
+          done
+      - name: Witness storage target sector changed
         if: steps.multi_usb.outcome == 'failure'
         continue-on-error: true
         run: |
-          grep -Fq 'QEMU exited before HID injection' build/m64-multi-usb-step.log && exit 1 || exit 0
-      - name: Diagnose HID injection window timeout
+          python3 - <<'PY'
+          from pathlib import Path
+          before=Path('build/m64-multi-usb/m64-usb.before.raw').read_bytes()
+          after=Path('build/m64-multi-usb/m64-usb.raw').read_bytes()
+          block=512; start=8*block; end=start+block
+          assert len(before)==len(after)
+          assert before[start:end] != after[start:end]
+          PY
+      - name: Witness storage writes bounded to target sector
         if: steps.multi_usb.outcome == 'failure'
         continue-on-error: true
         run: |
-          grep -Fq 'guest did not reach HID injection window' build/m64-multi-usb-step.log && exit 1 || exit 0
-      - name: Diagnose QMP injection failure
-        if: steps.multi_usb.outcome == 'failure'
-        continue-on-error: true
-        run: |
-          grep -Fq 'QMP USB input injection failed' build/m64-multi-usb-step.log && exit 1 || exit 0
-      - name: Diagnose post-input guest exit
-        if: steps.multi_usb.outcome == 'failure'
-        continue-on-error: true
-        run: |
-          grep -Fq 'QEMU exited before PASS' build/m64-multi-usb-step.log && exit 1 || exit 0
-      - name: Diagnose guest acceptance timeout
-        if: steps.multi_usb.outcome == 'failure'
-        continue-on-error: true
-        run: |
-          grep -Fq 'guest acceptance timed out' build/m64-multi-usb-step.log && exit 1 || exit 0
-      - name: Diagnose missing witness
-        if: steps.multi_usb.outcome == 'failure'
-        continue-on-error: true
-        run: |
-          grep -Fq 'missing marker:' build/m64-multi-usb-step.log && exit 1 || exit 0
-      - name: Diagnose persistence verifier failure
-        if: steps.multi_usb.outcome == 'failure'
-        continue-on-error: true
-        run: |
-          grep -Eq '(image length changed|target sector did not change|bytes outside target sector changed)' build/m64-multi-usb-step.log && exit 1 || exit 0
-      - name: Diagnose guest explicit failure
-        if: steps.multi_usb.outcome == 'failure'
-        continue-on-error: true
-        run: |
-          grep -Fq 'M64 multi-USB FAILED:' build/m64-multi-usb/serial.log && exit 1 || exit 0
+          python3 - <<'PY'
+          from pathlib import Path
+          before=Path('build/m64-multi-usb/m64-usb.before.raw').read_bytes()
+          after=Path('build/m64-multi-usb/m64-usb.raw').read_bytes()
+          block=512; start=8*block; end=start+block
+          assert before[:start] == after[:start]
+          assert before[end:] == after[end:]
+          PY
       - name: Preserve cross-controller gate
         if: steps.multi_usb.outcome == 'failure'
         run: exit 1
