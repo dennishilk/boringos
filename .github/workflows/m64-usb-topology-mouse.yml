@@ -52,3 +52,5 @@ jobs:
         run: ./tests/m64-multi-xhci-qemu.sh
       - name: Cross-controller storage and HID
         run: ./tests/m64-multi-usb-qemu.sh
+      - name: Real USB hub downstream mouse enumeration
+        run: ./tests/m65-usb-hub-mouse-qemu.sh
