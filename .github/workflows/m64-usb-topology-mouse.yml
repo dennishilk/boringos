@@ -33,4 +33,39 @@ jobs:
       - name: Real three-controller q35 ownership
         run: ./tests/m64-multi-xhci-qemu.sh
       - name: Cross-controller storage and HID
+        id: multi_usb
+        continue-on-error: true
         run: ./tests/m64-multi-usb-qemu.sh
+      - name: Diagnose guest initialization failure
+        if: steps.multi_usb.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          grep -Eq 'M64 multi-USB FAILED: (three-controller initialization|controller registry state|per-controller address/descriptor/HID|QEMU topology classification)' build/m64-multi-usb/serial.log && exit 1 || exit 0
+      - name: Diagnose storage setup failure
+        if: steps.multi_usb.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          grep -Eq 'M64 multi-USB FAILED: (controller-bound usb0 initialization|usb0 ownership/registration|usb0 bounded geometry|usb0 READ\(10\) before write)' build/m64-multi-usb/serial.log && exit 1 || exit 0
+      - name: Diagnose storage transport failure
+        if: steps.multi_usb.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          grep -Eq 'M64 multi-USB FAILED: (WRITE\(10\)/flush/readback|M63 normal flush policy regression|storage/HID Event Ring ownership)' build/m64-multi-usb/serial.log && exit 1 || exit 0
+      - name: Diagnose canonical input setup failure
+        if: steps.multi_usb.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          grep -Eq 'M64 multi-USB FAILED: (canonical input queue ownership|canonical input queue stats)' build/m64-multi-usb/serial.log && exit 1 || exit 0
+      - name: Diagnose HID Interrupt-IN failure
+        if: steps.multi_usb.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          grep -Fq 'M64 multi-USB FAILED: cross-controller HID Interrupt-IN' build/m64-multi-usb/serial.log && exit 1 || exit 0
+      - name: Diagnose canonical input result failure
+        if: steps.multi_usb.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          grep -Eq 'M64 multi-USB FAILED: (canonical cross-controller input end state|canonical cross-controller input read|canonical keyboard/pointer event classes|canonical input release)' build/m64-multi-usb/serial.log && exit 1 || exit 0
+      - name: Preserve cross-controller gate
+        if: steps.multi_usb.outcome == 'failure'
+        run: exit 1
