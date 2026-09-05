@@ -663,7 +663,73 @@ static void m51_configuration_test(void) {
           "M51 Configure Endpoint command completion");
 }
 
+
+static void multi_controller_discovery_test(void) {
+    struct boring_pci_inventory inventory = {0};
+    struct pci_device devices[XHCI_MAX_CONTROLLERS];
+    uint8_t count = 99U;
+    bool truncated = true;
+    uint8_t index;
+
+    inventory.complete = true;
+    check(xhci_collect_controller_devices(&inventory, devices, &count,
+                                          &truncated) &&
+          (count == 0U) && !truncated,
+          "M64 discover zero controllers");
+
+    inventory.stored = 4U;
+    inventory.total = 4U;
+    inventory.entries[0].bdf = (struct pci_bdf){58U, 0U, 3U};
+    inventory.entries[0].vendor_id = 0x3333U;
+    inventory.entries[0].device_id = 3U;
+    inventory.entries[0].class_code = 0x0cU;
+    inventory.entries[0].subclass = 0x03U;
+    inventory.entries[0].prog_if = 0x30U;
+    inventory.entries[1].bdf = (struct pci_bdf){1U, 0U, 0U};
+    inventory.entries[1].class_code = 0x01U;
+    inventory.entries[2].bdf = (struct pci_bdf){2U, 0U, 0U};
+    inventory.entries[2].vendor_id = 0x1111U;
+    inventory.entries[2].device_id = 1U;
+    inventory.entries[2].class_code = 0x0cU;
+    inventory.entries[2].subclass = 0x03U;
+    inventory.entries[2].prog_if = 0x30U;
+    inventory.entries[3].bdf = (struct pci_bdf){41U, 0U, 0U};
+    inventory.entries[3].vendor_id = 0x2222U;
+    inventory.entries[3].device_id = 2U;
+    inventory.entries[3].class_code = 0x0cU;
+    inventory.entries[3].subclass = 0x03U;
+    inventory.entries[3].prog_if = 0x30U;
+
+    check(xhci_collect_controller_devices(&inventory, devices, &count,
+                                          &truncated) &&
+          (count == 3U) && !truncated,
+          "M64 discover three controllers");
+    check((devices[0].bdf.bus == 2U) &&
+          (devices[1].bdf.bus == 41U) &&
+          (devices[2].bdf.bus == 58U),
+          "M64 deterministic BDF ordering");
+    check((devices[0].vendor_id == 0x1111U) &&
+          (devices[1].vendor_id == 0x2222U) &&
+          (devices[2].vendor_id == 0x3333U),
+          "M64 independent discovery records");
+
+    inventory.stored = XHCI_MAX_CONTROLLERS + 1U;
+    inventory.total = inventory.stored;
+    for (index = 0U; index < inventory.stored; ++index) {
+        inventory.entries[index].bdf =
+            (struct pci_bdf){index, 0U, 0U};
+        inventory.entries[index].class_code = 0x0cU;
+        inventory.entries[index].subclass = 0x03U;
+        inventory.entries[index].prog_if = 0x30U;
+    }
+    check(xhci_collect_controller_devices(&inventory, devices, &count,
+                                          &truncated) &&
+          (count == XHCI_MAX_CONTROLLERS) && truncated,
+          "M64 bounded controller registry");
+}
+
 int main(void) {
+    multi_controller_discovery_test();
     capabilities_test();
     keyboard_test();
     mouse_test();
