@@ -103,7 +103,8 @@ def source_audit():
     input_source = (ROOT / "kernel/arch/x86_64/i8042.c").read_text()
     makefile = (ROOT / "Makefile").read_text()
 
-    assert "RSDP_REQUEST" not in boot and "rsdp" not in entry.lower()
+    assert "BORING_LIMINE_RSDP_REQUEST_ID" in boot
+    assert "limine_rsdp_request" in entry
     assert "PCI_CONFIG_ADDRESS_PORT 0x0cf8U" in pci
     assert "PIC_MASTER_COMMAND = 0x20" in irq
     assert "PIT_CHANNEL0_DATA = 0x40" in timer
@@ -114,7 +115,7 @@ def source_audit():
     assert "kernel/core/ahci_block.c" in lowered
     assert "kernel/drivers/ahci_block.c" in lowered
     return {
-        "acpi_rsdp_request": False,
+        "acpi_rsdp_request": True,
         "pci_config": "segment 0 CF8/CFC, first 256 bytes",
         "interrupts": "8259 PIC + PIT channel 0",
         "input_driver": "i8042 PS/2 only",
