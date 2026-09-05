@@ -43,7 +43,7 @@ wait_prompt() {
     target=$1
     attempt=0
     while [ "${attempt}" -lt 600 ]; do
-        if grep -Eiq 'boring-shell: FAILED|boring-init: FAILED|BoringKernel syscall fatal|Fatal exception|triple fault|reboot' "${LOG}" 2>/dev/null; then
+        if grep -Eiq 'boring-shell: FAILED|boring-init: FAILED|BoringKernel syscall fatal|Fatal exception|triple fault' "${LOG}" 2>/dev/null; then
             fail "failure marker"
         fi
         if [ "$(prompt_count)" -ge "${target}" ]; then

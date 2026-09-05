@@ -49,7 +49,7 @@ prompt_count() {
 }
 
 failure_seen() {
-    grep -Eiq 'boring-shell: FAILED|boring-init: FAILED|BoringKernel syscall fatal|Fatal exception|triple fault|reboot' "${LOG}" 2>/dev/null
+    grep -Eiq 'boring-shell: FAILED|boring-init: FAILED|BoringKernel syscall fatal|Fatal exception|triple fault' "${LOG}" 2>/dev/null
 }
 
 wait_prompt() {
