@@ -34,6 +34,9 @@
 #if defined(BORING_M54_USB_ONLY_DESKTOP)
 #include <boring/xhci.h>
 #include <boring/timer.h>
+#if defined(BORING_M66_USB_HUB_MOUSE)
+#include <boring/xhci_mixed.h>
+#endif
 #endif
 
 #define M37_INIT_MODULE_PATH "/boot/user/boring-init.elf"
@@ -275,7 +278,11 @@ static bool input_hardware_init(void) {
         !xhci_address_connected(&state) ||
         !xhci_discover_descriptors(&state) ||
         !m54_enumerate_optional_hubs(&state) ||
+#if defined(BORING_M66_USB_HUB_MOUSE)
+        !xhci_configure_hid_devices_mixed(&state) ||
+#else
         !xhci_configure_hid_devices(&state) ||
+#endif
         !(m54_hid_protocols_ready(&state),
           BORING_M54_HID_READY_POLICY(&state))) {
         return false;

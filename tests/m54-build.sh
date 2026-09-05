@@ -4,8 +4,10 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "${ROOT}"
 
 USB_CPPFLAGS='-DBORING_M54_USB_ONLY_DESKTOP=1'
+USB_TEST_HARNESS_C='kernel/core/m37_desktop_test.c kernel/core/m37_desktop_test_adapter.c'
 if [ "${M66_USB_HUB_MOUSE:-0}" = 1 ]; then
     USB_CPPFLAGS="${USB_CPPFLAGS} -DBORING_M66_USB_HUB_MOUSE=1"
+    USB_TEST_HARNESS_C="${USB_TEST_HARNESS_C} kernel/core/xhci_mixed.c kernel/arch/x86_64/xhci_mixed.c"
 fi
 
 rm -rf build/user
@@ -42,7 +44,7 @@ rm -rf build/kernel build/iso_root
 rm -f build/kernel.elf build/boringos.iso build/.test-mode
 make TEST_MODE=m36-desktop \
     TEST_CPPFLAGS="-DBORING_M36_DESKTOP_ACCEPTANCE=1 -DBORING_M37_DESKTOP_ACCEPTANCE=1 ${USB_CPPFLAGS}" \
-    TEST_HARNESS_C='kernel/core/m37_desktop_test.c kernel/core/m37_desktop_test_adapter.c' \
+    TEST_HARNESS_C="${USB_TEST_HARNESS_C}" \
     BOOT_USER_ELF=build/user/boring-init-desktop.elf \
     BOOT_USER_NAME=boring-init.elf \
     BOOT_EXTRA_USER_ELF= BOOT_EXTRA_USER_NAME= \
