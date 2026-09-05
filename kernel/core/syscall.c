@@ -20,6 +20,7 @@
 #include <boring/serial.h>
 #include <boring/smbios.h>
 #include <boring/syscall.h>
+#include <boring/system_control.h>
 #include <boring/timer.h>
 #include <boring/task.h>
 #include <boring/user_memory.h>
@@ -2600,6 +2601,16 @@ void x86_64_syscall_dispatch(struct x86_64_syscall_frame *frame) {
             break;
         case BORING_SYS_BUFFER_CLOSE:
             result = syscall_buffer_close(frame->rdi);
+            break;
+        case BORING_SYS_SYSTEM_CONTROL:
+            if ((frame->rdi != (uint64_t)BORING_SYSTEM_REBOOT) &&
+                (frame->rdi != (uint64_t)BORING_SYSTEM_POWEROFF)) {
+                result = syscall_error(BORING_SYSCALL_EINVAL);
+            } else if (!system_control_begin((uint32_t)frame->rdi)) {
+                result = syscall_error(BORING_SYSCALL_EBUSY);
+            } else {
+                system_control_execute((uint32_t)frame->rdi);
+            }
             break;
         default:
             result = syscall_error(BORING_SYSCALL_ENOSYS);

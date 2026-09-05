@@ -11,7 +11,7 @@
 #define BORING_SHELL_ESCAPE_MAX 8U
 #define BORING_SHELL_HISTORY_CAPACITY 16U
 #define BORING_SHELL_COMMAND_NAME_CAPACITY 16U
-#define BORING_SHELL_COMMAND_COUNT 18U
+#define BORING_SHELL_COMMAND_COUNT 20U
 #define BORING_SHELL_PROMPT_CAPACITY \
     (BORING_SYSTEM_USERNAME_CAPACITY + BORING_SYSTEM_HOSTNAME_CAPACITY + \
      BORING_SYSCALL_CWD_MAX + 8U)
@@ -42,7 +42,7 @@ static const char shell_command_names[BORING_SHELL_COMMAND_COUNT]
                                      [BORING_SHELL_COMMAND_NAME_CAPACITY] = {
     "help", "ls", "mkdir", "rmdir", "cd", "touch", "write", "rm",
     "clear", "pwd", "echo", "hostname", "uname", "whoami",
-    "ps", "history", "exit", "logout"
+    "ps", "history", "reboot", "shutdown", "exit", "logout"
 };
 
 static void shell_exit_failure(void) __attribute__((noreturn));
@@ -1148,7 +1148,7 @@ static bool shell_command_help(const char *argument) {
            shell_write_text("\r\nShell:\r\n") &&
            shell_write_text("  clear echo history help exit logout\r\n") &&
            shell_write_text("\r\nSystem:\r\n") &&
-           shell_write_text("  uname hostname whoami ps\r\n") &&
+           shell_write_text("  uname hostname whoami ps reboot shutdown\r\n") &&
            shell_write_text("\r\nPrograms (/bin):\r\n") &&
            shell_write_text("  boringfetch cat\r\n");
 }
@@ -1554,6 +1554,24 @@ static bool shell_command_external(char *command, char *argument) {
     return true;
 }
 
+static bool shell_command_power(const char *command,
+                                const char *argument,
+                                uint32_t action) {
+    const long result = ((argument == NULL) || (argument[0] == '\0')) ?
+        boring_system_control(action) : -(long)BORING_SYSCALL_EINVAL;
+
+    if ((argument != NULL) && (argument[0] != '\0')) {
+        return shell_write_text(command) &&
+               shell_write_text(": usage: ") &&
+               shell_write_text(command) && shell_write("\r\n", 2U);
+    }
+    if (result == 0L) {
+        return true;
+    }
+    return shell_write_text(command) &&
+           shell_write_text(": system control failed\r\n");
+}
+
 static bool shell_command_exit(const char *command, const char *argument) {
     if ((argument != NULL) && (argument[0] != '\0')) {
         return shell_write_text(command) &&
@@ -1620,6 +1638,12 @@ static bool shell_execute_line(char *line) {
     }
     if (shell_text_equals(command, "history")) {
         return shell_command_history(argument);
+    }
+    if (shell_text_equals(command, "reboot")) {
+        return shell_command_power("reboot", argument, BORING_SYSTEM_REBOOT);
+    }
+    if (shell_text_equals(command, "shutdown")) {
+        return shell_command_power("shutdown", argument, BORING_SYSTEM_POWEROFF);
     }
     if (shell_text_equals(command, "exit")) {
         return shell_command_exit("exit", argument);

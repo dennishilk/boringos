@@ -42,6 +42,9 @@
 #define BORING_LIMINE_SMBIOS_REQUEST_ID \
     { BORING_LIMINE_COMMON_MAGIC, \
       0x9e9046f11e095391ULL, 0xaa4a520fefbde5eeULL }
+#define BORING_LIMINE_RSDP_REQUEST_ID \
+    { BORING_LIMINE_COMMON_MAGIC, \
+      0xc5e77b6b397e7b43ULL, 0x27637845accdcf3cULL }
 
 #define BORING_LIMINE_FRAMEBUFFER_RGB 1U
 
@@ -181,6 +184,17 @@ struct boring_limine_smbios_request {
     uint64_t id[4];
     uint64_t revision;
     struct boring_limine_smbios_response *response;
+};
+
+struct boring_limine_rsdp_response {
+    uint64_t revision;
+    void *address;
+};
+
+struct boring_limine_rsdp_request {
+    uint64_t id[4];
+    uint64_t revision;
+    struct boring_limine_rsdp_response *response;
 };
 
 struct boring_limine_internal_module {

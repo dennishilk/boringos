@@ -40,6 +40,8 @@ static struct boring_spawn_stdio mock_spawn_stdio;
 static long mock_spawn_error;
 static size_t mock_legacy_launches;
 static size_t mock_named_deletions;
+static uint32_t mock_system_action;
+static size_t mock_system_calls;
 
 static void test_fail(const char *message) {
     (void)fprintf(stderr, "shell host test failed: %s\n", message);
@@ -269,6 +271,12 @@ long boring_spawn(const char *path, size_t path_length,
     return result;
 }
 
+long boring_system_control(uint32_t action) {
+    mock_system_action = action;
+    ++mock_system_calls;
+    return 0L;
+}
+
 long boring_waitpid(uint64_t pid, int *status) {
     if ((pid != 3ULL) || (status == NULL)) {
         return -(long)BORING_SYSCALL_EINVAL;
@@ -366,6 +374,10 @@ int main(void) {
     shell_history_reset();
     expect_line("boringf\t\n", sizeof(shell_history_draft), "boringfetch ",
                 "single command completion");
+    expect_line("reb\t\n", sizeof(shell_history_draft), "reboot ",
+                "reboot builtin completion");
+    expect_line("shut\t\n", sizeof(shell_history_draft), "shutdown ",
+                "shutdown builtin completion");
     expect_line("cd TES\t\n", sizeof(shell_history_draft), "cd TEST/",
                 "directory completion");
     expect_line("cat REA\t\n", sizeof(shell_history_draft),
@@ -470,6 +482,22 @@ int main(void) {
                  "cat argv is forwarded to the standalone program");
     test_require(mock_wait_pid == 3ULL,
                  "external cat waitpid");
+
+    {
+        char reboot_line[] = "reboot";
+        char shutdown_line[] = "shutdown";
+
+        mock_system_calls = 0U;
+        mock_system_action = 0U;
+        test_require(shell_execute_line(reboot_line) &&
+                     mock_system_calls == 1U &&
+                     mock_system_action == BORING_SYSTEM_REBOOT,
+                     "reboot dispatches native system-control syscall");
+        test_require(shell_execute_line(shutdown_line) &&
+                     mock_system_calls == 2U &&
+                     mock_system_action == BORING_SYSTEM_POWEROFF,
+                     "shutdown dispatches native system-control syscall");
+    }
 
     test_require(mock_legacy_launches == 0U,
                  "scheduler commands never use legacy LAUNCH");

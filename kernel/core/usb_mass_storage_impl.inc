@@ -101,10 +101,12 @@ static enum block_device_result msc_backend_write(void *context,
                                                    uint64_t first_block,
                                                    uint32_t block_count,
                                                    const void *buffer);
+static enum block_device_result msc_backend_flush(void *context);
 
 static const struct block_device_ops msc_block_ops = {
     .read = msc_backend_read,
-    .write = msc_backend_write
+    .write = msc_backend_write,
+    .flush = msc_backend_flush
 };
 
 static uint16_t little16(const uint8_t *bytes) {
@@ -924,6 +926,16 @@ static enum block_device_result msc_backend_write(void *context,
         return BLOCK_DEVICE_RESULT_IO_ERROR;
     }
     return BLOCK_DEVICE_RESULT_OK;
+}
+
+static enum block_device_result msc_backend_flush(void *context) {
+    struct usb_msc_runtime *runtime = (struct usb_msc_runtime *)context;
+
+    if ((runtime != &msc_runtime) || !runtime->initialized) {
+        return BLOCK_DEVICE_RESULT_IO_ERROR;
+    }
+    return usb_mass_storage_flush() ? BLOCK_DEVICE_RESULT_OK :
+                                      BLOCK_DEVICE_RESULT_IO_ERROR;
 }
 
 static bool allocate_transport(void) {

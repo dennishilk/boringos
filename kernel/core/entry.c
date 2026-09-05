@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <boring/acpi.h>
 #include <boring/block_device_test.h>
 #include <boring/boringfs_ro_test.h>
 #include <boring/boot_protocol.h>
@@ -99,6 +100,13 @@ static volatile struct boring_limine_memmap_request limine_memmap_request = {
 __attribute__((used, section(".limine_requests")))
 static volatile struct boring_limine_hhdm_request limine_hhdm_request = {
     .id = BORING_LIMINE_HHDM_REQUEST_ID,
+    .revision = 0ULL,
+    .response = 0
+};
+
+__attribute__((used, section(".limine_requests")))
+static volatile struct boring_limine_rsdp_request limine_rsdp_request = {
+    .id = BORING_LIMINE_RSDP_REQUEST_ID,
     .revision = 0ULL,
     .response = 0
 };
@@ -1076,6 +1084,10 @@ void boring_kernel_entry(void) {
         x86_64_halt_forever();
     }
     serial_write_string("\nBoringKernel virtual memory test passed.\n\n");
+
+    (void)boring_acpi_boot_init(limine_rsdp_request.response,
+                                limine_hhdm_request.response,
+                                limine_memmap_request.response);
 
     if (!pmm_get_stats(&pmm_before_heap) ||
         !vmm_get_stats(&vmm_before_heap) ||

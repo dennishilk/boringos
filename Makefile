@@ -306,6 +306,9 @@ DISPLAY_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 	-T user/memory-test/linker.ld
 
 KERNEL_C_SOURCES := \
+	kernel/core/acpi_s5.c \
+	kernel/core/acpi.c \
+	kernel/core/system_control.c \
 	kernel/core/smbios.c \
 	kernel/core/smbios_limine.c \
 	kernel/core/pci_inventory.c \
@@ -368,6 +371,7 @@ KERNEL_C_SOURCES := \
 	kernel/arch/x86_64/ps2_mouse.c \
 	kernel/arch/x86_64/timer.c \
 	kernel/arch/x86_64/serial.c \
+	kernel/arch/x86_64/platform_reset.c \
 	kernel/arch/x86_64/cpu.c
 KERNEL_ASM_SOURCES := \
 	kernel/arch/x86_64/descriptor_stubs.S \

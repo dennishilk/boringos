@@ -103,10 +103,12 @@ static enum block_device_result ahci_backend_write(void *context,
                                                     uint64_t first_block,
                                                     uint32_t block_count,
                                                     const void *buffer);
+static enum block_device_result ahci_backend_flush(void *context);
 
 static const struct block_device_ops ahci_block_ops = {
     .read = ahci_backend_read,
-    .write = ahci_backend_write
+    .write = ahci_backend_write,
+    .flush = ahci_backend_flush
 };
 
 static void bytes_zero(void *buffer, size_t length) {
@@ -517,6 +519,27 @@ static enum block_device_result ahci_backend_write(void *context,
         ++runtime.stats.flushes_completed;
     }
     runtime.busy = false;
+    return BLOCK_DEVICE_RESULT_OK;
+}
+
+static enum block_device_result ahci_backend_flush(void *context) {
+    uint8_t fis[AHCI_BLOCK_FIS_BYTES];
+
+    if ((context != &runtime) || !runtime.initialized || runtime.busy) {
+        return BLOCK_DEVICE_RESULT_IO_ERROR;
+    }
+    if (!runtime.identify.write_cache_enabled) {
+        return BLOCK_DEVICE_RESULT_OK;
+    }
+
+    runtime.busy = true;
+    if (!ahci_build_flush_fis(&runtime.identify, fis, sizeof(fis)) ||
+        !issue_command(fis, 0U, false)) {
+        runtime.busy = false;
+        return BLOCK_DEVICE_RESULT_IO_ERROR;
+    }
+    runtime.busy = false;
+    ++runtime.stats.flushes_completed;
     return BLOCK_DEVICE_RESULT_OK;
 }
 

@@ -6,6 +6,7 @@
 #include <boring/heap.h>
 #include <boring/process.h>
 #include <boring/pty.h>
+#include <boring/system_control.h>
 
 static struct process bootstrap_process;
 static struct process *process_registry_head;
@@ -231,7 +232,7 @@ bool process_create(struct process **process_out) {
 
     x86_64_interrupts_disable();
     if ((!process_initialized) || (process_out == NULL) ||
-        (next_pid == UINT64_MAX) ||
+        !system_control_spawn_allowed() || (next_pid == UINT64_MAX) ||
         (live_process_count >= (uint64_t)KERNEL_PROCESS_POLICY_LIMIT)) {
         process_restore_interrupts(interrupts_were_enabled);
         return false;

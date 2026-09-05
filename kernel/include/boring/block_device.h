@@ -27,6 +27,7 @@ struct block_device_ops {
                                       uint64_t first_block,
                                       uint32_t block_count,
                                       const void *buffer);
+    enum block_device_result (*flush)(void *context);
 };
 
 struct block_device {
@@ -52,5 +53,7 @@ enum block_device_result block_device_write(const struct block_device *device,
                                             uint64_t first_block,
                                             uint32_t block_count,
                                             const void *buffer);
+enum block_device_result block_device_flush(const struct block_device *device);
+enum block_device_result block_device_flush_all(void);
 
 #endif

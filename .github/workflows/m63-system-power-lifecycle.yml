@@ -1,0 +1,92 @@
+name: M63 system power lifecycle
+
+on:
+  push:
+    branches: [agent/m63-system-power-lifecycle]
+  workflow_dispatch:
+    inputs:
+      publish_physical:
+        description: Publish the authoritative physical M63 USB image
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  m63-system-power-lifecycle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - name: Install focused UEFI power-lifecycle dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 ovmf gdisk dosfstools mtools xz-utils xorriso
+      - name: Strict host ACPI S5 parser acceptance
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -Ikernel/include \
+            tests/m63-acpi-s5-host-test.c kernel/core/acpi_s5.c \
+            -o build/m63-acpi-s5-host-test
+          build/m63-acpi-s5-host-test
+      - name: Storage durability seam host acceptance
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -Ikernel/include \
+            tests/m63-block-flush-host-test.c kernel/core/block_device.c \
+            -o build/m63-block-flush-host-test
+          build/m63-block-flush-host-test
+      - name: System-control ordering and M62 architecture verifier
+        run: |
+          python3 tests/m63-system-power-verifier.py
+          python3 tests/m62-dynamic-capacity-verifier.py
+      - name: Shell builtin editor history and completion acceptance
+        run: |
+          make shell-host-test
+          build/shell-host-test
+      - name: Build exact physical M61 M62 runtime inheritance
+        run: |
+          sh tests/m61-build.sh
+          python3 tests/m61-empty-desktop-verifier.py
+          sh tests/m61-physical-handoff-bisector.sh
+          env -u GITHUB_SHA sh tests/m61-build-usb-image.sh
+          test "$(stat -c %s build/boringos-m61-usb.img)" = "100663296"
+          (cd build && sha256sum -c boringos-m61-usb.img.sha256)
+      - name: Real reboot shutdown and persistence acceptance
+        run: python3 tests/m63-power-lifecycle-qemu.py
+      - name: Inherited M62 dynamic capacity regression
+        run: |
+          sh tests/m62-capacity-qemu.sh
+          python3 tests/m62-desktop-capacity-qemu.py
+      - name: Inherited M61 persistent desktop regression
+        run: python3 tests/m61-physical-desktop-witness-qemu.py
+      - name: Verify final physical runtime image identity
+        id: physical
+        run: |
+          test "$(stat -c %s build/boringos-m61-usb.img)" = "100663296"
+          (cd build && sha256sum -c boringos-m61-usb.img.sha256)
+          raw_sha=$(awk '{print $1}' build/boringos-m61-usb.img.sha256)
+          echo "raw_sha=$raw_sha" >> "$GITHUB_OUTPUT"
+          echo "raw_bytes=100663296" >> "$GITHUB_OUTPUT"
+      - name: Prepare authoritative M63 physical image
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_physical }}
+        run: |
+          cp build/boringos-m61-usb.img build/boringos-m63-usb.img
+          sha256sum build/boringos-m63-usb.img > build/boringos-m63-usb.img.sha256
+          test "$(stat -c %s build/boringos-m63-usb.img)" = "100663296"
+          xz -T0 -6 -c build/boringos-m63-usb.img > build/boringos-m63-usb.img.xz
+      - name: Publish exactly one authoritative M63 physical USB artifact
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_physical }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: m63-system-power-lifecycle-${{ github.sha }}-${{ steps.physical.outputs.raw_sha }}
+          path: |
+            build/boringos-m63-usb.img.xz
+            build/boringos-m63-usb.img.sha256
+            build/m63-system-power-lifecycle/proof.txt
+            build/m63-system-power-verifier.txt
+          if-no-files-found: error
+          retention-days: 14

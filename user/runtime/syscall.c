@@ -306,6 +306,17 @@ long boring_spawn(const char *path, size_t path_length,
     return result;
 }
 
+long boring_system_control(uint32_t action) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_SYSTEM_CONTROL), "D"((uint64_t)action)
+        : "rcx", "r11", "cc", "memory");
+    return result;
+}
+
 long boring_input_claim(void) {
     long result;
 

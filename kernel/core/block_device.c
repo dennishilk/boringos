@@ -188,3 +188,36 @@ enum block_device_result block_device_write(const struct block_device *device,
 
     return device->ops->write(device->context, first_block, block_count, buffer);
 }
+
+
+enum block_device_result block_device_flush(const struct block_device *device) {
+    enum block_device_result validation;
+
+    if (device == NULL) {
+        return BLOCK_DEVICE_RESULT_INVALID_ARGUMENT;
+    }
+    validation = block_device_validate_descriptor(device);
+    if (validation != BLOCK_DEVICE_RESULT_OK) {
+        return validation;
+    }
+    if (!block_device_is_registered(device)) {
+        return BLOCK_DEVICE_RESULT_NOT_FOUND;
+    }
+    if (device->read_only || (device->ops->flush == NULL)) {
+        return BLOCK_DEVICE_RESULT_OK;
+    }
+    return device->ops->flush(device->context);
+}
+
+enum block_device_result block_device_flush_all(void) {
+    size_t index;
+
+    for (index = 0U; index < block_devices_count; ++index) {
+        const enum block_device_result result =
+            block_device_flush(block_devices[index]);
+        if (result != BLOCK_DEVICE_RESULT_OK) {
+            return result;
+        }
+    }
+    return BLOCK_DEVICE_RESULT_OK;
+}

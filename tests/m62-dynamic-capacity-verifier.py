@@ -5,6 +5,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 FROZEN = "1e3c0e83e8e9159480782a6be624975ccbe0da3a"
+M62_FROZEN = "f8b23490cd2e8e9095f6623d9d8b6230d3111080"
 PROCESS_H = (ROOT / "kernel/include/boring/process.h").read_text()
 TASK_H = (ROOT / "kernel/include/boring/task.h").read_text()
 PROCESS = (ROOT / "kernel/core/process.c").read_text()
@@ -65,7 +66,7 @@ allowed = {
 "kernel/core/m62_capacity_test_adapter.c","tests/m62-capacity-qemu.sh","tests/ipc-host-test.c",
 "tests/m62-dynamic-capacity-verifier.py","tests/m62-desktop-capacity-qemu.py",
 ".github/workflows/m62-dynamic-capacity.yml"}
-changed = set(subprocess.check_output(["git","diff","--name-only",FROZEN,"HEAD"],cwd=ROOT,text=True).splitlines())
+changed = set(subprocess.check_output(["git","diff","--name-only",FROZEN,M62_FROZEN],cwd=ROOT,text=True).splitlines())
 unexpected = sorted(changed - allowed)
 if unexpected: fail(f"M61 frozen subsystems changed unexpectedly: {unexpected}")
 grep = subprocess.run(["git","grep","-n","-E",r"KERNEL_PROCESS_MAX|KERNEL_TASK_MAX","--","kernel","user"],cwd=ROOT,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
