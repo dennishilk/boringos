@@ -728,12 +728,74 @@ static void multi_controller_discovery_test(void) {
           "M64 bounded controller registry");
 }
 
+
+static void hub_xhci_model_test(void) {
+    uint8_t context[256] = {0U};
+    struct boring_usb_topology root;
+    struct boring_usb_topology child;
+    struct boring_usb_hub_descriptor hub = {0U};
+    struct xhci_control_td td;
+    const uint64_t ring = 0x20000ULL;
+    const uint64_t buffer = 0x30000ULL;
+
+    check(boring_usb_topology_root(&root, 5U, BORING_USB_SPEED_HIGH) &&
+          boring_usb_topology_child(&root, 7U, 3U, BORING_USB_SPEED_FULL,
+                                    &child) &&
+          boring_usb_topology_set_tt_mode(&child, 7U, 3U, true),
+          "xhci downstream topology fixture");
+    check(xhci_build_address_input_context_topology(
+              context, sizeof(context), false, 32U, 9U, 8U, &child,
+              0x4000ULL),
+          "downstream address context");
+    check((get32(context, 32U) ==
+           (3U | (1U << 20U) | (1U << 25U) | (1U << 27U))) &&
+          (get32(context, 36U) == (5U << 16U)) &&
+          (get32(context, 40U) == (7U | (3U << 8U))),
+          "route root and TT slot fields");
+
+    hub.port_count = 8U;
+    hub.tt_think_time = 2U;
+    hub.multi_tt = true;
+    check(xhci_build_hub_slot_context(context, sizeof(context), false,
+                                      &root, &hub),
+          "high-speed hub slot context");
+    check((get32(context, 4U) == 1U) &&
+          (get32(context, 32U) ==
+           ((3U << 20U) | (1U << 25U) | (1U << 26U) | (1U << 27U))) &&
+          (get32(context, 36U) == ((5U << 16U) | (8U << 24U))) &&
+          (get32(context, 40U) == (2U << 16U)),
+          "hub context fields");
+
+    check(xhci_build_hub_get_descriptor_control_td(
+              &td, ring, 0U, true, buffer,
+              BORING_USB_HUB_DESCRIPTOR_MAX_BYTES) &&
+          (td.setup.parameter == 0x000b0000290006a0ULL),
+          "hub GET_DESCRIPTOR setup");
+    check(xhci_build_hub_get_port_status_control_td(
+              &td, ring, 3U, true, buffer, 4U) &&
+          (td.setup.parameter == 0x00040004000000a3ULL),
+          "hub GET_STATUS setup");
+    check(xhci_build_hub_set_port_feature_control_td(
+              &td, ring, 6U, true, 4U, 8U) &&
+          (td.setup.parameter == 0x0000000400080323ULL),
+          "hub PORT_POWER setup");
+    check(xhci_build_hub_set_port_feature_control_td(
+              &td, ring, 8U, true, 4U, 4U),
+          "hub PORT_RESET setup");
+    check(!xhci_build_hub_get_port_status_control_td(
+              &td, ring, 0U, true, buffer, 0U) &&
+          !xhci_build_hub_set_port_feature_control_td(
+              &td, ring, 0U, true, 16U, 8U),
+          "hub port bounds");
+}
+
 int main(void) {
     multi_controller_discovery_test();
     capabilities_test();
     keyboard_test();
     mouse_test();
     addressing_model_test();
+    hub_xhci_model_test();
     control_td_test();
     transfer_event_test();
     evaluate_context_test();

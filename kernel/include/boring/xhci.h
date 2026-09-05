@@ -7,6 +7,7 @@
 #include <boring/pci.h>
 #include <boring/pci_inventory.h>
 #include <boring/usb_hid.h>
+#include <boring/usb_topology.h>
 
 #define XHCI_MMIO_WINDOW_SIZE 65536U
 #define XHCI_MAX_PORTS 64U
@@ -142,10 +143,13 @@ struct xhci_addressed_device {
     uint64_t device_context_physical;
     uint64_t ep0_ring_physical;
     uint64_t descriptor_buffer_physical;
+    uint64_t hub_control_buffer_physical;
     uint64_t hid_ring_physical[XHCI_MAX_HID_ENDPOINTS];
     uint64_t expected_data_trb_physical;
     uint64_t expected_status_trb_physical;
     struct xhci_usb_descriptor_facts descriptors;
+    struct boring_usb_topology topology;
+    struct boring_usb_hub_descriptor hub_descriptor;
     struct xhci_hid_configuration hid_configuration;
     struct xhci_hid_endpoint_runtime hid_runtime[XHCI_MAX_HID_ENDPOINTS];
     uint32_t transfer_events;
@@ -167,6 +171,7 @@ struct xhci_addressed_device {
     bool descriptors_ready;
     bool device_configured;
     bool hid_endpoint_ready;
+    bool hub_ready;
     bool addressed;
 };
 
@@ -195,6 +200,9 @@ struct xhci_state {
     struct xhci_addressed_device addressed[XHCI_MAX_ADDRESSED_DEVICES];
     uint32_t command_completions;
     uint32_t port_events_consumed;
+    uint32_t hub_ports_powered;
+    uint32_t hub_ports_reset;
+    uint32_t downstream_devices_addressed;
     uint8_t addressed_count;
     uint8_t controller_index;
     bool addressing_truncated;
@@ -220,6 +228,15 @@ bool xhci_build_address_input_context(void *buffer, uint32_t length,
                                       uint8_t max_ports, uint8_t root_port_id,
                                       uint8_t speed,
                                       uint64_t ep0_ring_physical);
+bool xhci_build_address_input_context_topology(
+    void *buffer, uint32_t length, bool context_64_bytes,
+    uint8_t max_slots, uint8_t slot_id, uint8_t max_ports,
+    const struct boring_usb_topology *topology,
+    uint64_t ep0_ring_physical);
+bool xhci_build_hub_slot_context(
+    void *buffer, uint32_t length, bool context_64_bytes,
+    const struct boring_usb_topology *topology,
+    const struct boring_usb_hub_descriptor *hub);
 bool xhci_validate_command_completion(const struct xhci_trb *event,
                                       uint64_t expected_command_physical,
                                       uint8_t max_slots,
@@ -234,6 +251,14 @@ bool xhci_build_get_descriptor_control_td(struct xhci_control_td *td,
                                           uint8_t descriptor_type,
                                           uint8_t descriptor_index,
                                           uint16_t length);
+bool xhci_build_hub_get_descriptor_control_td(
+    struct xhci_control_td *td, uint64_t ep0_ring_physical,
+    uint16_t producer_index, bool producer_cycle,
+    uint64_t buffer_physical, uint16_t length);
+bool xhci_build_hub_get_port_status_control_td(
+    struct xhci_control_td *td, uint64_t ep0_ring_physical,
+    uint16_t producer_index, bool producer_cycle,
+    uint64_t buffer_physical, uint8_t port);
 bool xhci_validate_control_transfer_event(
     const struct xhci_trb *event, uint64_t ep0_ring_physical,
     uint8_t expected_slot_id, uint64_t expected_data_trb_physical,
@@ -271,6 +296,10 @@ bool xhci_select_supported_hid_configuration(
 bool xhci_build_set_configuration_control_td(
     struct xhci_control_td *td, uint64_t ep0_ring_physical,
     uint16_t producer_index, bool producer_cycle, uint8_t configuration_value);
+bool xhci_build_hub_set_port_feature_control_td(
+    struct xhci_control_td *td, uint64_t ep0_ring_physical,
+    uint16_t producer_index, bool producer_cycle,
+    uint8_t port, uint16_t feature);
 bool xhci_build_hid_set_protocol_control_td(
     struct xhci_control_td *td, uint64_t ep0_ring_physical,
     uint16_t producer_index, bool producer_cycle, uint8_t interface_number);
@@ -281,6 +310,12 @@ bool xhci_build_configure_hid_context(
     void *buffer, uint32_t length, bool context_64_bytes,
     uint8_t max_slots, uint8_t slot_id, uint8_t max_ports,
     uint8_t root_port_id, uint8_t speed,
+    const struct xhci_hid_configuration *configuration,
+    const uint64_t ring_physical[XHCI_MAX_HID_ENDPOINTS]);
+bool xhci_build_configure_hid_context_topology(
+    void *buffer, uint32_t length, bool context_64_bytes,
+    uint8_t max_slots, uint8_t slot_id, uint8_t max_ports,
+    const struct boring_usb_topology *topology,
     const struct xhci_hid_configuration *configuration,
     const uint64_t ring_physical[XHCI_MAX_HID_ENDPOINTS]);
 bool xhci_build_configure_endpoint_command(
@@ -340,6 +375,7 @@ uint8_t boring_m61_xhci_failure_reason(void);
 #endif
 bool xhci_address_connected(struct xhci_state *state);
 bool xhci_discover_descriptors(struct xhci_state *state);
+bool xhci_enumerate_hubs(struct xhci_state *state);
 bool xhci_configure_hid_devices(struct xhci_state *state);
 bool xhci_poll_hid_reports(struct xhci_state *state, uint32_t completion_goal);
 bool xhci_service_hid_reports(struct xhci_state *state);

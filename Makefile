@@ -317,6 +317,7 @@ KERNEL_C_SOURCES := \
 	kernel/core/pci_inventory.c \
 	kernel/core/pci_inventory_x86.c \
 	kernel/core/xhci.c \
+	kernel/core/usb_topology.c \
 	kernel/core/usb_hid.c \
 	kernel/core/cpu_inventory.c \
 	kernel/core/cpu_inventory_x86.c \
@@ -1141,11 +1142,12 @@ $(BUILD_DIR)/pci-inventory-host-test: tests/pci-inventory-host-test.c kernel/cor
 	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) tests/pci-inventory-host-test.c kernel/core/pci_inventory.c -o $@
 
 $(XHCI_HOST_TEST): tests/xhci-host-test.c kernel/core/xhci.c \
-		kernel/core/usb_hid.c kernel/include/boring/xhci.h \
+		kernel/core/usb_topology.c kernel/core/usb_hid.c kernel/include/boring/xhci.h \
 		kernel/include/boring/usb_hid.h kernel/include/boring/pci.h
 	@mkdir -p $(dir $@)
 	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) tests/xhci-host-test.c \
-		kernel/core/xhci.c kernel/core/usb_hid.c -o $@
+		kernel/core/xhci.c kernel/core/usb_topology.c \
+		kernel/core/usb_hid.c -o $@
 
 .PHONY: smbios-host-test
 smbios-host-test: $(BUILD_DIR)/smbios-host-test

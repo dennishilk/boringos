@@ -25,7 +25,7 @@ jobs:
             -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
             -Wstrict-prototypes -Wmissing-prototypes \
             -fsanitize=address,undefined -fno-omit-frame-pointer \
-            tests/xhci-host-test.c kernel/core/xhci.c kernel/core/usb_hid.c \
+            tests/xhci-host-test.c kernel/core/xhci.c kernel/core/usb_topology.c kernel/core/usb_hid.c \
             -o build/xhci-host-test-sanitized
           ASAN_OPTIONS=detect_leaks=0 ./build/xhci-host-test-sanitized
       - name: Bounded hub topology host acceptance

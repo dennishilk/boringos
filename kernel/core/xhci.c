@@ -211,12 +211,11 @@ static void context_write32(uint8_t *context, uint32_t offset,
     context[offset + 3U] = (uint8_t)(value >> 24U);
 }
 
-bool xhci_build_address_input_context(void *buffer, uint32_t length,
-                                      bool context_64_bytes,
-                                      uint8_t max_slots, uint8_t slot_id,
-                                      uint8_t max_ports, uint8_t root_port_id,
-                                      uint8_t speed,
-                                      uint64_t ep0_ring_physical) {
+bool xhci_build_address_input_context_topology(
+    void *buffer, uint32_t length, bool context_64_bytes,
+    uint8_t max_slots, uint8_t slot_id, uint8_t max_ports,
+    const struct boring_usb_topology *topology,
+    uint64_t ep0_ring_physical) {
     uint8_t *bytes = (uint8_t *)buffer;
     const uint32_t context_size = context_64_bytes ?
                                   XHCI_CONTEXT_64_SIZE : XHCI_CONTEXT_32_SIZE;
@@ -224,27 +223,89 @@ bool xhci_build_address_input_context(void *buffer, uint32_t length,
     uint16_t max_packet;
     uint8_t *slot;
     uint8_t *ep0;
+    uint32_t slot_info;
+    uint32_t tt_info;
 
     if ((bytes == NULL) || (length < required) || (max_slots == 0U) ||
         (slot_id == 0U) || (slot_id > max_slots) || (max_ports == 0U) ||
-        (root_port_id == 0U) || (root_port_id > max_ports) ||
+        (topology == NULL) || !boring_usb_topology_validate(topology) ||
+        (topology->root_port > max_ports) ||
         ((ep0_ring_physical & 0x3fULL) != 0ULL) ||
-        !xhci_ep0_max_packet(speed, &max_packet)) {
+        !xhci_ep0_max_packet(topology->speed, &max_packet)) {
         return false;
     }
     zero_bytes(bytes, required);
     context_write32(bytes, 4U, 3U);
     slot = bytes + context_size;
     ep0 = bytes + (context_size * 2U);
-    context_write32(slot, 0U, ((uint32_t)speed << 20U) | (1U << 27U));
-    context_write32(slot, 4U, (uint32_t)root_port_id << 16U);
+    slot_info = topology->route_string |
+                ((uint32_t)topology->speed << 20U) | (1U << 27U);
+    if (topology->tt_multi) { slot_info |= 1U << 25U; }
+    context_write32(slot, 0U, slot_info);
+    context_write32(slot, 4U, (uint32_t)topology->root_port << 16U);
+    tt_info = (uint32_t)topology->tt_hub_slot |
+              ((uint32_t)topology->tt_port << 8U);
+    context_write32(slot, 8U, tt_info);
     context_write32(ep0, 4U, (3U << 1U) | (4U << 3U) |
                                   ((uint32_t)max_packet << 16U));
-    context_write32(ep0, 8U,
-                    (uint32_t)(ep0_ring_physical | 1ULL));
+    context_write32(ep0, 8U, (uint32_t)(ep0_ring_physical | 1ULL));
     context_write32(ep0, 12U,
                     (uint32_t)((ep0_ring_physical | 1ULL) >> 32U));
     context_write32(ep0, 16U, 8U);
+    return true;
+}
+
+bool xhci_build_address_input_context(void *buffer, uint32_t length,
+                                      bool context_64_bytes,
+                                      uint8_t max_slots, uint8_t slot_id,
+                                      uint8_t max_ports, uint8_t root_port_id,
+                                      uint8_t speed,
+                                      uint64_t ep0_ring_physical) {
+    struct boring_usb_topology topology;
+    return boring_usb_topology_root(&topology, root_port_id, speed) &&
+           xhci_build_address_input_context_topology(
+               buffer, length, context_64_bytes, max_slots, slot_id,
+               max_ports, &topology, ep0_ring_physical);
+}
+
+bool xhci_build_hub_slot_context(
+    void *buffer, uint32_t length, bool context_64_bytes,
+    const struct boring_usb_topology *topology,
+    const struct boring_usb_hub_descriptor *hub) {
+    uint8_t *bytes = (uint8_t *)buffer;
+    const uint32_t context_size = context_64_bytes ?
+                                  XHCI_CONTEXT_64_SIZE : XHCI_CONTEXT_32_SIZE;
+    const uint32_t required = context_size * 2U;
+    uint8_t *slot;
+    uint32_t slot_info;
+    uint32_t tt_info;
+
+    if ((bytes == NULL) || (length < required) || (topology == NULL) ||
+        (hub == NULL) || !boring_usb_topology_validate(topology) ||
+        (hub->port_count == 0U) ||
+        (hub->port_count > BORING_USB_HUB_DESCRIPTOR_MAX_PORTS) ||
+        (hub->tt_think_time > 3U) ||
+        (hub->multi_tt && (topology->speed != BORING_USB_SPEED_HIGH))) {
+        return false;
+    }
+    zero_bytes(bytes, required);
+    context_write32(bytes, 4U, 1U);
+    slot = bytes + context_size;
+    slot_info = topology->route_string |
+                ((uint32_t)topology->speed << 20U) |
+                (1U << 26U) | (1U << 27U);
+    if (hub->multi_tt) { slot_info |= 1U << 25U; }
+    context_write32(slot, 0U, slot_info);
+    context_write32(slot, 4U,
+                    ((uint32_t)topology->root_port << 16U) |
+                    ((uint32_t)hub->port_count << 24U));
+    tt_info = (uint32_t)topology->tt_hub_slot |
+              ((uint32_t)topology->tt_port << 8U);
+    if ((topology->speed == BORING_USB_SPEED_HIGH) &&
+        (topology->tt_hub_slot == 0U)) {
+        tt_info |= (uint32_t)hub->tt_think_time << 16U;
+    }
+    context_write32(slot, 8U, tt_info);
     return true;
 }
 
@@ -308,43 +369,28 @@ bool xhci_descriptor_ep0_max_packet(uint8_t speed, uint8_t descriptor_value,
     return true;
 }
 
-bool xhci_build_get_descriptor_control_td(struct xhci_control_td *td,
-                                          uint64_t ep0_ring_physical,
-                                          uint16_t producer_index,
-                                          bool producer_cycle,
-                                          uint64_t buffer_physical,
-                                          uint8_t descriptor_type,
-                                          uint8_t descriptor_index,
-                                          uint16_t length) {
-    struct xhci_control_td built;
-    uint8_t setup[8];
+static bool build_control_in_td(
+    struct xhci_control_td *td, uint64_t ep0_ring_physical,
+    uint16_t producer_index, bool producer_cycle,
+    uint64_t buffer_physical, const uint8_t setup[8], uint16_t length) {
+    struct xhci_control_td built = {0};
     uint64_t setup_parameter = 0ULL;
     uint8_t index;
     uint32_t cycle;
 
-    if ((td == NULL) || (ep0_ring_physical == 0ULL) ||
+    if ((td == NULL) || (setup == NULL) || (ep0_ring_physical == 0ULL) ||
         ((ep0_ring_physical & 0x3fULL) != 0ULL) ||
         (buffer_physical == 0ULL) ||
         ((buffer_physical & (uint64_t)(XHCI_DESCRIPTOR_BUFFER_BYTES - 1U)) !=
          0ULL) ||
         (length == 0U) || (length > XHCI_DESCRIPTOR_BUFFER_BYTES) ||
-        (descriptor_type == 0U) ||
-        (producer_index > XHCI_EP0_RING_USABLE - 3U)) {
+        (producer_index > XHCI_EP0_RING_USABLE - 3U) ||
+        ((setup[0] & 0x80U) == 0U)) {
         return false;
     }
-
-    setup[0] = 0x80U;
-    setup[1] = 0x06U;
-    setup[2] = descriptor_index;
-    setup[3] = descriptor_type;
-    setup[4] = 0U;
-    setup[5] = 0U;
-    setup[6] = (uint8_t)length;
-    setup[7] = (uint8_t)(length >> 8U);
     for (index = 0U; index < 8U; ++index) {
         setup_parameter |= (uint64_t)setup[index] << ((uint64_t)index * 8ULL);
     }
-
     cycle = producer_cycle ? XHCI_TRB_CYCLE : 0U;
     built.setup.parameter = setup_parameter;
     built.setup.status = 8U;
@@ -356,13 +402,11 @@ bool xhci_build_get_descriptor_control_td(struct xhci_control_td *td,
     built.data.control =
         ((uint32_t)XHCI_TRB_TYPE_DATA_STAGE << XHCI_TRB_TYPE_SHIFT) |
         XHCI_TRB_DIRECTION_IN | XHCI_TRB_ISP | cycle;
-    built.status.parameter = 0ULL;
-    built.status.status = 0U;
     built.status.control =
         ((uint32_t)XHCI_TRB_TYPE_STATUS_STAGE << XHCI_TRB_TYPE_SHIFT) |
         XHCI_TRB_IOC | cycle;
     built.setup_physical = ep0_ring_physical +
-                           ((uint64_t)producer_index * XHCI_TRB_SIZE);
+        ((uint64_t)producer_index * XHCI_TRB_SIZE);
     built.data_physical = built.setup_physical + XHCI_TRB_SIZE;
     built.status_physical = built.data_physical + XHCI_TRB_SIZE;
     if (producer_index == XHCI_EP0_RING_USABLE - 3U) {
@@ -374,6 +418,48 @@ bool xhci_build_get_descriptor_control_td(struct xhci_control_td *td,
     }
     *td = built;
     return true;
+}
+
+bool xhci_build_get_descriptor_control_td(struct xhci_control_td *td,
+                                          uint64_t ep0_ring_physical,
+                                          uint16_t producer_index,
+                                          bool producer_cycle,
+                                          uint64_t buffer_physical,
+                                          uint8_t descriptor_type,
+                                          uint8_t descriptor_index,
+                                          uint16_t length) {
+    const uint8_t setup[8] = {
+        0x80U, 0x06U, descriptor_index, descriptor_type,
+        0U, 0U, (uint8_t)length, (uint8_t)(length >> 8U)
+    };
+    return (descriptor_type != 0U) &&
+           build_control_in_td(td, ep0_ring_physical, producer_index,
+                               producer_cycle, buffer_physical, setup, length);
+}
+
+bool xhci_build_hub_get_descriptor_control_td(
+    struct xhci_control_td *td, uint64_t ep0_ring_physical,
+    uint16_t producer_index, bool producer_cycle,
+    uint64_t buffer_physical, uint16_t length) {
+    const uint8_t setup[8] = {
+        0xa0U, 0x06U, 0U, 0x29U, 0U, 0U,
+        (uint8_t)length, (uint8_t)(length >> 8U)
+    };
+    return (length <= BORING_USB_HUB_DESCRIPTOR_MAX_BYTES) &&
+           build_control_in_td(td, ep0_ring_physical, producer_index,
+                               producer_cycle, buffer_physical, setup, length);
+}
+
+bool xhci_build_hub_get_port_status_control_td(
+    struct xhci_control_td *td, uint64_t ep0_ring_physical,
+    uint16_t producer_index, bool producer_cycle,
+    uint64_t buffer_physical, uint8_t port) {
+    const uint8_t setup[8] = {
+        0xa3U, 0x00U, 0U, 0U, port, 0U, 4U, 0U
+    };
+    return (port != 0U) && (port <= BORING_USB_HUB_PORT_MAX) &&
+           build_control_in_td(td, ep0_ring_physical, producer_index,
+                               producer_cycle, buffer_physical, setup, 4U);
 }
 
 static bool trb_pointer_owned(uint64_t pointer, uint64_t ring_physical) {
@@ -818,6 +904,20 @@ bool xhci_build_hid_set_protocol_control_td(
                                     producer_cycle, setup);
 }
 
+bool xhci_build_hub_set_port_feature_control_td(
+    struct xhci_control_td *td, uint64_t ep0_ring_physical,
+    uint16_t producer_index, bool producer_cycle,
+    uint8_t port, uint16_t feature) {
+    const uint8_t setup[8] = {
+        0x23U, 0x03U, (uint8_t)feature, (uint8_t)(feature >> 8U),
+        port, 0U, 0U, 0U
+    };
+    return (port != 0U) && (port <= BORING_USB_HUB_PORT_MAX) &&
+           ((feature == 4U) || (feature == 8U)) &&
+           build_no_data_control_td(td, ep0_ring_physical, producer_index,
+                                    producer_cycle, setup);
+}
+
 bool xhci_validate_no_data_control_event(
     const struct xhci_trb *event, uint64_t ep0_ring_physical,
     uint8_t expected_slot_id, uint64_t expected_status_trb_physical) {
@@ -844,10 +944,10 @@ bool xhci_validate_no_data_control_event(
            (completion == XHCI_COMPLETION_SUCCESS) && (residual == 0U);
 }
 
-bool xhci_build_configure_hid_context(
+bool xhci_build_configure_hid_context_topology(
     void *buffer, uint32_t length, bool context_64_bytes,
     uint8_t max_slots, uint8_t slot_id, uint8_t max_ports,
-    uint8_t root_port_id, uint8_t speed,
+    const struct boring_usb_topology *topology,
     const struct xhci_hid_configuration *configuration,
     const uint64_t ring_physical[XHCI_MAX_HID_ENDPOINTS]) {
     uint8_t *bytes = (uint8_t *)buffer;
@@ -858,12 +958,14 @@ bool xhci_build_configure_hid_context(
     uint32_t required;
     uint8_t index;
     uint8_t *slot;
+    uint32_t slot_info;
     if ((bytes == NULL) || (configuration == NULL) || (ring_physical == NULL) ||
+        (topology == NULL) || !boring_usb_topology_validate(topology) ||
         (configuration->endpoint_count == 0U) ||
         (configuration->endpoint_count > XHCI_MAX_HID_ENDPOINTS) ||
         (max_slots == 0U) || (slot_id == 0U) || (slot_id > max_slots) ||
-        (max_ports == 0U) || (root_port_id == 0U) ||
-        (root_port_id > max_ports) || (speed == 0U) || (speed > 3U)) {
+        (max_ports == 0U) || (topology->root_port > max_ports) ||
+        (topology->speed == 0U) || (topology->speed > 3U)) {
         return false;
     }
     for (index = 0U; index < configuration->endpoint_count; ++index) {
@@ -885,9 +987,15 @@ bool xhci_build_configure_hid_context(
     zero_bytes(bytes, required);
     context_write32(bytes, 4U, add_flags);
     slot = bytes + context_size;
-    context_write32(slot, 0U, ((uint32_t)speed << 20U) |
-                                  ((uint32_t)highest_dci << 27U));
-    context_write32(slot, 4U, (uint32_t)root_port_id << 16U);
+    slot_info = topology->route_string |
+                ((uint32_t)topology->speed << 20U) |
+                ((uint32_t)highest_dci << 27U);
+    if (topology->tt_multi) { slot_info |= 1U << 25U; }
+    context_write32(slot, 0U, slot_info);
+    context_write32(slot, 4U, (uint32_t)topology->root_port << 16U);
+    context_write32(slot, 8U,
+                    (uint32_t)topology->tt_hub_slot |
+                    ((uint32_t)topology->tt_port << 8U));
     for (index = 0U; index < configuration->endpoint_count; ++index) {
         const struct xhci_hid_endpoint_descriptor *endpoint =
             &configuration->endpoints[index];
@@ -903,6 +1011,19 @@ bool xhci_build_configure_hid_context(
                          ((uint32_t)endpoint->max_packet << 16U));
     }
     return true;
+}
+
+bool xhci_build_configure_hid_context(
+    void *buffer, uint32_t length, bool context_64_bytes,
+    uint8_t max_slots, uint8_t slot_id, uint8_t max_ports,
+    uint8_t root_port_id, uint8_t speed,
+    const struct xhci_hid_configuration *configuration,
+    const uint64_t ring_physical[XHCI_MAX_HID_ENDPOINTS]) {
+    struct boring_usb_topology topology;
+    return boring_usb_topology_root(&topology, root_port_id, speed) &&
+           xhci_build_configure_hid_context_topology(
+               buffer, length, context_64_bytes, max_slots, slot_id,
+               max_ports, &topology, configuration, ring_physical);
 }
 
 bool xhci_build_configure_endpoint_command(
