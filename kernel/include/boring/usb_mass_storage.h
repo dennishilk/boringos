@@ -72,6 +72,7 @@ struct usb_mass_storage_stats {
     uint8_t flush_asc;
     uint8_t flush_ascq;
     uint8_t slot_id;
+    uint8_t controller_index;
     uint8_t interface_number;
     uint8_t bulk_in_address;
     uint8_t bulk_out_address;
