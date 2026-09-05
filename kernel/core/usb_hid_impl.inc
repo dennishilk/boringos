@@ -620,7 +620,7 @@ static bool m52_poll_hid_reports_limit(struct xhci_state *state,
     if ((state == NULL) || (completion_goal == 0U) || (wait_limit == 0U)) {
         return false;
     }
-    published = xhci_get_state();
+    published = xhci_get_controller(state->controller_index);
     if ((published == NULL) || !published->controller_running ||
         (published->addressed_count == 0U) ||
         !vmm_map_mmio_region(published->mmio_physical,
