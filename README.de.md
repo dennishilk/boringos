@@ -13,35 +13,35 @@ Es ist **kein Linux**, **kein BSD** und verwendet keinen Kernel eines anderen Be
 
 ~~~text
 BoringKernel 0.0.62-dev
-Milestone 61 · physischer Desktop-Meilenstein wird eingefroren
+Milestone 63 · physische System-Power-Basis
 ~~~
 
-Am **04.09.2026** hat BoringOS auf der echten Maschine **Cthulhu** eine wichtige Grenze überschritten: Das M61-USB-Image bootet in einen persistenten nativen BoringWM-Desktop und verarbeitet echte USB-Tastatureingaben.
+Am **05.09.2026** hat BoringOS auf der echten Maschine **Cthulhu** einen neuen physischen Basisstand erreicht:
 
-Der letzte physisch getestete Runtime-Kandidat ist:
+- der native BoringWM-Desktop bootet vom schreibbaren USB-Image;
+- echte USB-Tastatureingaben laufen über den BoringOS-eigenen xHCI/HID-Pfad;
+- BoringTerminal, BoringEdit und BoringFiles laufen auf echter Hardware;
+- die dynamische Prozess-/Task-Kapazität ist physisch deutlich über der alten Acht-Slot-Bootstrap-Grenze bewiesen;
+- BoringFS erstellt und persistiert Dateien auf dem physischen USB-Root;
+- `reboot` führt einen echten Maschinen-Reset aus und BoringOS bootet danach erneut;
+- `shutdown` führt einen echten ACPI-S5-Poweroff aus;
+- vor dem Reboot geschriebene Daten überleben den vollständigen Power-Lifecycle.
+
+Der physisch akzeptierte Runtime-Stand ist eingefroren unter:
 
 ~~~text
-1e3c0e83e8e9159480782a6be624975ccbe0da3a
-CI: 26 SUCCESS / 0 FAILURE
-M61 RAW-Image: 100663296 Bytes
-SHA256: 4ba4218ecafc04937737691f2133c8d8ed8b1bff29434048e2cdfb6f2a024947
+freeze/m63-system-power-lifecycle-physical-2026-09-05
+799d1e6529b8eafead37acc340f3fd18dbb2d655
 ~~~
 
-Der physische Cthulhu-Lauf beweist inzwischen gemeinsam:
+Autoritatives physisches Image:
 
-- Boot vom M61-UEFI-USB-Image;
-- echtes xHCI-USB-Mass-Storage und schreibbares BoringFS-Root;
-- <code>boring-init</code>, <code>boring-display</code> und nativen C-**BoringWM**;
-- einen persistenten leeren Desktop, der auch nach dem Schließen des letzten Fensters weiterlebt;
-- echte USB-Tastatureingaben über den BoringOS-eigenen xHCI/HID-Pfad;
-- physisches <code>Super+Return</code>, <code>Super+E</code>, <code>Super+F</code> und <code>Super+Q</code>;
-- mehrere gekachelte native Anwendungen, korrektes Schließen, erneutes Öffnen und Fokusverhalten;
-- **BoringTerminal**, **BoringEdit** und **BoringFiles** auf echter Hardware;
-- <code>boring-shell</code> und <code>boringfetch</code> im echten grafischen Terminal;
-- reale CPUID-, PCI- und SMBIOS-Daten des Ryzen-7-5800X3D-/B550-VISION-D-Systems;
-- echten Firmware-Framebuffer-Scanout auf dem Monitor.
+~~~text
+100663296 Bytes
+SHA256: 457535a2d27d98e489868a9d33cf8e8c2e2c83de13fc659bcea30e937c9018ab
+~~~
 
-QEMU bleibt die vollständige automatisierte Regression-Plattform, aber der Desktop selbst ist inzwischen kein reiner QEMU-Claim mehr.
+QEMU bleibt die automatisierte Regression-Plattform, aber Desktop, persistenter Storage, Reboot und Shutdown sind jetzt zusätzlich auf echter Hardware bewiesen.
 
 ## Was heute wirklich läuft
 
@@ -54,11 +54,13 @@ UEFI / QEMU oder physischer Cthulhu
         ↓
 PMM / VMM / Heap / IDT / Scheduler
         ↓
-Prozesse + unabhängige Adressräume
+dynamische Prozess- + Task-Objekte
         ↓
 Ring 3 + natives SYSCALL/SYSRETQ-ABI
         ↓
-VFS + BoringFS + Blockgeräte
+VFS + schreibbares BoringFS
+        ↓
+xHCI USB Mass Storage / AHCI / VirtIO
         ↓
      boring-init
         ↓
@@ -73,7 +75,7 @@ VFS + BoringFS + Blockgeräte
 └──────────────┴──────────────┴──────────────┘
 ~~~
 
-Zu den implementierten Grundlagen gehören physische und virtuelle Speicherverwaltung, Kernel-Heap, Exceptions, PIC/PIT, kooperatives und präemptives Scheduling, Prozessadressräume, Ring 3, native Syscalls, ELF64-Userspace, PTYs, File Descriptors, VFS, BoringFS, natives IPC, Shared Buffer, Display-Service, Software-Komposition, BoringWM, native Anwendungen, CPUID/PCI/SMBIOS-Inventar, xHCI-HID, USB Mass Storage sowie AHCI/SATA.
+Zu den implementierten Grundlagen gehören physische und virtuelle Speicherverwaltung, Kernel-Heap, Exceptions, PIC/PIT, kooperatives und präemptives Scheduling, unabhängige Prozessadressräume, Ring 3, native Syscalls, ELF64-Userspace, PTYs, File Descriptors, VFS, BoringFS, natives IPC, Shared Buffer, Display-Service, Software-Komposition, BoringWM, native Anwendungen, CPUID/PCI/SMBIOS-Inventar, xHCI-HID, USB Mass Storage, AHCI/SATA-Storage und ACPI-System-Power-Control.
 
 ## Nativer Desktop
 
@@ -86,16 +88,57 @@ Super+Return   BoringTerminal öffnen
 Super+E        BoringEdit öffnen
 Super+F        BoringFiles öffnen
 Super+J/L      Fokus wechseln
-Super+Q        fokussierten verwalteten Client schließen
+Super+Q        fokussierten Client schließen
 ~~~
 
-Der normale M61-Desktop bleibt absichtlich auch mit **null offenen Fenstern** aktiv. Wird die letzte Anwendung geschlossen, bleibt der leere BoringWM-Desktop bestehen und Anwendungen können anschließend erneut gestartet werden.
+Der Desktop bleibt absichtlich auch mit **null offenen Fenstern** aktiv. Wird die letzte Anwendung geschlossen, bleibt der leere BoringWM-Desktop bestehen und Anwendungen können anschließend erneut gestartet werden.
 
-BoringTerminal startet eine separat geplante <code>boring-shell</code> über ein echtes PTY. BoringEdit lädt und speichert über BoringFS. BoringFiles liest echte VFS-/BoringFS-Verzeichnisse.
+BoringTerminal startet eine separat geplante `boring-shell` über ein echtes PTY. BoringEdit lädt und speichert über BoringFS. BoringFiles liest echte VFS-/BoringFS-Verzeichnisse.
+
+## Shell und System-Lifecycle
+
+Die native Shell besitzt inzwischen Dateisystem-, Identitäts-/Prozess- und Power-Kommandos, darunter:
+
+~~~text
+ls cd pwd mkdir rmdir touch write rm
+clear echo history help
+uname hostname whoami ps
+reboot shutdown
+~~~
+
+Die physische M63-Abnahme hat auf Cthulhu diese komplette Sequenz bewiesen:
+
+~~~text
+mkdir
+touch
+write
+reboot
+erneut booten
+persistierte Daten lesen
+shutdown
+~~~
+
+`reboot` synchronisiert zuerst registrierte schreibbare Blockgeräte und wechselt danach in einen echten Plattform-Reset. `shutdown` synchronisiert Storage und wechselt in ACPI S5. Keines der beiden Kommandos ist als QEMU-only Magic-Port implementiert.
+
+## Prozess- und Desktop-Kapazität
+
+M62 hat die alten statischen Prozess-/Task-Arrays aus der Runtime-Architektur entfernt.
+
+Aktuelle Policy-Grenzen:
+
+~~~text
+Prozess-Policy-Limit: 64
+Task-Policy-Limit:    64
+BoringWM-Clients:     16
+WM-IPC-Peers:         16
+Display-IPC-Peers:    16
+~~~
+
+Auf Cthulhu wurden physisch **sieben BoringTerminal-Fenster plus BoringEdit und BoringFiles** geöffnet, alles geschlossen, zum leeren Desktop zurückgekehrt und Anwendungen erneut gestartet — ohne Capacity- oder Lifecycle-Fehler.
+
+Das sind Policy-Grenzen und keine fest verdrahteten Architektur-Slots.
 
 ## Physische Cthulhu-Hardware
-
-Die aktuelle physische Referenzmaschine umfasst:
 
 ~~~text
 CPU:       AMD Ryzen 7 5800X3D
@@ -105,9 +148,9 @@ Firmware:  AMI / Gigabyte F18d
 Display:   aktueller Firmware-Framebuffer 800x600x32, Pitch 3328
 ~~~
 
-Cthulhu besitzt mehrere xHCI-Controller. Linux zeigt USB-Buspaare unter mindestens <code>02:00.0</code>, <code>29:00.0</code> und <code>58:00.3</code>. Der aktuelle BoringOS-Pfad besitzt weiterhin nur eine Controller-Instanz.
+Cthulhu besitzt mehrere xHCI-Controller. Die aktuelle Runtime besitzt weiterhin nur eine Controller-Instanz.
 
-Eine direkt angeschlossene Holtek-USB-Tastatur am aktiven Controller ist physisch durch den gesamten Pfad bewiesen:
+Eine direkt angeschlossene Holtek-USB-Tastatur ist physisch durch den ganzen Pfad bewiesen:
 
 ~~~text
 xHCI Interrupt-IN
@@ -118,18 +161,26 @@ xHCI Interrupt-IN
 → native Shortcuts / Anwendungen
 ~~~
 
-## USB-Stand und aktuelle Grenze
+## USB und Storage
 
-Der aktuelle USB-Stack unterstützt xHCI-Controller-Bring-up, direkte Root-Port-Geräteadressierung, Descriptor Discovery, Konfiguration, HID-Interrupt-IN-Endpunkte, die im begrenzten Pfad verwendeten HID-Tastatur-/Mausformate sowie USB Mass Storage über Bulk/BOT/SCSI.
+BoringOS unterstützt xHCI-Controller-Bring-up, direkte Root-Port-Adressierung, Descriptor Discovery, HID Interrupt-IN und USB Mass Storage über Bulk/BOT/SCSI.
 
-Die nächste physische USB-Arbeit ist bewusst klar:
+Der physische USB-Root besitzt jetzt einen strengen Durability-Pfad. Normale Geräte verwenden SCSI `SYNCHRONIZE CACHE(10)`. Meldet ein Gerät exakt den erwarteten SCSI-Sense-Nachweis dafür, dass dieses Kommando nicht unterstützt wird, schaltet BoringOS auf `WRITE(10)` mit FUA um, statt Flushfehler pauschal zu ignorieren. Andere Transport-, CSW-, Sense- oder FUA-Fehler bleiben harte I/O-Fehler.
 
-- **mehrere xHCI-Controller** statt nur des ersten kontrollierten Controllers unterstützen;
-- **USB-Hub-Enumeration** ergänzen;
-- danach die physische Maus in ihrer echten Topologie validieren;
-- bei Bedarf HID-Report-Support für Geräte außerhalb des Boot-HID-Falls erweitern.
+Die physische M63-Abnahme hat schreibbares BoringFS, Persistenz über einen Reboot und anschließenden sauberen Poweroff auf dem echten SanDisk-USB-Gerät bewiesen.
 
-Die aktuelle ROCCAT-Maus ist noch kein BoringOS-Erfolgsclaim. In der getesteten Verkabelung hing sie hinter einem Genesys-Logic-Hub, den BoringOS bisher nicht enumeriert.
+Weitere verifizierte Storage-Pfade sind VirtIO Block und begrenztes synchrones AHCI/SATA.
+
+## USB-Grenze / nächste Hardware-Arbeit
+
+Die nächste physische USB-Arbeit bleibt bewusst eng:
+
+1. **mehrere xHCI-Controller** statt nur des ersten kontrollierten Controllers unterstützen;
+2. **USB-Hub-Enumeration** ergänzen;
+3. danach die physische Maus in ihrer echten Hub-Topologie validieren;
+4. HID-Report-Support nur dann erweitern, wenn das reale Gerät ihn tatsächlich benötigt.
+
+Die aktuelle ROCCAT-Maus ist noch kein BoringOS-Erfolgsclaim. In der getesteten Verkabelung hängt sie hinter einem Genesys-Logic-Hub, den BoringOS bisher nicht enumeriert.
 
 ## Grafik heute
 
@@ -145,58 +196,31 @@ Firmware-/Limine-Framebuffer
 GPU-Scanout zum Monitor
 ~~~
 
-Die AMD-GPU ist also am Scanout beteiligt, aber BoringOS programmiert die AMD-Display-Engine noch nicht selbst und sendet auch keine eigenen GPU-Rendering-Kommandos.
+Es gibt noch keinen nativen AMD-/NVIDIA-/Intel-Modesetting- oder Beschleunigungstreiber. Das unmittelbare Grafikziel ist ein besserer bzw. nativer GOP-Framebuffer-Modus, danach ein schnellerer Software-Present mit Damage-/Dirty-Regionen. Ein eigener AMD-Treiber ist deutlich spätere Arbeit.
 
-Es gibt derzeit keinen nativen AMD-/NVIDIA-/Intel-Modesetting- oder Beschleunigungstreiber, keinen eigenen VRAM-/GTT-Manager und keine 2D-/3D-Command-Submission. Das unmittelbare Grafikziel ist zunächst ein besserer bzw. nativer GOP-Framebuffer-Modus, danach ein schnellerer Software-Present mit Damage-/Dirty-Regionen. Ein eigener AMD-Treiber ist ein deutlich späteres Projekt.
+## Aktuelle Grenzen
 
-## Aktuelle Bootstrap-Grenzen
-
-Einige Grenzen sind bewusst klein und auf echter Hardware inzwischen sichtbar:
-
-- <code>KERNEL_PROCESS_MAX = 8</code>;
-- <code>KERNEL_TASK_MAX = 8</code>;
-- BoringWM verwaltet aktuell höchstens 6 Clients;
-- ungefähr zwei vollständige Terminals passen gleichzeitig, weil jedes Terminal zusätzlich einen eigenen Shell-Prozess besitzt;
+- nur eine kontrollierte xHCI-Controller-Instanz;
+- noch keine USB-Hub-Enumeration;
+- die physische Maus hinter dem Hub ist noch nicht unterstützt;
 - das physische Display nutzt aktuell den Firmware-Framebuffer mit 800x600;
-- der PMM besitzt eine größere begrenzte Designkapazität, die vollständige sinnvolle Nutzung der installierten 32 GiB auf Cthulhu ist aber noch zukünftige Arbeit;
-- noch keine USB-Hubs und keine Multi-xHCI-Ownership;
+- die vollständige praktische Nutzung der installierten 32 GiB auf Cthulhu ist noch zukünftige Arbeit;
 - noch kein Netzwerk, Audio, NVMe, SMP-Runtime oder nativer GPU-Treiber.
 
 Das sind Implementierungsgrenzen und keine als Support verkleideten Versprechen.
 
-## Storage und BoringFS
-
-BoringOS besitzt mit **BoringFS** ein eigenes Dateisystemformat. Das Repository enthält Codec und Validator, deterministischen Formatter, <code>boringfsck</code>, Kernel-Mount-Support und schreibbaren Betrieb.
-
-Verifizierte Storage-Pfade umfassen VirtIO Block, begrenztes synchrones AHCI/SATA sowie M61s xHCI-USB-Mass-Storage-Pfad. Das physische M61-Image bootet und mountet sein schreibbares BoringFS-Root vom USB-Gerät.
-
-## Hardware-Inventar
-
-<code>boringfetch</code> zeigt Kernel-eigene Hardwarefakten statt erfundener Plattformstrings:
+## Roadmap ab dem M63-Freeze
 
 ~~~text
-CPUID   → CPU-Vendor, Brand, Family/Model/Stepping
-PCI     → BDF-/Vendor-/Device-/Class-Inventar
-SMBIOS  → Firmware, System, Board und installierter Speicher
-INFO    → begrenzter versionierter Userspace-Snapshot
-~~~
-
-Auf Cthulhu läuft das inzwischen im echten grafischen BoringTerminal.
-
-## Nach M61
-
-M61 wird als physische Desktop-Basis eingefroren. Die nächste Reihenfolge ist bewusst:
-
-~~~text
-M61 EINFRIEREN
+M63 PHYSICAL FREEZE
     ↓
-1. Prozess + Task + Desktop-Kapazitäten
+1. USB Multi-xHCI-Ownership
     ↓
-2. USB: Multi-xHCI + Hubs + physische Maus
+2. USB-Hub-Enumeration + physische Maus
     ↓
-3. native / bessere GOP-Auflösung
+3. bessere / native GOP-Auflösung
     ↓
-4. Software-Grafik / Present beschleunigen
+4. schnellere Software-Grafik / Present
     ↓
 5. die vollen 32 GiB RAM physisch sinnvoll nutzen
     ↓
@@ -205,7 +229,7 @@ M61 EINFRIEREN
 irgendwann: eigener AMD-Grafiktreiber
 ~~~
 
-Das ist eine Richtungsplanung und kein Claim, dass die späteren Punkte bereits implementiert sind.
+Die detaillierte historische Aufzeichnung liegt in [docs/roadmap.md](docs/roadmap.md).
 
 ## Bauen und testen
 
@@ -217,9 +241,17 @@ make run
 make test
 ~~~
 
-Die permanente CI hält frühere Milestone-Beweise am Leben. M61 besitzt zusätzlich Exact-Head-Acceptance für USB-Image, persistentes Root, Desktop, Framebuffer, xHCI/HID und physische Observability.
+Die GitHub-Actions-Workflows halten bewusst frühere Milestone-Regressionen am Leben. Sie sind Testabdeckung und keine aktiven Entwicklungsbranches.
 
-Die detaillierte historische Quelle der Wahrheit bleibt [docs/roadmap.md](docs/roadmap.md).
+## Eingefrorene physische Baselines
+
+Das Repository behält nur wenige immutable-by-policy physische Freeze-Branches:
+
+- `freeze/m61-physical-desktop-2026-09-04`
+- `freeze/m62-dynamic-capacity-physical-2026-09-05`
+- `freeze/m63-system-power-lifecycle-physical-2026-09-05`
+
+Normale Entwicklung läuft von `main` weiter; Freeze-Branches sind Referenzpunkte und dürfen nicht bewegt werden.
 
 ## BoringWM
 

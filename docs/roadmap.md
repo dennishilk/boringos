@@ -2,10 +2,41 @@
 
 This roadmap tracks the **actual repository state**. Planned work is not implemented work.
 
+
+## Current physical baseline — M63 COMPLETE
+
+The historical milestone sections below intentionally preserve the acceptance state that was true at each milestone. The current repository baseline is newer.
+
+As of **2026-09-05**, the real Cthulhu machine physically proves:
+
+- M61 native BoringWM desktop + real USB keyboard + writable USB-root BoringFS;
+- M62 dynamic process/task objects with policy limits instead of the old static eight-slot architecture;
+- M63 native `reboot` and `shutdown`;
+- real storage persistence across reboot;
+- real hardware reset / firmware re-entry;
+- real ACPI S5 power-off;
+- physical USB write durability using strict SYNCHRONIZE CACHE handling with a narrowly validated FUA fallback for devices that explicitly report the command unsupported.
+
+Physical freeze:
+
+```text
+freeze/m63-system-power-lifecycle-physical-2026-09-05
+799d1e6529b8eafead37acc340f3fd18dbb2d655
+```
+
+Physical image:
+
+```text
+bytes=100663296
+sha256=457535a2d27d98e489868a9d33cf8e8c2e2c83de13fc659bcea30e937c9018ab
+```
+
+Next planned physical work: multi-xHCI ownership, USB hub enumeration and the real mouse, followed by better GOP resolution, faster software present and broader practical RAM use.
+
 ## Current verified state
 
 ```text
-QEMU x86_64
+QEMU x86_64 / physical Cthulhu
     ↓
 Limine
     ↓
@@ -125,6 +156,7 @@ The current syscall ABI is exactly:
 41 EVENT_WAIT
 42 PTY_CREATE
 43 SPAWN
+44 SYSTEM_CONTROL (reboot / poweroff)
 ```
 
 VFS-backed executable loading and standalone `/bin/boringfetch` are real
@@ -1770,3 +1802,46 @@ M59 physical Cthulhu validation remains **PENDING USER HARDWARE TEST**; M61 auto
 Active version after runtime-neutral closeout: **BoringKernel 0.0.62-dev**. No M62 implementation is included. USB hubs, general GPT discovery, SuperSpeed endpoint-companion/burst semantics, BOT reset/stall recovery, an installer and physical flashing remain outside M61.
 
 See [M61_BOOTABLE_PERSISTENT_USB.md](M61_BOOTABLE_PERSISTENT_USB.md).
+
+
+## Milestone 62: dynamic process/task capacity — COMPLETE, Physically Frozen
+
+M62 removes the old fixed process/task arrays from the runtime architecture. Process and task objects are heap allocated and tracked through dynamic registries; scheduler traversal, spawn bookkeeping and per-process IPC state follow the dynamic model. The current policy bounds remain finite at 64 processes and 64 tasks, while BoringWM/display IPC capacities are 16.
+
+Focused stress creates 24 simultaneous processes/tasks across churn cycles and proves scheduling, reclamation and return to the allocation baseline. The real M61-style desktop acceptance exceeds the old eight-process ceiling and reuses capacity after closing all managed clients.
+
+Physical Cthulhu acceptance opened seven BoringTerminal instances plus BoringEdit and BoringFiles, closed all windows, returned to the persistent empty desktop and launched applications again without a capacity or lifecycle failure.
+
+Physical freeze:
+
+```text
+freeze/m62-dynamic-capacity-physical-2026-09-05
+f8b23490cd2e8e9095f6623d9d8b6230d3111080
+```
+
+## Milestone 63: system power lifecycle — COMPLETE, Physically Frozen
+
+M63 adds syscall 44 `SYSTEM_CONTROL` with bounded reboot/poweroff actions, a one-way power-transition spawn gate, storage synchronization, ACPI table discovery through Limine's RSDP response, FADT reset support, a bounded static DSDT `_S5` package parser and real ACPI S5 power-off.
+
+The physical USB write path was additionally hardened after Cthulhu exposed a real device compatibility problem: a successful WRITE(10) followed by a rejected SYNCHRONIZE CACHE(10) could previously be reported as a failed write after media had already changed. M63 now decodes REQUEST SENSE and switches to FUA only for the exact ILLEGAL REQUEST / INVALID COMMAND OPERATION CODE tuple that proves SYNCHRONIZE CACHE is unsupported. Other transport, CSW, sense and FUA failures stay hard errors.
+
+Physical acceptance on Cthulhu proves:
+
+```text
+mkdir -> PASS
+touch -> PASS
+write -> PASS
+reboot -> real hardware reset
+boot again -> PASS
+persisted file -> present
+shutdown -> real ACPI S5 power-off
+```
+
+Physical freeze:
+
+```text
+freeze/m63-system-power-lifecycle-physical-2026-09-05
+799d1e6529b8eafead37acc340f3fd18dbb2d655
+```
+
+The next milestone is intentionally not another power/storage change. The next physical target is USB topology: multiple xHCI controllers, hub enumeration and the real mouse.
