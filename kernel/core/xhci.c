@@ -38,6 +38,60 @@ static uint16_t little16(const uint8_t *bytes) {
     return (uint16_t)((uint16_t)bytes[0] | ((uint16_t)bytes[1] << 8U));
 }
 
+static bool xhci_bdf_before(struct pci_bdf left, struct pci_bdf right) {
+    if (left.bus != right.bus) { return left.bus < right.bus; }
+    if (left.device != right.device) { return left.device < right.device; }
+    return left.function < right.function;
+}
+
+bool xhci_collect_controller_devices(
+    const struct boring_pci_inventory *inventory,
+    struct pci_device devices[XHCI_MAX_CONTROLLERS],
+    uint8_t *count, bool *truncated) {
+    uint32_t index;
+    uint8_t stored = 0U;
+
+    if ((inventory == NULL) || (devices == NULL) || (count == NULL) ||
+        (truncated == NULL) || !inventory->complete || inventory->truncated ||
+        (inventory->stored > BORING_PCI_INVENTORY_MAX)) {
+        return false;
+    }
+    *count = 0U;
+    *truncated = false;
+    for (index = 0U; index < inventory->stored; ++index) {
+        const struct boring_pci_entry *entry = &inventory->entries[index];
+        struct pci_device device;
+        uint8_t position;
+
+        if ((entry->class_code != 0x0cU) || (entry->subclass != 0x03U) ||
+            (entry->prog_if != 0x30U)) {
+            continue;
+        }
+        if (stored == XHCI_MAX_CONTROLLERS) {
+            *truncated = true;
+            continue;
+        }
+        device.bdf = entry->bdf;
+        device.vendor_id = entry->vendor_id;
+        device.device_id = entry->device_id;
+        device.class_code = entry->class_code;
+        device.subclass = entry->subclass;
+        device.header_type = entry->header_type;
+        device.revision = entry->revision;
+
+        position = stored;
+        while ((position != 0U) &&
+               xhci_bdf_before(device.bdf, devices[position - 1U].bdf)) {
+            devices[position] = devices[position - 1U];
+            --position;
+        }
+        devices[position] = device;
+        ++stored;
+    }
+    *count = stored;
+    return true;
+}
+
 bool xhci_event_dequeue_position(const struct xhci_state *state,
                                  uint16_t *index, bool *cycle) {
     if ((state == NULL) || (index == NULL) || (cycle == NULL)) {
