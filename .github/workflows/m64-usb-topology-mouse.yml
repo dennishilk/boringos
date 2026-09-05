@@ -28,6 +28,24 @@ jobs:
             tests/xhci-host-test.c kernel/core/xhci.c kernel/core/usb_hid.c \
             -o build/xhci-host-test-sanitized
           ASAN_OPTIONS=detect_leaks=0 ./build/xhci-host-test-sanitized
+      - name: Bounded hub topology host acceptance
+        run: |
+          mkdir -p build
+          cc -Ikernel/include -std=c11 -fno-builtin \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            tests/usb-topology-host-test.c kernel/core/usb_topology.c \
+            -o build/usb-topology-host-test
+          ./build/usb-topology-host-test
+      - name: Sanitized hub topology host acceptance
+        run: |
+          cc -Ikernel/include -std=c11 -fno-builtin \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/usb-topology-host-test.c kernel/core/usb_topology.c \
+            -o build/usb-topology-host-test-sanitized
+          ASAN_OPTIONS=detect_leaks=0 ./build/usb-topology-host-test-sanitized
       - name: Real q35 xHCI controller regression
         run: ./tests/m48-xhci-qemu.sh
       - name: Real three-controller q35 ownership
