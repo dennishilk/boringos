@@ -1212,6 +1212,7 @@ bool usb_mass_storage_init(struct xhci_state *state) {
         return false;
     }
     msc_runtime.stats.slot_id = msc_runtime.device->slot_id;
+    msc_runtime.stats.controller_index = msc_runtime.state->controller_index;
     msc_runtime.stats.interface_number = msc_runtime.configuration.interface_number;
     msc_runtime.stats.bulk_in_address = msc_runtime.configuration.bulk_in.address;
     msc_runtime.stats.bulk_out_address = msc_runtime.configuration.bulk_out.address;
