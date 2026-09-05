@@ -63,7 +63,60 @@ jobs:
           sh tests/m62-capacity-qemu.sh
           python3 tests/m62-desktop-capacity-qemu.py
       - name: Inherited M61 persistent desktop regression
-        run: python3 tests/m61-physical-desktop-witness-qemu.py
+        run: |
+          physical=build/boringos-m61-usb.img
+          physical_sha=build/boringos-m61-usb.img.sha256
+          twin=build/boringos-m61-usb-qemu.img
+          twin_sha=build/boringos-m61-usb-qemu.img.sha256
+          saved=build/.m61-physical-before-qemu.img
+          saved_sha=build/.m61-physical-before-qemu.img.sha256
+
+          restore_physical() {
+            if [ -f "$saved" ]; then
+              rm -f "$physical"
+              mv "$saved" "$physical"
+            fi
+            if [ -f "$saved_sha" ]; then
+              rm -f "$physical_sha"
+              mv "$saved_sha" "$physical_sha"
+            fi
+          }
+          trap restore_physical EXIT INT TERM
+
+          test -f "$physical"
+          test -f "$physical_sha"
+          test -f "$twin"
+          test -f "$twin_sha"
+          cp "$physical" "$saved"
+          cp "$physical_sha" "$saved_sha"
+          cp "$twin" "$physical"
+          cp "$twin_sha" "$physical_sha"
+
+          set +e
+          python3 tests/m61-physical-desktop-witness-qemu.py
+          rc=$?
+          set -e
+
+          restore_physical
+          trap - EXIT INT TERM
+          expected=$(awk '{print $1}' "$physical_sha")
+          actual=$(sha256sum "$physical" | awk '{print $1}')
+          test "$actual" = "$expected"
+          test "$actual" = "$(grep '^sha256=' build/m61-usb-image.txt | cut -d= -f2)"
+          test "$(stat -c %s "$physical")" = "100663296"
+          rm -f "$twin" "$twin_sha"
+          test ! -e "$twin"
+          test ! -e "$twin_sha"
+          echo 'PHYSICAL_IMAGE_RESTORED=YES'
+          echo 'PHYSICAL_IMAGE_BYTES=100663296'
+          echo 'PHYSICAL_IMAGE_SHA_MANIFEST_MATCH=YES'
+          echo 'QEMU_TWIN_PUBLISHED=NO'
+          if [ "$rc" -ne 0 ]; then
+            echo '--- M61 QEMU test-twin focused diagnostic tail ---'
+            tail -n 500 build/m61-bootable-persistent-usb/first-boot/serial.log || true
+            tail -n 500 build/m61-bootable-persistent-usb/first-boot/qemu.log || true
+          fi
+          exit "$rc"
       - name: Verify final physical runtime image identity
         id: physical
         run: |
