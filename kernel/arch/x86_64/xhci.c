@@ -1249,7 +1249,9 @@ fail:
     return false;
 }
 
-bool xhci_init(struct xhci_state *state) {
+static bool initialize_controller(struct xhci_controller *controller,
+                                  const struct pci_device *device,
+                                  uint8_t controller_index) {
     struct pci_bar bar;
     volatile void *mapping = NULL;
     volatile uint8_t *base;
@@ -1258,22 +1260,23 @@ bool xhci_init(struct xhci_state *state) {
     bool success = false;
 
     XHCI_M61_BEGIN();
-    if ((state == NULL) || active_state.controller_running) {
+    if ((controller == NULL) || (device == NULL) ||
+        (controller_index >= XHCI_MAX_CONTROLLERS)) {
         XHCI_M61_RETURN_FALSE(XHCI_M61_FALSE_INVALID_STATE);
     }
-    state_clear(&active_state);
-    runtime_clear();
+    state_clear(&controller->state);
+    runtime_clear(controller);
+    controller->state.device = *device;
+    controller->state.controller_index = controller_index;
+    controller->status = XHCI_CONTROLLER_DISCOVERED;
 #ifdef BORING_M61_PHYSICAL_BREADCRUMBS
     XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_CONTROLLER_DISCOVERY);
-    if (!find_controller(&active_state.device)) {
-        XHCI_M61_FAIL(XHCI_M61_FALSE_NO_CONTROLLER);
-    }
     XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_BAR_VALIDATION);
-    if (!pci_get_bar(&active_state.device, 0U, &bar) || !bar.memory) {
+    if (!pci_get_bar(&controller->state.device, 0U, &bar) || !bar.memory) {
         XHCI_M61_FAIL(XHCI_M61_FALSE_INVALID_BAR);
     }
     XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_PCI_ENABLE);
-    if (!pci_enable_memory_bus_master(&active_state.device)) {
+    if (!pci_enable_memory_bus_master(&controller->state.device)) {
         XHCI_M61_FAIL(XHCI_M61_FALSE_PCI_ENABLE);
     }
     XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_MMIO_MAP);
@@ -1281,35 +1284,34 @@ bool xhci_init(struct xhci_state *state) {
         XHCI_M61_FAIL(XHCI_M61_FALSE_MMIO_MAP);
     }
 #else
-    if (!find_controller(&active_state.device) ||
-        !pci_get_bar(&active_state.device, 0U, &bar) ||
-        !bar.memory || !pci_enable_memory_bus_master(&active_state.device) ||
+    if (!pci_get_bar(&controller->state.device, 0U, &bar) ||
+        !bar.memory || !pci_enable_memory_bus_master(&controller->state.device) ||
         !vmm_map_mmio_region(bar.base, XHCI_MMIO_WINDOW_SIZE, &mapping)) {
         goto out;
     }
 #endif
     base = (volatile uint8_t *)mapping;
-    active_state.mmio_physical = bar.base;
+    controller->state.mmio_physical = bar.base;
 #ifdef BORING_M61_PHYSICAL_BREADCRUMBS
     XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_CAPABILITY_PARSE);
     if (!xhci_parse_capabilities(base, XHCI_MMIO_WINDOW_SIZE,
-                                 &active_state.capabilities)) {
+                                 &controller->state.capabilities)) {
         XHCI_M61_FAIL(XHCI_M61_FALSE_CAPABILITIES);
     }
     XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_LEGACY_HANDOFF);
-    if (!legacy_handoff(base, &active_state.capabilities,
-                        &active_state.legacy_handoff_complete)) {
+    if (!legacy_handoff(base, &controller->state.capabilities,
+                        &controller->state.legacy_handoff_complete)) {
         XHCI_M61_FAIL(XHCI_M61_FALSE_LEGACY_HANDOFF);
     }
 #else
     if (!xhci_parse_capabilities(base, XHCI_MMIO_WINDOW_SIZE,
-                                 &active_state.capabilities) ||
-        !legacy_handoff(base, &active_state.capabilities,
-                        &active_state.legacy_handoff_complete)) {
+                                 &controller->state.capabilities) ||
+        !legacy_handoff(base, &controller->state.capabilities,
+                        &controller->state.legacy_handoff_complete)) {
         goto out;
     }
 #endif
-    operational = active_state.capabilities.capability_length;
+    operational = controller->state.capabilities.capability_length;
     XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_HALT_COMMAND);
     mmio_write32(base, operational + 0x00U,
                  mmio_read32(base, operational + 0x00U) & ~XHCI_USBCMD_RUN);
@@ -1330,13 +1332,13 @@ bool xhci_init(struct xhci_state *state) {
         XHCI_M61_FAIL(XHCI_M61_FALSE_CONTROLLER_NOT_READY);
     }
     XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_RINGS_SETUP);
-    if (!rings_initialize(base, &active_state.capabilities, &active_state)) {
+    if (!rings_initialize(controller, base, &controller->state.capabilities, &controller->state)) {
         XHCI_M61_FAIL_PRESERVING_REASON(XHCI_M61_FALSE_RINGS_SETUP);
     }
 #else
     if (!wait_mask(base, operational + 0x00U, XHCI_USBCMD_RESET, false) ||
         !wait_mask(base, operational + 0x04U, XHCI_USBSTS_NOT_READY, false) ||
-        !rings_initialize(base, &active_state.capabilities, &active_state)) {
+        !rings_initialize(controller, base, &controller->state.capabilities, &controller->state)) {
         goto out;
     }
 #endif
@@ -1347,13 +1349,14 @@ bool xhci_init(struct xhci_state *state) {
     if (!wait_mask(base, operational + 0x04U, XHCI_USBSTS_HALTED, false)) {
         XHCI_M61_FAIL(XHCI_M61_FALSE_START);
     }
-    active_state.controller_running = true;
+    controller->state.controller_running = true;
+    controller->status = XHCI_CONTROLLER_RUNNING;
     XHCI_M61_PROGRESS(XHCI_M61_PROGRESS_PORT_SCAN);
-    for (port = 0U; port < active_state.capabilities.max_ports; ++port) {
+    for (port = 0U; port < controller->state.capabilities.max_ports; ++port) {
         const uint32_t portsc = mmio_read32(
             base, operational + XHCI_PORT_BASE +
                   ((uint32_t)port * XHCI_PORT_STRIDE));
-        if ((portsc & 1U) != 0U) { active_state.connected_ports |= 1ULL << port; }
+        if ((portsc & 1U) != 0U) { controller->state.connected_ports |= 1ULL << port; }
     }
     success = true;
 
@@ -1362,11 +1365,10 @@ out:
         (void)vmm_unmap_mmio_region(mapping, XHCI_MMIO_WINDOW_SIZE);
     }
     if (!success) {
-        rings_release(&active_state);
-        state_clear(&active_state);
-        runtime_clear();
+        rings_release(controller, &controller->state);
+        controller->state.controller_running = false;
+        runtime_clear(controller);
     }
-    *state = active_state;
     return success;
 }
 
