@@ -216,6 +216,7 @@ static void flush_diagnostic_classify(
     enum usb_mass_storage_flush_diagnostic diagnostic,
     uint8_t post_code) {
     msc_runtime.stats.flush_diagnostic = (uint8_t)diagnostic;
+    (void)post_code;
     MSC_M61_PROGRESS(post_code);
 }
 
