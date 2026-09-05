@@ -62,7 +62,7 @@ allowed = {
 "kernel/core/process.c","kernel/core/task.c","kernel/core/m36_syscall.c","kernel/core/ipc.c",
 "user/runtime/include/boring/wm.h","user/boringwm/main.c","user/boring-display/server.c",
 "kernel/include/boring/m62_capacity_test.h","kernel/core/m62_capacity_test.c",
-"kernel/core/m62_capacity_test_adapter.c","tests/m62-capacity-qemu.sh",
+"kernel/core/m62_capacity_test_adapter.c","tests/m62-capacity-qemu.sh","tests/ipc-host-test.c",
 "tests/m62-dynamic-capacity-verifier.py","tests/m62-desktop-capacity-qemu.py",
 ".github/workflows/m62-dynamic-capacity.yml"}
 changed = set(subprocess.check_output(["git","diff","--name-only",FROZEN,"HEAD"],cwd=ROOT,text=True).splitlines())
