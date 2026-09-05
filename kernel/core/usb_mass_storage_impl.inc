@@ -5,7 +5,6 @@
 #include <boring/block_device.h>
 #include <boring/cpu.h>
 #include <boring/pmm.h>
-#include <boring/serial.h>
 #include <boring/usb_mass_storage.h>
 #include <boring/vmm.h>
 #include <boring/xhci.h>
@@ -53,6 +52,9 @@
 #define MSC_M63_POST_FLUSH_UNSUPPORTED_COMMAND 0xE4U
 #define MSC_M63_POST_FUA_WRITE_FAILURE 0xE5U
 #define MSC_M63_POST_FUA_MODE_ACTIVE 0xE6U
+#define MSC_M63_POST_FLUSH_SENSE_KEY 0xE7U
+#define MSC_M63_POST_FLUSH_ASC 0xE8U
+#define MSC_M63_POST_FLUSH_ASCQ 0xE9U
 
 struct usb_msc_runtime {
     struct xhci_state *state;
@@ -202,17 +204,41 @@ bool usb_mass_storage_parse_sense(
     return true;
 }
 
-static void flush_diagnostic_marker(const char *marker, uint8_t post_code) {
-    serial_write_string(marker);
-    serial_write_string("\n");
+static void flush_diagnostic_reset(void) {
+    msc_runtime.stats.flush_diagnostic = (uint8_t)USB_FLUSH_NONE;
+    msc_runtime.stats.flush_sense_key = 0U;
+    msc_runtime.stats.flush_asc = 0U;
+    msc_runtime.stats.flush_ascq = 0U;
+    msc_runtime.stats.flush_sense_valid = false;
+}
+
+static void flush_diagnostic_classify(
+    enum usb_mass_storage_flush_diagnostic diagnostic,
+    uint8_t post_code) {
+    msc_runtime.stats.flush_diagnostic = (uint8_t)diagnostic;
     MSC_M61_PROGRESS(post_code);
 }
 
-static void flush_diagnostic_value(const char *marker, uint8_t value) {
-    serial_write_string(marker);
-    serial_write_string("=");
-    serial_write_hex_u64((uint64_t)value);
-    serial_write_string("\n");
+static void flush_diagnostic_sense(
+    const struct usb_mass_storage_sense *sense) {
+    if (sense == NULL) { return; }
+
+    msc_runtime.stats.flush_sense_key = sense->sense_key;
+    msc_runtime.stats.flush_asc = sense->asc;
+    msc_runtime.stats.flush_ascq = sense->ascq;
+    msc_runtime.stats.flush_sense_valid = true;
+
+    /*
+     * Tagged POST80 sequence for a physical trace:
+     * USB_FLUSH_SENSE_KEY, value, USB_FLUSH_ASC, value,
+     * USB_FLUSH_ASCQ, value.  A final classification POST follows.
+     */
+    MSC_M61_PROGRESS(MSC_M63_POST_FLUSH_SENSE_KEY);
+    MSC_M61_PROGRESS(sense->sense_key);
+    MSC_M61_PROGRESS(MSC_M63_POST_FLUSH_ASC);
+    MSC_M61_PROGRESS(sense->asc);
+    MSC_M61_PROGRESS(MSC_M63_POST_FLUSH_ASCQ);
+    MSC_M61_PROGRESS(sense->ascq);
 }
 
 static bool bulk_packet_size(uint8_t speed, uint16_t raw, uint16_t *packet) {
@@ -977,25 +1003,21 @@ bool usb_mass_storage_flush(void) {
         return true;
     }
 
+    flush_diagnostic_reset();
     if (!scsi_no_data(cdb, 10U, &status)) {
-        flush_diagnostic_marker("USB_FLUSH_TRANSPORT_FAILURE",
-                                MSC_M63_POST_FLUSH_TRANSPORT_FAILURE);
+        flush_diagnostic_classify(USB_FLUSH_TRANSPORT_FAILURE,
+                                  MSC_M63_POST_FLUSH_TRANSPORT_FAILURE);
         return false;
     }
     if (status != 0U) {
-        flush_diagnostic_marker("USB_FLUSH_CSW_STATUS_FAILURE",
-                                MSC_M63_POST_FLUSH_CSW_STATUS_FAILURE);
+        flush_diagnostic_classify(USB_FLUSH_CSW_STATUS_FAILURE,
+                                  MSC_M63_POST_FLUSH_CSW_STATUS_FAILURE);
         if (status != 1U) { return false; }
 
-        flush_diagnostic_marker("USB_FLUSH_CHECK_CONDITION",
-                                MSC_M63_POST_FLUSH_CHECK_CONDITION);
-        if (!scsi_request_sense(&sense)) {
-            serial_write_string("USB_FLUSH_REQUEST_SENSE_FAILURE\n");
-            return false;
-        }
-        flush_diagnostic_value("USB_FLUSH_SENSE_KEY", sense.sense_key);
-        flush_diagnostic_value("USB_FLUSH_ASC", sense.asc);
-        flush_diagnostic_value("USB_FLUSH_ASCQ", sense.ascq);
+        flush_diagnostic_classify(USB_FLUSH_CHECK_CONDITION,
+                                  MSC_M63_POST_FLUSH_CHECK_CONDITION);
+        if (!scsi_request_sense(&sense)) { return false; }
+        flush_diagnostic_sense(&sense);
 
         if (!synchronize_cache_is_explicitly_unsupported(&sense)) {
             return false;
@@ -1005,8 +1027,8 @@ bool usb_mass_storage_flush(void) {
         msc_runtime.force_unit_access_writes = true;
         msc_runtime.stats.synchronize_cache_unsupported = true;
         msc_runtime.stats.force_unit_access_writes = true;
-        flush_diagnostic_marker("USB_FLUSH_UNSUPPORTED_COMMAND",
-                                MSC_M63_POST_FLUSH_UNSUPPORTED_COMMAND);
+        flush_diagnostic_classify(USB_FLUSH_UNSUPPORTED_COMMAND,
+                                  MSC_M63_POST_FLUSH_UNSUPPORTED_COMMAND);
         return !msc_runtime.pending_write_requires_flush;
     }
 
@@ -1048,8 +1070,7 @@ static enum block_device_result msc_backend_write(void *context,
     if (runtime->force_unit_access_writes) {
         if (!scsi_rw10(true, true, (uint32_t)first_block,
                        (uint16_t)block_count, (void *)(uintptr_t)buffer)) {
-            flush_diagnostic_marker("USB_FUA_WRITE_FAILURE",
-                                    MSC_M63_POST_FUA_WRITE_FAILURE);
+            MSC_M61_PROGRESS(MSC_M63_POST_FUA_WRITE_FAILURE);
             return BLOCK_DEVICE_RESULT_IO_ERROR;
         }
         runtime->pending_write_requires_flush = false;
@@ -1076,8 +1097,7 @@ static enum block_device_result msc_backend_write(void *context,
      */
     if (!scsi_rw10(true, true, (uint32_t)first_block,
                    (uint16_t)block_count, (void *)(uintptr_t)buffer)) {
-        flush_diagnostic_marker("USB_FUA_WRITE_FAILURE",
-                                MSC_M63_POST_FUA_WRITE_FAILURE);
+        MSC_M61_PROGRESS(MSC_M63_POST_FUA_WRITE_FAILURE);
         return BLOCK_DEVICE_RESULT_IO_ERROR;
     }
     runtime->pending_write_requires_flush = false;

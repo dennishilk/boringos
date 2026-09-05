@@ -30,6 +30,24 @@ struct usb_mass_storage_configuration {
     uint8_t interface_number;
 };
 
+enum usb_mass_storage_flush_diagnostic {
+    USB_FLUSH_NONE = 0,
+    USB_FLUSH_TRANSPORT_FAILURE,
+    USB_FLUSH_CSW_STATUS_FAILURE,
+    USB_FLUSH_CHECK_CONDITION,
+    USB_FLUSH_UNSUPPORTED_COMMAND
+};
+
+/*
+ * Physical REQUEST SENSE witness field names.  The runtime emits each tag on
+ * POST80 followed by the raw byte value, then emits the final classification.
+ */
+enum usb_mass_storage_flush_sense_witness {
+    USB_FLUSH_SENSE_KEY = 1,
+    USB_FLUSH_ASC,
+    USB_FLUSH_ASCQ
+};
+
 struct usb_mass_storage_sense {
     uint8_t response_code;
     uint8_t sense_key;
@@ -49,6 +67,10 @@ struct usb_mass_storage_stats {
     uint32_t fua_write_commands;
     uint32_t flush_commands;
     uint32_t short_packets;
+    uint8_t flush_diagnostic;
+    uint8_t flush_sense_key;
+    uint8_t flush_asc;
+    uint8_t flush_ascq;
     uint8_t slot_id;
     uint8_t interface_number;
     uint8_t bulk_in_address;
@@ -57,6 +79,7 @@ struct usb_mass_storage_stats {
     uint16_t bulk_out_max_packet;
     bool synchronize_cache_unsupported;
     bool force_unit_access_writes;
+    bool flush_sense_valid;
     bool configured;
     bool registered;
 };
