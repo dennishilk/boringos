@@ -32,3 +32,5 @@ jobs:
         run: ./tests/m48-xhci-qemu.sh
       - name: Real three-controller q35 ownership
         run: ./tests/m64-multi-xhci-qemu.sh
+      - name: Cross-controller storage and HID
+        run: ./tests/m64-multi-usb-qemu.sh
