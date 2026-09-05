@@ -134,10 +134,17 @@ static void verify_cross_controller_input(uint8_t keyboard_index,
             (stats.modifiers == 0U)) {
             break;
         }
-        if ((keyboard == NULL) || (pointer == NULL) ||
-            !xhci_poll_hid_reports(keyboard, 1U) ||
-            !xhci_poll_hid_reports(pointer, 1U)) {
-            fail("cross-controller HID Interrupt-IN");
+        if (keyboard == NULL) {
+            fail("keyboard controller lookup");
+        }
+        if (!xhci_poll_hid_reports(keyboard, 1U)) {
+            fail("keyboard controller HID Interrupt-IN");
+        }
+        if (pointer == NULL) {
+            fail("pointer controller lookup");
+        }
+        if (!xhci_poll_hid_reports(pointer, 1U)) {
+            fail("pointer controller HID Interrupt-IN");
         }
     }
     if (!boring_input_get_stats(&stats) ||
