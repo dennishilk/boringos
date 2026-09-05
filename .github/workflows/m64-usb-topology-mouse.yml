@@ -35,37 +35,59 @@ jobs:
       - name: Cross-controller storage and HID
         id: multi_usb
         continue-on-error: true
-        run: ./tests/m64-multi-usb-qemu.sh
-      - name: Diagnose guest initialization failure
+        shell: bash
+        run: |
+          mkdir -p build
+          set +e
+          ./tests/m64-multi-usb-qemu.sh 2>&1 | tee build/m64-multi-usb-step.log
+          status=${PIPESTATUS[0]}
+          echo "$status" > build/m64-multi-usb-step.status
+          exit "$status"
+      - name: Diagnose build failure
         if: steps.multi_usb.outcome == 'failure'
         continue-on-error: true
         run: |
-          grep -Eq 'M64 multi-USB FAILED: (three-controller initialization|controller registry state|per-controller address/descriptor/HID|QEMU topology classification)' build/m64-multi-usb/serial.log && exit 1 || exit 0
-      - name: Diagnose storage setup failure
+          grep -Eq '(error:|undefined reference|No rule to make target|make: \*\*\*)' build/m64-multi-usb-step.log && exit 1 || exit 0
+      - name: Diagnose pre-input guest exit
         if: steps.multi_usb.outcome == 'failure'
         continue-on-error: true
         run: |
-          grep -Eq 'M64 multi-USB FAILED: (controller-bound usb0 initialization|usb0 ownership/registration|usb0 bounded geometry|usb0 READ\(10\) before write)' build/m64-multi-usb/serial.log && exit 1 || exit 0
-      - name: Diagnose storage transport failure
+          grep -Fq 'QEMU exited before HID injection' build/m64-multi-usb-step.log && exit 1 || exit 0
+      - name: Diagnose HID injection window timeout
         if: steps.multi_usb.outcome == 'failure'
         continue-on-error: true
         run: |
-          grep -Eq 'M64 multi-USB FAILED: (WRITE\(10\)/flush/readback|M63 normal flush policy regression|storage/HID Event Ring ownership)' build/m64-multi-usb/serial.log && exit 1 || exit 0
-      - name: Diagnose canonical input setup failure
+          grep -Fq 'guest did not reach HID injection window' build/m64-multi-usb-step.log && exit 1 || exit 0
+      - name: Diagnose QMP injection failure
         if: steps.multi_usb.outcome == 'failure'
         continue-on-error: true
         run: |
-          grep -Eq 'M64 multi-USB FAILED: (canonical input queue ownership|canonical input queue stats)' build/m64-multi-usb/serial.log && exit 1 || exit 0
-      - name: Diagnose HID Interrupt-IN failure
+          grep -Fq 'QMP USB input injection failed' build/m64-multi-usb-step.log && exit 1 || exit 0
+      - name: Diagnose post-input guest exit
         if: steps.multi_usb.outcome == 'failure'
         continue-on-error: true
         run: |
-          grep -Fq 'M64 multi-USB FAILED: cross-controller HID Interrupt-IN' build/m64-multi-usb/serial.log && exit 1 || exit 0
-      - name: Diagnose canonical input result failure
+          grep -Fq 'QEMU exited before PASS' build/m64-multi-usb-step.log && exit 1 || exit 0
+      - name: Diagnose guest acceptance timeout
         if: steps.multi_usb.outcome == 'failure'
         continue-on-error: true
         run: |
-          grep -Eq 'M64 multi-USB FAILED: (canonical cross-controller input end state|canonical cross-controller input read|canonical keyboard/pointer event classes|canonical input release)' build/m64-multi-usb/serial.log && exit 1 || exit 0
+          grep -Fq 'guest acceptance timed out' build/m64-multi-usb-step.log && exit 1 || exit 0
+      - name: Diagnose missing witness
+        if: steps.multi_usb.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          grep -Fq 'missing marker:' build/m64-multi-usb-step.log && exit 1 || exit 0
+      - name: Diagnose persistence verifier failure
+        if: steps.multi_usb.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          grep -Eq '(image length changed|target sector did not change|bytes outside target sector changed)' build/m64-multi-usb-step.log && exit 1 || exit 0
+      - name: Diagnose guest explicit failure
+        if: steps.multi_usb.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          grep -Fq 'M64 multi-USB FAILED:' build/m64-multi-usb/serial.log && exit 1 || exit 0
       - name: Preserve cross-controller gate
         if: steps.multi_usb.outcome == 'failure'
         run: exit 1
