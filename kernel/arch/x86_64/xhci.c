@@ -1498,21 +1498,27 @@ bool xhci_discover_descriptors(struct xhci_state *state) {
 }
 
 bool xhci_configure_hid_devices(struct xhci_state *state) {
+    struct xhci_controller *controller = controller_from_state(state);
     uint8_t index;
-    if ((state == NULL) || !active_state.controller_running ||
-        (runtime_state.mmio == NULL) || (active_state.addressed_count == 0U)) {
+    if ((controller == NULL) || (controller->runtime.mmio == NULL) ||
+        (controller->state.addressed_count == 0U)) {
         return false;
     }
-    for (index = 0U; index < active_state.addressed_count; ++index) {
-        if (!configure_hid_device(&active_state.addressed[index])) {
-            *state = active_state;
+    for (index = 0U; index < controller->state.addressed_count; ++index) {
+        if (!configure_hid_device(controller,
+                                  &controller->state.addressed[index])) {
+            *state = controller->state;
             return false;
         }
     }
-    *state = active_state;
+    *state = controller->state;
     return true;
 }
 
 const struct xhci_state *xhci_get_state(void) {
-    return active_state.controller_running ? &active_state : NULL;
+    if ((controller_registry_count == 0U) ||
+        (controller_registry[0].status != XHCI_CONTROLLER_RUNNING)) {
+        return NULL;
+    }
+    return &controller_registry[0].state;
 }
