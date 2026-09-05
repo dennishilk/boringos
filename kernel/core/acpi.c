@@ -50,11 +50,6 @@ struct acpi_runtime {
 
 static struct acpi_runtime runtime;
 
-static uint16_t read_le16(const uint8_t *bytes) {
-    return (uint16_t)((uint16_t)bytes[0] |
-                      ((uint16_t)bytes[1] << 8U));
-}
-
 static uint32_t read_le32(const uint8_t *bytes) {
     return (uint32_t)bytes[0] |
            ((uint32_t)bytes[1] << 8U) |
