@@ -223,7 +223,7 @@ static bool m60_rearm_hid_endpoints(struct xhci_state *active,
              endpoint_index < device->hid_configuration.endpoint_count;
              ++endpoint_index) {
             if (!device->hid_runtime[endpoint_index].transfer_outstanding &&
-                !m52_submit_endpoint(mmio, device, endpoint_index)) {
+                !m52_submit_endpoint(active, mmio, device, endpoint_index)) {
                 return false;
             }
         }
@@ -290,7 +290,7 @@ bool xhci_consume_hid_transfer_event(struct xhci_state *state,
     bool success = false;
 
     if ((state == NULL) || (event == NULL)) { return false; }
-    published = xhci_get_state();
+    published = xhci_get_controller(state->controller_index);
     if ((published == NULL) || !published->controller_running ||
         !state->controller_running ||
         (state->mmio_physical != published->mmio_physical) ||
@@ -335,7 +335,7 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
     if ((state == NULL) || (completion_goal == 0U) || (wait_limit == 0U)) {
         return false;
     }
-    published = xhci_get_state();
+    published = xhci_get_controller(state->controller_index);
     if ((published == NULL) || !published->controller_running ||
         (published->addressed_count == 0U) ||
         !vmm_map_mmio_region(published->mmio_physical,
