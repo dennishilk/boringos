@@ -254,7 +254,8 @@ static bool m52_allocate_report_buffer(struct xhci_hid_endpoint_runtime *runtime
     return true;
 }
 
-static bool m52_submit_endpoint(volatile uint8_t *mmio,
+static bool m52_submit_endpoint(const struct xhci_state *active,
+                                volatile uint8_t *mmio,
                                 struct xhci_addressed_device *device,
                                 uint8_t endpoint_index) {
     struct xhci_hid_endpoint_runtime *runtime;
@@ -267,7 +268,8 @@ static bool m52_submit_endpoint(volatile uint8_t *mmio,
     uint16_t next_index;
     bool next_cycle;
     uint32_t doorbell;
-    if ((mmio == NULL) || (device == NULL) ||
+    if ((active == NULL) || (mmio == NULL) || (device == NULL) ||
+        (device->controller_index != active->controller_index) ||
         (endpoint_index >= device->hid_configuration.endpoint_count) ||
         (endpoint_index >= XHCI_MAX_HID_ENDPOINTS)) {
         return false;
@@ -317,8 +319,7 @@ static bool m52_submit_endpoint(volatile uint8_t *mmio,
         runtime->transfer_outstanding = false;
         return false;
     }
-    doorbell += ((struct xhci_state *)(uintptr_t)xhci_get_state())
-                    ->capabilities.doorbell_offset;
+    doorbell += active->capabilities.doorbell_offset;
     if (doorbell > M52_MMIO_WINDOW_SIZE - 4U) {
         runtime->transfer_outstanding = false;
         return false;
@@ -645,7 +646,7 @@ static bool m52_poll_hid_reports_limit(struct xhci_state *state,
              endpoint_index < device->hid_configuration.endpoint_count;
              ++endpoint_index) {
             if (!device->hid_runtime[endpoint_index].transfer_outstanding &&
-                !m52_submit_endpoint(mmio, device, endpoint_index)) {
+                !m52_submit_endpoint(active, mmio, device, endpoint_index)) {
                 goto out;
             }
         }
@@ -708,7 +709,7 @@ static bool m52_poll_hid_reports_limit(struct xhci_state *state,
                      endpoint_index < device->hid_configuration.endpoint_count;
                      ++endpoint_index) {
                     if (!device->hid_runtime[endpoint_index].transfer_outstanding &&
-                        !m52_submit_endpoint(mmio, device, endpoint_index)) {
+                        !m52_submit_endpoint(active, mmio, device, endpoint_index)) {
                         goto out;
                     }
                 }
