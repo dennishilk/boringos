@@ -1451,46 +1451,49 @@ enum xhci_controller_init_status xhci_get_controller_status(uint8_t index) {
 
 
 bool xhci_address_connected(struct xhci_state *state) {
+    struct xhci_controller *controller = controller_from_state(state);
     uint8_t port_index;
-    if ((state == NULL) || !active_state.controller_running ||
-        (runtime_state.mmio == NULL) || (runtime_state.dcbaa == NULL) ||
-        (active_state.addressed_count != 0U)) {
+    if ((controller == NULL) || (controller->runtime.mmio == NULL) ||
+        (controller->runtime.dcbaa == NULL) ||
+        (controller->state.addressed_count != 0U)) {
         return false;
     }
     for (port_index = 0U;
-         port_index < active_state.capabilities.max_ports; ++port_index) {
-        if ((active_state.connected_ports & (1ULL << port_index)) == 0ULL) {
+         port_index < controller->state.capabilities.max_ports; ++port_index) {
+        if ((controller->state.connected_ports & (1ULL << port_index)) == 0ULL) {
             continue;
         }
-        if (active_state.addressed_count == XHCI_MAX_ADDRESSED_DEVICES) {
-            active_state.addressing_truncated = true;
+        if (controller->state.addressed_count == XHCI_MAX_ADDRESSED_DEVICES) {
+            controller->state.addressing_truncated = true;
             break;
         }
         if (!address_root_port(
-                (uint8_t)(port_index + 1U),
-                &active_state.addressed[active_state.addressed_count])) {
-            *state = active_state;
+                controller, (uint8_t)(port_index + 1U),
+                &controller->state.addressed[controller->state.addressed_count])) {
+            *state = controller->state;
             return false;
         }
-        ++active_state.addressed_count;
+        ++controller->state.addressed_count;
     }
-    *state = active_state;
-    return active_state.addressed_count != 0U;
+    *state = controller->state;
+    return controller->state.addressed_count != 0U;
 }
 
 bool xhci_discover_descriptors(struct xhci_state *state) {
+    struct xhci_controller *controller = controller_from_state(state);
     uint8_t index;
-    if ((state == NULL) || !active_state.controller_running ||
-        (runtime_state.mmio == NULL) || (active_state.addressed_count == 0U)) {
+    if ((controller == NULL) || (controller->runtime.mmio == NULL) ||
+        (controller->state.addressed_count == 0U)) {
         return false;
     }
-    for (index = 0U; index < active_state.addressed_count; ++index) {
-        if (!discover_device_descriptors(&active_state.addressed[index])) {
-            *state = active_state;
+    for (index = 0U; index < controller->state.addressed_count; ++index) {
+        if (!discover_device_descriptors(
+                controller, &controller->state.addressed[index])) {
+            *state = controller->state;
             return false;
         }
     }
-    *state = active_state;
+    *state = controller->state;
     return true;
 }
 
