@@ -58,8 +58,8 @@ static void route_test(void) {
                                      BORING_USB_SPEED_HIGH, &one),
           "route depth overflow rejected");
 
-    value = one;
-    value.route_string |= 1U << 8U;
+    value = two;
+    value.route_string |= (uint32_t)1U << 12U;
     check(!boring_usb_topology_validate(&value),
           "bits above active route rejected");
     check(!boring_usb_topology_root(&root, 0U, BORING_USB_SPEED_HIGH) &&
@@ -136,22 +136,26 @@ static void port_status_test(void) {
     struct boring_usb_hub_port_status port;
     uint8_t status[4] = {0x03U, 0x05U, 0x11U, 0x00U};
 
-    check(boring_usb_parse_hub_port_status(status, sizeof(status), &port),
+    check(boring_usb_parse_hub_port_status(status, (uint16_t)sizeof(status),
+                                           &port),
           "valid high-speed hub port status");
     check(port.connected && port.enabled && port.powered && !port.reset &&
           (port.speed == BORING_USB_SPEED_HIGH) &&
           (port.change == 0x0011U), "high-speed status fields");
 
     status[1] = 0x03U;
-    check(boring_usb_parse_hub_port_status(status, sizeof(status), &port) &&
+    check(boring_usb_parse_hub_port_status(status, (uint16_t)sizeof(status),
+                                           &port) &&
           (port.speed == BORING_USB_SPEED_LOW), "low-speed status");
     status[1] = 0x07U;
-    check(!boring_usb_parse_hub_port_status(status, sizeof(status), &port),
+    check(!boring_usb_parse_hub_port_status(status, (uint16_t)sizeof(status),
+                                            &port),
           "contradictory speed rejected");
     status[1] = 0x01U;
     status[2] = 0x20U;
     status[3] = 0x00U;
-    check(!boring_usb_parse_hub_port_status(status, sizeof(status), &port),
+    check(!boring_usb_parse_hub_port_status(status, (uint16_t)sizeof(status),
+                                            &port),
           "unknown change bit rejected");
     check(!boring_usb_parse_hub_port_status(status, 3U, &port),
           "short port status rejected");
