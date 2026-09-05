@@ -40,8 +40,8 @@ static bool bytes_equal(const uint8_t *left, const uint8_t *right,
     return true;
 }
 
-static bool controller_has_protocol(const struct xhci_state *state,
-                                    uint8_t protocol) {
+static bool controller_has_report_format(
+    const struct xhci_state *state, enum xhci_hid_report_format report_format) {
     uint8_t device_index;
     if (state == NULL) { return false; }
     for (device_index = 0U; device_index < state->addressed_count;
@@ -52,8 +52,8 @@ static bool controller_has_protocol(const struct xhci_state *state,
         for (endpoint_index = 0U;
              endpoint_index < device->hid_configuration.endpoint_count;
              ++endpoint_index) {
-            if (device->hid_configuration.endpoints[endpoint_index].protocol ==
-                protocol) {
+            if (device->hid_configuration.endpoints[endpoint_index].report_format ==
+                report_format) {
                 return true;
             }
         }
@@ -85,115 +85,6 @@ static bool controller_has_storage(const struct xhci_state *state) {
         }
     }
     return false;
-}
-
-static void dump_enumerated_usb(void) {
-    uint8_t controller_index;
-    serial_write_string("M64DIAG BEGIN\n");
-    for (controller_index = 0U; controller_index < xhci_controller_count();
-         ++controller_index) {
-        const struct xhci_state *state = xhci_get_controller(controller_index);
-        uint8_t device_index;
-        if (state == NULL) {
-            serial_write_string("M64DIAG C missing index=");
-            serial_write_u64(controller_index);
-            serial_write_string("\n");
-            continue;
-        }
-        serial_write_string("M64DIAG C index=");
-        serial_write_u64(controller_index);
-        serial_write_string(" bdf=");
-        serial_write_u64(state->device.bdf.bus);
-        serial_write_string(":");
-        serial_write_u64(state->device.bdf.device);
-        serial_write_string(".");
-        serial_write_u64(state->device.bdf.function);
-        serial_write_string(" connected_ports=");
-        serial_write_hex_u64(state->connected_ports);
-        serial_write_string(" addressed_count=");
-        serial_write_u64(state->addressed_count);
-        serial_write_string(" status=");
-        serial_write_u64((uint64_t)xhci_get_controller_status(controller_index));
-        serial_write_string("\n");
-
-        for (device_index = 0U; device_index < state->addressed_count;
-             ++device_index) {
-            const struct xhci_addressed_device *device =
-                &state->addressed[device_index];
-            struct usb_mass_storage_configuration storage_configuration;
-            void *descriptor_virtual = NULL;
-            bool storage = false;
-            uint8_t endpoint_index;
-
-            if (device->descriptors_ready &&
-                (device->descriptor_buffer_physical != 0ULL) &&
-                (device->descriptors.configuration_length != 0U) &&
-                vmm_pmm_frame_to_hhdm(device->descriptor_buffer_physical,
-                                      &descriptor_virtual)) {
-                storage = usb_mass_storage_parse_configuration(
-                    (const uint8_t *)descriptor_virtual,
-                    device->descriptors.configuration_length, device->speed,
-                    &storage_configuration);
-            }
-
-            serial_write_string("M64DIAG D c=");
-            serial_write_u64(controller_index);
-            serial_write_string(" i=");
-            serial_write_u64(device_index);
-            serial_write_string(" port=");
-            serial_write_u64(device->root_port_id);
-            serial_write_string(" slot=");
-            serial_write_u64(device->slot_id);
-            serial_write_string(" speed=");
-            serial_write_u64(device->speed);
-            serial_write_string(" vid=");
-            serial_write_hex_u64(device->descriptors.vendor_id);
-            serial_write_string(" pid=");
-            serial_write_hex_u64(device->descriptors.product_id);
-            serial_write_string(" cfg_len=");
-            serial_write_u64(device->descriptors.configuration_length);
-            serial_write_string(" desc=");
-            serial_write_u64(device->descriptors_ready ? 1U : 0U);
-            serial_write_string(" configured=");
-            serial_write_u64(device->device_configured ? 1U : 0U);
-            serial_write_string(" hid_ready=");
-            serial_write_u64(device->hid_endpoint_ready ? 1U : 0U);
-            serial_write_string(" hid_eps=");
-            serial_write_u64(device->hid_configuration.endpoint_count);
-            serial_write_string(" storage=");
-            serial_write_u64(storage ? 1U : 0U);
-            serial_write_string("\n");
-
-            for (endpoint_index = 0U;
-                 endpoint_index < device->hid_configuration.endpoint_count;
-                 ++endpoint_index) {
-                const struct xhci_hid_endpoint_descriptor *endpoint =
-                    &device->hid_configuration.endpoints[endpoint_index];
-                serial_write_string("M64DIAG H c=");
-                serial_write_u64(controller_index);
-                serial_write_string(" d=");
-                serial_write_u64(device_index);
-                serial_write_string(" e=");
-                serial_write_u64(endpoint_index);
-                serial_write_string(" if=");
-                serial_write_u64(endpoint->interface_number);
-                serial_write_string(" subclass=");
-                serial_write_u64(endpoint->interface_subclass);
-                serial_write_string(" protocol=");
-                serial_write_u64(endpoint->protocol);
-                serial_write_string(" format=");
-                serial_write_u64((uint64_t)endpoint->report_format);
-                serial_write_string(" address=");
-                serial_write_hex_u64(endpoint->endpoint_address);
-                serial_write_string(" endpoint_id=");
-                serial_write_u64(endpoint->endpoint_id);
-                serial_write_string(" max_packet=");
-                serial_write_u64(endpoint->max_packet);
-                serial_write_string("\n");
-            }
-        }
-    }
-    serial_write_string("M64DIAG END\n");
 }
 
 static void enumerate_controllers(void) {
@@ -299,13 +190,16 @@ void m64_multi_usb_test_run(void) {
         fail("three-controller initialization");
     }
     enumerate_controllers();
-    dump_enumerated_usb();
 
     for (index = 0U; index < xhci_controller_count(); ++index) {
         const struct xhci_state *state = xhci_get_controller(index);
-        if (controller_has_protocol(state, 1U)) { keyboard_index = index; }
-        if (controller_has_protocol(state, 0U) ||
-            controller_has_protocol(state, 2U)) {
+        if (controller_has_report_format(
+                state, XHCI_HID_REPORT_BOOT_KEYBOARD)) {
+            keyboard_index = index;
+        }
+        if (controller_has_report_format(state, XHCI_HID_REPORT_BOOT_MOUSE) ||
+            controller_has_report_format(
+                state, XHCI_HID_REPORT_QEMU_ABSOLUTE_TABLET)) {
             pointer_index = index;
         }
         if (controller_has_storage(state)) { storage_index = index; }

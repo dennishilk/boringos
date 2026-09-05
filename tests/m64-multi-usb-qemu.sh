@@ -43,7 +43,7 @@ rm -f "$QMP"
     -display none -serial "file:$LOG" -monitor none \
     -qmp "unix:$QMP,server=on,wait=off" \
     -no-reboot -no-shutdown \
-    -device qemu-xhci,id=xhciA \
+    -device qemu-xhci,id=xhciA,p3=0 \
     -device usb-kbd,bus=xhciA.0,port=1 \
     -drive "file=$IMAGE,if=none,format=raw,id=m64usb,cache=writeback" \
     -device usb-storage,bus=xhciA.0,port=2,drive=m64usb,removable=on \
