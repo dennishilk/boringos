@@ -16,7 +16,7 @@ bool xhci_configure_hid_devices_mixed(struct xhci_state *state) {
     bool configured;
 
     if (state == NULL) { return false; }
-    published = xhci_get_state();
+    published = xhci_get_controller(state->controller_index);
     if ((published == NULL) || !published->controller_running ||
         (published->addressed_count == 0U) ||
         (published->addressed_count > XHCI_MAX_ADDRESSED_DEVICES)) {
@@ -24,7 +24,8 @@ bool xhci_configure_hid_devices_mixed(struct xhci_state *state) {
     }
 
     /* active_state is not const; xhci_get_state() exposes a read-only view. */
-    active = (struct xhci_state *)(uintptr_t)published;
+    active = xhci_get_controller(state->controller_index);
+    if (active == NULL) { return false; }
     original_count = active->addressed_count;
 
     for (index = 0U; index < original_count; ++index) {
