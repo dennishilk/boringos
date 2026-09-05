@@ -80,7 +80,11 @@ static void tt_test(void) {
     check(boring_usb_topology_set_tt(&child, 6U, 4U),
           "TT assignment");
     check((child.tt_hub_slot == 6U) && (child.tt_port == 4U) &&
-          boring_usb_topology_validate(&child), "TT fields retained");
+          !child.tt_multi && boring_usb_topology_validate(&child),
+          "TT fields retained");
+    check(boring_usb_topology_set_tt_mode(&child, 6U, 4U, true) &&
+          child.tt_multi && boring_usb_topology_validate(&child),
+          "multi-TT assignment");
 
     unchanged = child;
     check(!boring_usb_topology_set_tt(&child, 0U, 4U) &&
@@ -100,8 +104,8 @@ static void tt_test(void) {
 
 static void hub_descriptor_test(void) {
     struct boring_usb_hub_descriptor hub;
-    uint8_t descriptor[11] = {
-        11U, 0x29U, 8U, 0xa1U, 0x00U, 25U, 50U, 0x00U, 0x00U, 0xffU, 0xffU
+    uint8_t descriptor[10] = {
+        10U, 0x29U, 8U, 0xa1U, 0x00U, 25U, 50U, 0x00U, 0x00U, 0xffU
     };
 
     check(boring_usb_parse_hub_descriptor(descriptor,
@@ -126,11 +130,11 @@ static void hub_descriptor_test(void) {
                                            (uint16_t)sizeof(descriptor), &hub),
           "hub port bound enforced");
     descriptor[2] = 8U;
-    descriptor[0] = 10U;
+    descriptor[0] = 11U;
     check(!boring_usb_parse_hub_descriptor(descriptor,
                                            (uint16_t)sizeof(descriptor), &hub),
           "hub descriptor length mismatch rejected");
-    descriptor[0] = 11U;
+    descriptor[0] = 10U;
     descriptor[3] = 3U;
     descriptor[4] = 0U;
     check(!boring_usb_parse_hub_descriptor(descriptor,

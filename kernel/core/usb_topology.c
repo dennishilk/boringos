@@ -39,7 +39,7 @@ bool boring_usb_topology_validate(const struct boring_usb_topology *topology) {
                (topology->parent_hub_slot == 0U) &&
                (topology->downstream_port == 0U) &&
                (topology->tt_hub_slot == 0U) &&
-               (topology->tt_port == 0U);
+               (topology->tt_port == 0U) && !topology->tt_multi;
     }
     if ((topology->parent_hub_slot == 0U) ||
         (topology->downstream_port == 0U) ||
@@ -57,6 +57,9 @@ bool boring_usb_topology_validate(const struct boring_usb_topology *topology) {
         return false;
     }
     if ((topology->tt_hub_slot == 0U) != (topology->tt_port == 0U)) {
+        return false;
+    }
+    if (topology->tt_multi && (topology->tt_hub_slot == 0U)) {
         return false;
     }
     if ((topology->tt_port != 0U) &&
@@ -102,6 +105,7 @@ bool boring_usb_topology_child(const struct boring_usb_topology *parent_hub,
     value.downstream_port = downstream_port;
     value.tt_hub_slot = 0U;
     value.tt_port = 0U;
+    value.tt_multi = false;
     if (!boring_usb_topology_validate(&value)) {
         return false;
     }
@@ -109,8 +113,9 @@ bool boring_usb_topology_child(const struct boring_usb_topology *parent_hub,
     return true;
 }
 
-bool boring_usb_topology_set_tt(struct boring_usb_topology *topology,
-                                uint8_t tt_hub_slot, uint8_t tt_port) {
+bool boring_usb_topology_set_tt_mode(struct boring_usb_topology *topology,
+                                     uint8_t tt_hub_slot, uint8_t tt_port,
+                                     bool multi_tt) {
     struct boring_usb_topology value;
     if ((topology == NULL) || !boring_usb_topology_validate(topology) ||
         (topology->depth == 0U) || (tt_hub_slot == 0U) ||
@@ -122,11 +127,18 @@ bool boring_usb_topology_set_tt(struct boring_usb_topology *topology,
     value = *topology;
     value.tt_hub_slot = tt_hub_slot;
     value.tt_port = tt_port;
+    value.tt_multi = multi_tt;
     if (!boring_usb_topology_validate(&value)) {
         return false;
     }
     *topology = value;
     return true;
+}
+
+bool boring_usb_topology_set_tt(struct boring_usb_topology *topology,
+                                uint8_t tt_hub_slot, uint8_t tt_port) {
+    return boring_usb_topology_set_tt_mode(topology, tt_hub_slot, tt_port,
+                                           false);
 }
 
 bool boring_usb_parse_hub_descriptor(const uint8_t *bytes, uint16_t length,
@@ -136,7 +148,8 @@ bool boring_usb_parse_hub_descriptor(const uint8_t *bytes, uint16_t length,
     uint8_t descriptor_length;
     uint8_t ports;
     uint16_t required;
-    uint16_t bitmap_bytes;
+    uint16_t removable_bytes;
+    uint16_t power_mask_bytes;
     if ((bytes == NULL) || (hub == NULL) || (length < 7U)) {
         return false;
     }
@@ -146,8 +159,10 @@ bool boring_usb_parse_hub_descriptor(const uint8_t *bytes, uint16_t length,
         (ports == 0U) || (ports > BORING_USB_HUB_DESCRIPTOR_MAX_PORTS)) {
         return false;
     }
-    bitmap_bytes = (uint16_t)(((uint16_t)ports + 1U + 7U) / 8U);
-    required = (uint16_t)(7U + (2U * bitmap_bytes));
+    removable_bytes =
+        (uint16_t)(((uint16_t)ports + 1U + 7U) / 8U);
+    power_mask_bytes = (uint16_t)(((uint16_t)ports + 7U) / 8U);
+    required = (uint16_t)(7U + removable_bytes + power_mask_bytes);
     if ((descriptor_length != required) || (length < descriptor_length) ||
         (descriptor_length > BORING_USB_HUB_DESCRIPTOR_MAX_BYTES)) {
         return false;

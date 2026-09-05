@@ -24,6 +24,7 @@ struct boring_usb_topology {
     uint8_t downstream_port;
     uint8_t tt_hub_slot;
     uint8_t tt_port;
+    bool tt_multi;
 };
 
 struct boring_usb_hub_descriptor {
@@ -57,6 +58,9 @@ bool boring_usb_topology_child(const struct boring_usb_topology *parent_hub,
                                struct boring_usb_topology *child);
 bool boring_usb_topology_set_tt(struct boring_usb_topology *topology,
                                 uint8_t tt_hub_slot, uint8_t tt_port);
+bool boring_usb_topology_set_tt_mode(struct boring_usb_topology *topology,
+                                     uint8_t tt_hub_slot, uint8_t tt_port,
+                                     bool multi_tt);
 bool boring_usb_topology_validate(const struct boring_usb_topology *topology);
 
 bool boring_usb_parse_hub_descriptor(const uint8_t *bytes, uint16_t length,
