@@ -1844,4 +1844,54 @@ freeze/m63-system-power-lifecycle-physical-2026-09-05
 799d1e6529b8eafead37acc340f3fd18dbb2d655
 ```
 
-The next milestone is intentionally not another power/storage change. The next physical target is USB topology: multiple xHCI controllers, hub enumeration and the real mouse.
+M63 remains the physical durability and power-lifecycle baseline. The USB-topology work that followed is now physically complete through M66.
+
+## Milestone 64: bounded multi-xHCI ownership — COMPLETE, Physically Proven
+
+M64 replaces the former single active-xHCI assumption with a bounded deterministic controller registry. Each discovered xHCI controller owns its own MMIO mapping, DCBAA, command ring, event ring, ERST, scratchpads and addressed-device state. HID and USB Mass Storage remain bound to the controller that actually owns the device, while shared Event Ring consumption stays instance-local.
+
+QEMU acceptance covers three independent q35 xHCI controllers, cross-controller HID/Storage coexistence and controller-owned event accounting. The final Cthulhu M66 boot reached the all-controller-ready physical witness before continuing through the real hub and mouse path, providing physical confirmation of the multi-controller foundation.
+
+## Milestone 65: USB hub topology and downstream enumeration — COMPLETE, Physically Proven
+
+M65 adds a bounded USB2 hub topology model with xHCI route strings, parent-hub/downstream-port identity and transaction-translator fields for low/full-speed children behind a high-speed hub. Hub class control supports descriptor retrieval, port power, status, reset and downstream Address Device without introducing hotplug or a general USB framework.
+
+The first physical candidate stopped at POST D3 after proving the Genesys Logic hub and a connected downstream device. The real-hardware fix replaced the QEMU-friendly one-shot reset assumption with a bounded status-driven reset sequence: descriptor-defined power-good delay, PORT_RESET, 10-ms MFINDEX-based polling for up to 800 ms, disconnect/malformed hard failure, ENABLE/speed validation and precise C_PORT_RESET acknowledgement through CLEAR_FEATURE(20).
+
+## Milestone 66: real hub-connected USB mouse — COMPLETE, Physically Frozen
+
+Physical Cthulhu acceptance on 2026-09-06 proves the actual end-to-end path:
+
+```text
+multiple xHCI controllers
+-> Genesys Logic USB hub
+-> downstream ROCCAT mouse
+-> HID Interrupt-IN
+-> canonical BoringOS input queue
+-> boring-display software cursor
+-> BoringWM pointer hit-testing
+```
+
+The mouse visibly moves on the physical desktop. With two live windows, moving the pointer across them changes BoringWM focus between the windows, proving that real downstream USB input reaches the existing Ring3 desktop policy rather than a diagnostic-only decoder.
+
+The direct USB keyboard remains functional in the same physical boot. No physical claim is made here for behavior that was not observed, such as mouse-button semantics beyond the proven movement/focus path.
+
+Physical freeze:
+
+```text
+freeze/m66-usb-hub-mouse-physical-2026-09-06
+8ccd618dfc4e8163821de552a3c912bab4e6f36a
+tree 5f64717f5e2a1ed588602e9abe76b08459b8c186
+```
+
+Authoritative physical image:
+
+```text
+artifact 9987432260
+raw bytes 100663296
+SHA256 84dfb521c2359364ba2f3f78718b686638d81f3d07f35050f32e5a2f91bd0c61
+```
+
+Exact-head acceptance before the physical boot included the focused M64 topology workflow and the inherited 28/28 exact-head gate at the same runtime commit.
+
+The next observed input polish is held-key typematic/repeat on the USB keyboard path. Backspace currently performs one deletion per physical press instead of repeating while held. After that small input polish, the roadmap returns to better GOP resolution, faster software presentation, more practical use of Cthulhu's 32 GiB and eventually native AMD graphics support.
