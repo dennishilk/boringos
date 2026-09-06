@@ -116,8 +116,8 @@ assert "command_completions +" not in mass_take
 assert "xhci_event_dequeue_position(msc_runtime.state" in mass_take
 assert mass_commit.index("xhci_event_dequeue_advance(msc_runtime.state") < mass_commit.index("mmio_write64(msc_runtime.mmio")
 arch_take=a[a.index("static bool event_take("):a.index("static bool consume_port_event(")]
-assert arch_take.index("xhci_event_dequeue_position(&active_state") < arch_take.index("xhci_event_dequeue_advance(&active_state") < arch_take.index("mmio_write64(runtime_state.mmio")
-assert "return xhci_consume_port_status_event(&active_state, event);" in a
+assert arch_take.index("xhci_event_dequeue_position(&controller->state") < arch_take.index("xhci_event_dequeue_advance(&controller->state") < arch_take.index("mmio_write64(controller->runtime.mmio")
+assert "return xhci_consume_port_status_event(&controller->state, event);" in a
 assert "uint64_t event_dequeue_count;" in xh
 assert "++state->event_dequeue_count;" in x
 complete=u[u.index("static bool m52_complete_event("):u.index("static bool m52_poll_hid_reports_limit(")]
