@@ -161,33 +161,60 @@ if set(ring_assignments.values()) & set(assignments.values()):
     raise RuntimeError("xHCI rings POST codes collide with existing xHCI meanings")
 
 xhci_init = function_definition("xhci_init", xhci_source)
+controller_init = function_definition("initialize_controller", xhci_source)
 progress_positions = [
-    xhci_init.find(f"XHCI_M61_PROGRESS({name});") for name in progress
+    controller_init.find(f"XHCI_M61_PROGRESS({name});") for name in progress
 ]
 if any(position < 0 for position in progress_positions):
-    raise RuntimeError("xHCI major progress breadcrumb is missing")
+    raise RuntimeError("xHCI major per-controller progress breadcrumb is missing")
 if progress_positions != sorted(progress_positions):
-    raise RuntimeError("xHCI major progress breadcrumbs are reordered")
+    raise RuntimeError("xHCI major per-controller progress breadcrumbs are reordered")
 
-for index, name in enumerate(reasons):
-    if index == 0:
+controller_reasons = tuple(
+    name for name in reasons if name != "XHCI_M61_FALSE_NO_CONTROLLER"
+)
+for name in controller_reasons:
+    if name == "XHCI_M61_FALSE_INVALID_STATE":
         macro = "XHCI_M61_RETURN_FALSE"
     elif name == "XHCI_M61_FALSE_RINGS_SETUP":
         macro = "XHCI_M61_FAIL_PRESERVING_REASON"
     else:
         macro = "XHCI_M61_FAIL"
     invocation = f"{macro}({name});"
-    if xhci_init.count(invocation) != 1:
-        raise RuntimeError(f"xHCI false path is not classified exactly once: {name}")
+    if controller_init.count(invocation) != 1:
+        raise RuntimeError(
+            f"xHCI per-controller false path is not classified exactly once: {name}"
+        )
 if len(re.findall(
         r"XHCI_M61_(?:RETURN_FALSE|FAIL|FAIL_PRESERVING_REASON)\(",
-        xhci_init)) != 12:
-    raise RuntimeError("xHCI init does not contain exactly 12 classified false exits")
+        controller_init)) != 11:
+    raise RuntimeError(
+        "xHCI per-controller init does not contain exactly 11 classified false exits"
+    )
+for name in ("XHCI_M61_FALSE_INVALID_STATE", "XHCI_M61_FALSE_NO_CONTROLLER"):
+    invocation = f"XHCI_M61_RETURN_FALSE({name});"
+    if xhci_init.count(invocation) != 1:
+        raise RuntimeError(
+            f"xHCI registry-level false path is not classified exactly once: {name}"
+        )
+if len(re.findall(r"XHCI_M61_RETURN_FALSE\(", xhci_init)) != 2:
+    raise RuntimeError(
+        "xHCI registry init does not contain exactly two classified early exits"
+    )
+for token in (
+    "first_failure_reason = boring_m61_xhci_failure_reason();",
+    "xhci_m61_failure_reason =",
+    "(first_failure_reason != 0U) ? first_failure_reason",
+):
+    if token not in xhci_init:
+        raise RuntimeError(
+            "xHCI multi-controller first-failure preservation is incomplete"
+        )
 
 for forbidden in (
     "serial_write", "framebuffer", "delay", "sleep", "retry",
 ):
-    if forbidden in xhci_init.lower():
+    if forbidden in controller_init.lower() or forbidden in xhci_init.lower():
         raise RuntimeError(f"xHCI diagnostic path gained forbidden behavior: {forbidden}")
 if "#define XHCI_WAIT_LIMIT 10000000U" not in xhci_source:
     raise RuntimeError("xHCI wait limit changed")
@@ -326,9 +353,9 @@ for witness in (
     "XHCI_PAGESIZE_4K",
     "scratchpad_array_physical",
     "scratchpad_buffer_physical[XHCI_SCRATCHPAD_MAX_SUPPORTED]",
-    "scratchpads_initialize(base, operational, capabilities)",
-    "runtime_state.dcbaa[0] = runtime_state.scratchpad_array_physical;",
-    "scratchpads_release();",
+    "scratchpads_initialize(controller, base, operational, capabilities)",
+    "controller->runtime.dcbaa[0] = controller->runtime.scratchpad_array_physical;",
+    "scratchpads_release(controller);",
 ):
     if witness not in xhci_source:
         raise RuntimeError(f"scratchpad implementation witness missing: {witness}")
@@ -379,7 +406,7 @@ for progress_name, write_call in mmio_events:
     last_position = write_position
 
 readback_sequence = (
-    "runtime_state.outstanding_command_physical = 0ULL;",
+    "controller->runtime.outstanding_command_physical = 0ULL;",
     "XHCI_M61_PROGRESS(XHCI_M61_RINGS_PROGRESS_DCBAAP_READBACK);",
     "mmio_read64(base, operational + 0x30U) != state->dcbaa_physical",
     "XHCI_M61_RETURN_FALSE(XHCI_M61_RINGS_FALSE_DCBAAP_READBACK);",
@@ -391,34 +418,36 @@ if any(position < 0 for position in readback_positions):
     raise RuntimeError("DCBAAP readback failure/success split is incomplete")
 if readback_positions != sorted(readback_positions):
     raise RuntimeError("DCBAAP readback failure/success split is reordered")
-if "XHCI_M61_FAIL_PRESERVING_REASON(XHCI_M61_FALSE_RINGS_SETUP);" not in xhci_init:
+if "XHCI_M61_FAIL_PRESERVING_REASON(XHCI_M61_FALSE_RINGS_SETUP);" not in controller_init:
     raise RuntimeError("generic BD no longer preserves the exact ring reason")
 
 cleanup_events = (
-    "rings_release(&active_state);",
-    "state_clear(&active_state);",
-    "runtime_clear();",
+    "rings_release(controller, &controller->state);",
+    "controller->state.controller_running = false;",
+    "runtime_clear(controller);",
 )
-ring_release_start = xhci_source.find("static void rings_release(struct xhci_state *state)")
+ring_release_start = xhci_source.find(
+    "static void rings_release(struct xhci_controller *controller, struct xhci_state *state)"
+)
 ring_release_end = xhci_source.find("static bool rings_initialize", ring_release_start)
 if min(ring_release_start, ring_release_end) < 0:
     raise RuntimeError("central xHCI ring release helper is missing")
 ring_release = xhci_source[ring_release_start:ring_release_end]
 release_events = (
-    "scratchpads_release();",
+    "scratchpads_release(controller);",
     "frame_release(state->erst_physical);",
     "frame_release(state->event_ring_physical);",
     "frame_release(state->command_ring_physical);",
     "frame_release(state->dcbaa_physical);",
-    "runtime_state.dcbaa = NULL;",
-    "runtime_state.command_ring = NULL;",
-    "runtime_state.event_ring = NULL;",
+    "controller->runtime.dcbaa = NULL;",
+    "controller->runtime.command_ring = NULL;",
+    "controller->runtime.event_ring = NULL;",
 )
 release_positions = [ring_release.find(item) for item in release_events]
 if any(position < 0 for position in release_positions) or release_positions != sorted(release_positions):
     raise RuntimeError("scratchpad/ring cleanup order is incomplete or reordered")
-cleanup_start = xhci_init.rfind("if (!success) {")
-cleanup_source = xhci_init[cleanup_start:]
+cleanup_start = controller_init.rfind("if (!success) {")
+cleanup_source = controller_init[cleanup_start:]
 cleanup_positions = [cleanup_source.find(item) for item in cleanup_events]
 if any(position < 0 for position in cleanup_positions):
     raise RuntimeError("xHCI failed-ring cleanup is incomplete")
@@ -472,10 +501,10 @@ with tempfile.TemporaryDirectory(prefix="m61-xhci-bisector-") as tmp:
     if "boring_m61_xhci_failure_reason" not in candidate_nm:
         raise RuntimeError("M61 object lacks xHCI failure-reason accessor")
     normal_disassembly = subprocess.check_output(
-        ["objdump", "-d", "--disassemble=xhci_init", str(normal)], text=True
+        ["objdump", "-d", str(normal)], text=True
     )
     candidate_disassembly = subprocess.check_output(
-        ["objdump", "-d", "--disassemble=xhci_init", str(candidate)], text=True
+        ["objdump", "-d", str(candidate)], text=True
     )
     if re.search(r"\bout\b", normal_disassembly):
         raise RuntimeError("non-M61 xHCI init contains a POST output")
@@ -498,6 +527,7 @@ harness_source = r"""
 #define MOCK_FRAMES 600U
 _Alignas(4096) static uint8_t mock_pages[MOCK_FRAMES][4096];
 static bool mock_used[MOCK_FRAMES];
+static struct xhci_controller mock_controller;
 static uint32_t mock_alloc_calls;
 static uint32_t mock_hhdm_calls;
 static uint32_t mock_fail_alloc_call;
@@ -576,8 +606,9 @@ static void reset_model(void) {
     mock_hhdm_calls = 0U;
     mock_fail_alloc_call = 0U;
     mock_fail_hhdm_call = 0U;
-    state_clear(&active_state);
-    runtime_clear();
+    memset(&mock_controller, 0, sizeof(mock_controller));
+    state_clear(&mock_controller.state);
+    runtime_clear(&mock_controller);
 }
 
 static void setup_caps(struct xhci_capabilities *caps, uint16_t scratchpads) {
@@ -605,15 +636,15 @@ static void assert_dma_frame(uint64_t physical) {
 }
 
 static void release_and_assert_clean(struct xhci_state *state) {
-    rings_release(state);
+    rings_release(&mock_controller, state);
     assert(live_frames() == 0U);
     assert(state->dcbaa_physical == 0ULL);
     assert(state->command_ring_physical == 0ULL);
     assert(state->event_ring_physical == 0ULL);
     assert(state->erst_physical == 0ULL);
-    assert(runtime_state.scratchpad_array_physical == 0ULL);
-    assert(runtime_state.scratchpad_count == 0U);
-    assert(runtime_state.dcbaa == NULL);
+    assert(mock_controller.runtime.scratchpad_array_physical == 0ULL);
+    assert(mock_controller.runtime.scratchpad_count == 0U);
+    assert(mock_controller.runtime.dcbaa == NULL);
 }
 
 static void test_zero_scratchpads(void) {
@@ -627,11 +658,11 @@ static void test_zero_scratchpads(void) {
     setup_caps(&caps, 0U);
     /* PAGESIZE deliberately remains zero: zero-scratchpad behavior must not
        gain a new controller-page-size dependency. */
-    assert(rings_initialize(mmio, &caps, &state));
+    assert(rings_initialize(&mock_controller, mmio, &caps, &state));
     assert(mock_alloc_calls == 4U);
     assert(((uint64_t *)mock_virtual(state.dcbaa_physical))[0] == 0ULL);
-    assert(runtime_state.scratchpad_count == 0U);
-    assert(runtime_state.scratchpad_array_physical == 0ULL);
+    assert(mock_controller.runtime.scratchpad_count == 0U);
+    assert(mock_controller.runtime.scratchpad_array_physical == 0ULL);
     command = (struct xhci_trb *)mock_virtual(state.command_ring_physical);
     assert(command[XHCI_COMMAND_RING_USABLE].parameter == state.command_ring_physical);
     assert((command[XHCI_COMMAND_RING_USABLE].control & XHCI_TRB_TYPE_SHIFT) != 0U);
@@ -653,16 +684,16 @@ static void test_scratchpads(uint16_t count) {
     state_clear(&state);
     setup_caps(&caps, count);
     put32(mmio, 0x40U + 0x08U, XHCI_PAGESIZE_4K);
-    assert(rings_initialize(mmio, &caps, &state));
-    assert(runtime_state.scratchpad_count == count);
-    assert_dma_frame(runtime_state.scratchpad_array_physical);
+    assert(rings_initialize(&mock_controller, mmio, &caps, &state));
+    assert(mock_controller.runtime.scratchpad_count == count);
+    assert_dma_frame(mock_controller.runtime.scratchpad_array_physical);
     dcbaa = (uint64_t *)mock_virtual(state.dcbaa_physical);
-    assert(dcbaa[0] == runtime_state.scratchpad_array_physical);
-    array = (uint64_t *)mock_virtual(runtime_state.scratchpad_array_physical);
+    assert(dcbaa[0] == mock_controller.runtime.scratchpad_array_physical);
+    array = (uint64_t *)mock_virtual(mock_controller.runtime.scratchpad_array_physical);
     for (index = 0U; index < count; ++index) {
         uint16_t previous;
         assert_dma_frame(array[index]);
-        assert(array[index] == runtime_state.scratchpad_buffer_physical[index]);
+        assert(array[index] == mock_controller.runtime.scratchpad_buffer_physical[index]);
         for (previous = 0U; previous < index; ++previous) {
             assert(array[index] != array[previous]);
         }
@@ -679,7 +710,7 @@ static void test_over_bound(void) {
     state_clear(&state);
     setup_caps(&caps, (uint16_t)(XHCI_SCRATCHPAD_MAX_SUPPORTED + 1U));
     put32(mmio, 0x40U + 0x08U, XHCI_PAGESIZE_4K);
-    assert(!rings_initialize(mmio, &caps, &state));
+    assert(!rings_initialize(&mock_controller, mmio, &caps, &state));
     assert(mock_alloc_calls == 1U);
     release_and_assert_clean(&state);
 }
@@ -691,7 +722,7 @@ static void test_page_size_fail_closed(void) {
     reset_model();
     state_clear(&state);
     setup_caps(&caps, 1U);
-    assert(!rings_initialize(mmio, &caps, &state));
+    assert(!rings_initialize(&mock_controller, mmio, &caps, &state));
     assert(mock_alloc_calls == 1U);
     release_and_assert_clean(&state);
 }
@@ -705,7 +736,7 @@ static void test_array_allocation_failure(void) {
     setup_caps(&caps, 2U);
     put32(mmio, 0x40U + 0x08U, XHCI_PAGESIZE_4K);
     mock_fail_alloc_call = 2U;
-    assert(!rings_initialize(mmio, &caps, &state));
+    assert(!rings_initialize(&mock_controller, mmio, &caps, &state));
     release_and_assert_clean(&state);
 }
 
@@ -718,7 +749,7 @@ static void test_buffer_partial_failure(void) {
     setup_caps(&caps, 3U);
     put32(mmio, 0x40U + 0x08U, XHCI_PAGESIZE_4K);
     mock_fail_alloc_call = 4U;
-    assert(!rings_initialize(mmio, &caps, &state));
+    assert(!rings_initialize(&mock_controller, mmio, &caps, &state));
     release_and_assert_clean(&state);
 }
 
@@ -732,7 +763,7 @@ static void test_buffer_hhdm_failure(void) {
     put32(mmio, 0x40U + 0x08U, XHCI_PAGESIZE_4K);
     /* HHDM calls: DCBAA=1, array=2, buffer0=3, buffer1=4. */
     mock_fail_hhdm_call = 4U;
-    assert(!rings_initialize(mmio, &caps, &state));
+    assert(!rings_initialize(&mock_controller, mmio, &caps, &state));
     release_and_assert_clean(&state);
 }
 
@@ -746,7 +777,7 @@ static void test_late_ring_failure(void) {
     put32(mmio, 0x40U + 0x08U, XHCI_PAGESIZE_4K);
     /* Allocations: DCBAA, array, two buffers, command, event. */
     mock_fail_alloc_call = 6U;
-    assert(!rings_initialize(mmio, &caps, &state));
+    assert(!rings_initialize(&mock_controller, mmio, &caps, &state));
     release_and_assert_clean(&state);
 }
 

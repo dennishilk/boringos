@@ -1753,28 +1753,51 @@ bool xhci_init(struct xhci_state *state) {
     uint8_t index;
     bool truncated = false;
     bool all_running = true;
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    uint8_t first_failure_reason = 0U;
+#endif
 
+    XHCI_M61_BEGIN();
     if ((state == NULL) || (controller_registry_count != 0U)) {
-        return false;
+        XHCI_M61_RETURN_FALSE(XHCI_M61_FALSE_INVALID_STATE);
     }
     inventory = boring_pci_inventory_get();
     if ((inventory == NULL) ||
         !xhci_collect_controller_devices(inventory, devices,
                                          &discovered, &truncated) ||
         (discovered == 0U)) {
-        return false;
+        XHCI_M61_RETURN_FALSE(XHCI_M61_FALSE_NO_CONTROLLER);
     }
     controller_registry_count = discovered;
     controller_registry_truncated = truncated;
-    if (truncated) { all_running = false; }
+    if (truncated) {
+        all_running = false;
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        first_failure_reason = (uint8_t)XHCI_M61_FALSE_INVALID_STATE;
+#endif
+    }
     for (index = 0U; index < discovered; ++index) {
         if (!initialize_controller(&controller_registry[index],
                                    &devices[index], index)) {
             all_running = false;
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+            if (first_failure_reason == 0U) {
+                first_failure_reason = boring_m61_xhci_failure_reason();
+                if (first_failure_reason == 0U) {
+                    first_failure_reason =
+                        (uint8_t)XHCI_M61_FALSE_INVALID_STATE;
+                }
+            }
+#endif
         }
     }
     *state = controller_registry[0].state;
 #ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    if (!all_running) {
+        xhci_m61_failure_reason =
+            (first_failure_reason != 0U) ? first_failure_reason :
+            (uint8_t)XHCI_M61_FALSE_INVALID_STATE;
+    }
     if (all_running && controller_registry[0].state.controller_running) {
         boring_m66_physical_usb_mouse_witness(
             (uint8_t)M66_POST_ALL_XHCI_READY);
