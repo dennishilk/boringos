@@ -373,7 +373,19 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
             } else {
                 m61_trace_failed_hid_service();
             }
-            x86_64_interrupts_enable();
+            /*
+             * USB HID is normally polled cooperatively without depending on
+             * PIC delivery. While a repeatable key is held, however, the PIT
+             * is the deliberate typematic clock. Sleep for one hardware tick
+             * so repeat deadlines advance without host sleeps or fabricated
+             * HID transitions. The no-held-key path retains the existing
+             * fast polling behaviour.
+             */
+            if (boring_input_repeat_active(process->pid)) {
+                x86_64_enable_and_halt();
+            } else {
+                x86_64_interrupts_enable();
+            }
             task_yield();
 
             /*
