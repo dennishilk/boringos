@@ -67,6 +67,15 @@ static void layouts(void) {
             }
         }
     }
+    check(wm_init(&wm, 3440U, 1440U), "M68 exact ultrawide screen");
+    {
+        uint32_t first = add(&wm, 1U);
+        uint32_t second = add(&wm, 2U);
+        geometry(&wm);
+        wm.focus = first;
+        check(wm_pointer(&wm, 3000U, 700U) && wm.focus == second,
+              "M68 ultrawide pointer hit-testing");
+    }
     check(wm_init(&wm, BORING_DISPLAY_MAX_WIDTH, BORING_DISPLAY_MAX_HEIGHT), "maximum screen");
     for (count = 1U; count <= BORING_WM_CLIENT_MAX; ++count) { (void)add(&wm, count); geometry(&wm); }
 }
