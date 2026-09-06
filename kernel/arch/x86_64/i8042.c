@@ -276,6 +276,7 @@ bool i8042_handle_irq(uint8_t irq_number) {
             ps2_mouse_decoder_init(&mouse_decoder);
         } else {
             ps2_keyboard_decoder_init(&keyboard_decoder);
+            (void)boring_input_reset_keys();
         }
         return true;
     }
