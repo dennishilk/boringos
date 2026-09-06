@@ -248,6 +248,29 @@ def run():
             time.sleep(0.04)
         raise RuntimeError(f"timeout waiting for {description}: last={last!r}")
 
+    def wait_m67_cleanup_suffix(name, frame, pid, expected_suffix,
+                                timeout=2.0):
+        marker = "boring@boringos:/$ "
+        deadline = time.monotonic() + timeout
+        last_matches = None
+        attempt = 0
+        while time.monotonic() < deadline:
+            rows = decode_terminal(f"{name}-{attempt}", frame)[pid]
+            matches = [row.split(marker, 1)[1]
+                       for row in rows if marker in row]
+            last_matches = matches
+            if len(matches) > 1:
+                raise RuntimeError(
+                    "M67 cleanup saw multiple prompt rows: "
+                    f"expected={expected_suffix!r} matches={matches!r}")
+            if len(matches) == 1 and matches[0] == expected_suffix:
+                return matches[0]
+            attempt += 1
+            time.sleep(0.04)
+        raise RuntimeError(
+            "M67 cleanup prompt did not settle: "
+            f"expected={expected_suffix!r} last_matches={last_matches!r}")
+
     def settled_capture(name, frame, mode):
         deadline = time.monotonic() + 20
         while True:
@@ -379,14 +402,12 @@ def run():
                   f"{len(before_suffix) - len(after_suffix)} characters "
                   "from one QMP key-down")
 
+            cleared = after_suffix
             for remaining in range(len(after_suffix) - 1, -1, -1):
                 key("backspace")
-                wait_prompt_suffix(
-                    "m67-clear-line", prompt, terminal_a,
-                    lambda value, expected=remaining: len(value) == expected,
-                    f"cleanup length {remaining}")
-            cleared = prompt_suffix(
-                decode_terminal("m67-cleared-line", prompt)[terminal_a])
+                expected_suffix = after_suffix[:remaining]
+                cleared = wait_m67_cleanup_suffix(
+                    "m67-clear-line", prompt, terminal_a, expected_suffix)
             if cleared != "":
                 raise RuntimeError(f"M67 line did not clear: {cleared!r}")
 
