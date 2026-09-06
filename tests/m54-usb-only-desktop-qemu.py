@@ -234,6 +234,20 @@ def run():
             raise RuntimeError(f"expected one prompt row, got {matches!r}")
         return matches[0]
 
+    def wait_prompt_suffix(name, frame, pid, predicate, description,
+                           timeout=2.0):
+        deadline = time.monotonic() + timeout
+        last = None
+        attempt = 0
+        while time.monotonic() < deadline:
+            rows = decode_terminal(f"{name}-{attempt}", frame)[pid]
+            last = prompt_suffix(rows)
+            if predicate(last):
+                return last
+            attempt += 1
+            time.sleep(0.04)
+        raise RuntimeError(f"timeout waiting for {description}: last={last!r}")
+
     def settled_capture(name, frame, mode):
         deadline = time.monotonic() + 20
         while True:
@@ -339,12 +353,10 @@ def run():
 
         if TYPEMATIC:
             type_text("abcdefghij")
-            before_screens = decode_terminal("m67-before-repeat", prompt)
-            before_rows = before_screens[terminal_a]
-            before_suffix = prompt_suffix(before_rows)
-            if before_suffix != "abcdefghij":
-                raise RuntimeError(
-                    f"M67 pre-repeat line mismatch: {before_suffix!r}")
+            before_suffix = wait_prompt_suffix(
+                "m67-before-repeat", prompt, terminal_a,
+                lambda value: value == "abcdefghij",
+                "all ten pre-repeat characters")
 
             # One physical/QMP key-down only. The guest PIT must create every
             # subsequent Backspace repeat until the single key-up below.
