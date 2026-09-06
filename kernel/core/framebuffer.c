@@ -144,6 +144,25 @@ bool boring_framebuffer_surface_init(
     surface->blue_mask_size = blue_mask_size;
     surface->blue_mask_shift = blue_mask_shift;
 
+    /*
+     * Some GOP/Limine firmware paths expose valid direct-colour geometry
+     * without populating RGB mask metadata. Accept only the fully maskless
+     * case and normalize it to the byte order already used by BoringOS
+     * XRGB8888/RGB888 software composition. Partially missing or overlapping
+     * masks remain malformed and are rejected by the ordinary validator.
+     */
+    if ((red_mask_size == 0U) && (red_mask_shift == 0U) &&
+        (green_mask_size == 0U) && (green_mask_shift == 0U) &&
+        (blue_mask_size == 0U) && (blue_mask_shift == 0U) &&
+        ((bpp == 24U) || (bpp == 32U))) {
+        surface->red_mask_size = 8U;
+        surface->red_mask_shift = 16U;
+        surface->green_mask_size = 8U;
+        surface->green_mask_shift = 8U;
+        surface->blue_mask_size = 8U;
+        surface->blue_mask_shift = 0U;
+    }
+
     if ((pitch != 0ULL) && !boring_u64_mul(height, pitch, &byte_size)) {
         return false;
     }
