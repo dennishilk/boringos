@@ -4,6 +4,9 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 QEMU=${QEMU:-qemu-system-x86_64}
 QEMU_CPU=${QEMU_CPU:-qemu64,apic=off}
+FRAMEBUFFER_LIMINE_CONF=${FRAMEBUFFER_LIMINE_CONF:-limine-shell.conf}
+FRAMEBUFFER_EXPECT_WIDTH=${FRAMEBUFFER_EXPECT_WIDTH:-}
+FRAMEBUFFER_EXPECT_HEIGHT=${FRAMEBUFFER_EXPECT_HEIGHT:-}
 TMPDIR_PATH=$(mktemp -d)
 IMAGE="${TMPDIR_PATH}/boringos-root.img"
 LOG="${TMPDIR_PATH}/serial.log"
@@ -70,7 +73,7 @@ make -C "${ROOT}" boringfs-fixture boringfsck user-boringfetch user-cat
     "${ROOT}/build/user/cat.elf" >/dev/null
 "${ROOT}/build/boringfsck" "${IMAGE}" | grep -Fqx 'Status: VALID' ||
     fail 'seeded framebuffer acceptance image is invalid'
-make -C "${ROOT}" TEST_MODE=persistent-root
+make -C "${ROOT}" TEST_MODE=persistent-root BOOT_LIMINE_CONF="${FRAMEBUFFER_LIMINE_CONF}"
 
 mkfifo "${PIPE_BASE}.in" "${PIPE_BASE}.out"
 QMP_BACKEND=$(sh "${ROOT}/tests/qmp-backend.sh" "${QMP_SOCKET}")
@@ -99,8 +102,38 @@ for line in \
     'boring-shell ready.'; do
     grep -Fqx "${line}" "${LOG}" || fail "missing framebuffer boot marker: ${line}"
 done
-grep -Eq '^boring-framebuffer: [0-9]+x[0-9]+x(24|32)$' "${LOG}" ||
+grep -Eq '^boring-framebuffer: [0-9]+x[0-9]+x(24|32)grep -Eq '^boring-framebuffer: pitch [1-9][0-9]*$' "${LOG}" ||
+    fail 'missing framebuffer pitch marker'
+
+send 'boringfetch'
+grep -Fqx 'boring-launch: VFS executable source /bin/boringfetch' "${LOG}" ||
+    fail 'boringfetch did not execute from persistent VFS after dashboard render'
+grep -Fq 'Root FS: BoringFS' "${LOG}" || fail 'boringfetch root identity regressed'
+grep -Fq 'Root device: virtio-blk' "${LOG}" || fail 'boringfetch block identity regressed'
+
+send 'cat /README.txt'
+grep -Fqx 'Welcome to BoringOS.' "${LOG}" ||
+    fail 'standalone cat did not read persistent-root README'
+grep -Eq '^fd-open: pid [0-9]+ path /README.txt fd 3$' "${LOG}" ||
+    fail 'descriptor-backed cat open marker is missing'
+grep -Eq '^fd-write: pid [0-9]+ fd 1 bytes [1-9][0-9]*$' "${LOG}" ||
+    fail 'descriptor-backed cat stdout marker is missing'
+
+python3 "${ROOT}/tests/qmp-screendump.py" "${QMP_SOCKET}" "${SCREENSHOT}"
+python3 "${ROOT}/tests/validate-framebuffer-screenshot.py" "${SCREENSHOT}" "${LOG}"
+"${ROOT}/build/boringfsck" "${IMAGE}" | grep -Fqx 'Status: VALID' ||
+    fail 'post-framebuffer BoringFS image is invalid'
+
+stop_vm
+echo 'Real Limine framebuffer and BoringOS dashboard verification passed.'
+ "${LOG}" ||
     fail 'missing supported framebuffer geometry marker'
+if [ -n "${FRAMEBUFFER_EXPECT_WIDTH}" ] || [ -n "${FRAMEBUFFER_EXPECT_HEIGHT}" ]; then
+    [ -n "${FRAMEBUFFER_EXPECT_WIDTH}" ] && [ -n "${FRAMEBUFFER_EXPECT_HEIGHT}" ] ||
+        fail 'both expected framebuffer dimensions must be specified'
+    grep -Eq "^boring-framebuffer: ${FRAMEBUFFER_EXPECT_WIDTH}x${FRAMEBUFFER_EXPECT_HEIGHT}x(24|32)$" "${LOG}" ||
+        fail "requested framebuffer geometry not selected: ${FRAMEBUFFER_EXPECT_WIDTH}x${FRAMEBUFFER_EXPECT_HEIGHT}"
+fi
 grep -Eq '^boring-framebuffer: pitch [1-9][0-9]*$' "${LOG}" ||
     fail 'missing framebuffer pitch marker'
 
