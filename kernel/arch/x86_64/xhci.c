@@ -1599,7 +1599,6 @@ static bool wait_for_downstream_port_reset(
     struct boring_usb_hub_port_status *completed_status) {
     uint16_t actual = 0U;
     uint16_t poll;
-    bool first_status = true;
 
     if ((controller == NULL) || (hub == NULL) || (hub_bytes == NULL) ||
         (completed_status == NULL)) {
@@ -1631,14 +1630,14 @@ static bool wait_for_downstream_port_reset(
             return false;
         }
 #ifdef BORING_M61_PHYSICAL_BREADCRUMBS
-        if (first_status) {
+        if (poll == 0U) {
             boring_m66_physical_usb_mouse_witness(
                 (uint8_t)M66_POST_RESET_FIRST_STATUS_COMPLETE);
         }
 #endif
         if (actual != 4U) { return false; }
 #ifdef BORING_M61_PHYSICAL_BREADCRUMBS
-        if (first_status) {
+        if (poll == 0U) {
             boring_m66_physical_usb_mouse_witness(
                 (uint8_t)M66_POST_RESET_FIRST_STATUS_RAW);
         }
@@ -1647,7 +1646,6 @@ static bool wait_for_downstream_port_reset(
                 hub_bytes, actual, &status)) {
             return false;
         }
-        first_status = false;
         observation = boring_usb_hub_port_reset_observe(
             &status, &clear_reset_change);
         if ((observation == BORING_USB_HUB_RESET_DISCONNECTED) ||
