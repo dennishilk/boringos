@@ -36,7 +36,7 @@ jobs:
                 x86_64_interrupts_enable();
             }
             task_yield();
-'''
+          '''
           new = '''            /*
              * Keep cooperative xHCI polling preemptible by the existing PIT.
              * Typematic is clocked by timer IRQs in the transport-neutral
@@ -45,7 +45,7 @@ jobs:
              */
             x86_64_interrupts_enable();
             task_yield();
-'''
+          '''
           if old in s:
               s = s.replace(old, new, 1)
           elif new not in s:
