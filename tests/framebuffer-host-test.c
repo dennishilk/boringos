@@ -112,6 +112,50 @@ static bool test_surface_validation(void) {
     return true;
 }
 
+static bool test_m68_high_resolution_geometry(void) {
+    struct boring_framebuffer surface;
+    uint8_t dummy = 0U;
+    const uint64_t ultrawide_pitch = 3440ULL * 4ULL;
+    const uint64_t padded_pitch = ultrawide_pitch + 256ULL;
+
+    if (!boring_framebuffer_surface_init(
+            &surface, &dummy, 3440ULL, 1440ULL, ultrawide_pitch,
+            32U, BORING_FRAMEBUFFER_MEMORY_MODEL_RGB,
+            0U, 0U, 0U, 0U, 0U, 0U) ||
+        (surface.byte_size != 19814400ULL) ||
+        (surface.red_mask_size != 8U) || (surface.red_mask_shift != 16U) ||
+        (surface.green_mask_size != 8U) || (surface.green_mask_shift != 8U) ||
+        (surface.blue_mask_size != 8U) || (surface.blue_mask_shift != 0U)) {
+        return false;
+    }
+    if (!boring_framebuffer_surface_init(
+            &surface, &dummy, 3440ULL, 1440ULL, padded_pitch,
+            32U, BORING_FRAMEBUFFER_MEMORY_MODEL_RGB,
+            8U, 16U, 8U, 8U, 8U, 0U) ||
+        (surface.byte_size != padded_pitch * 1440ULL)) {
+        return false;
+    }
+    if (!boring_framebuffer_surface_init(
+            &surface, &dummy, 3440ULL, 1440ULL, 3440ULL * 3ULL,
+            24U, BORING_FRAMEBUFFER_MEMORY_MODEL_RGB,
+            0U, 0U, 0U, 0U, 0U, 0U)) {
+        return false;
+    }
+    if (boring_framebuffer_surface_init(
+            &surface, &dummy, 3440ULL, 1440ULL, ultrawide_pitch,
+            32U, BORING_FRAMEBUFFER_MEMORY_MODEL_RGB,
+            8U, 16U, 0U, 0U, 8U, 0U)) {
+        return false;
+    }
+    if (boring_framebuffer_surface_init(
+            &surface, &dummy, 3440ULL, 1440ULL, ultrawide_pitch - 1ULL,
+            32U, BORING_FRAMEBUFFER_MEMORY_MODEL_RGB,
+            8U, 16U, 8U, 8U, 8U, 0U)) {
+        return false;
+    }
+    return true;
+}
+
 static bool test_rgb_packing(void) {
     struct boring_framebuffer surface32;
     struct boring_framebuffer surface24;
@@ -266,6 +310,10 @@ static bool test_font(void) {
 int main(void) {
     if (!test_surface_validation()) {
         fail("surface-validation");
+        return 1;
+    }
+    if (!test_m68_high_resolution_geometry()) {
+        fail("m68-high-resolution-geometry");
         return 1;
     }
     if (!test_rgb_packing()) {
