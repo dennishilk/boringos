@@ -74,6 +74,16 @@ static void validation_tests(void) {
     const uint64_t valid_size = request.byte_size;
 
     check(boring_display_core_init(&core, &info), "valid scanout");
+    info = scanout(3440U, 1440U);
+    check(boring_display_core_init(&core, &info), "M68 exact 3440x1440 scanout");
+    check(info.byte_size == 19814400ULL, "M68 exact ultrawide byte size");
+    info = scanout(3840U, 2160U);
+    check(boring_display_core_init(&core, &info), "M68 bounded 4K fallback");
+    info = scanout(BORING_DISPLAY_MAX_WIDTH + 1U, 1080U);
+    check(!boring_display_core_init(&core, &info), "M68 width policy bound");
+    info = scanout(1920U, BORING_DISPLAY_MAX_HEIGHT + 1U);
+    check(!boring_display_core_init(&core, &info), "M68 height policy bound");
+    info = scanout(320U, 240U);
     info.version = 0U;
     check(!boring_display_core_init(&core, &info), "scanout version");
     info = scanout(320U, 240U);
