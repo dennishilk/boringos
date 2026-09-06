@@ -1,0 +1,68 @@
+name: M68 high-resolution framebuffer
+
+on:
+  pull_request:
+  push:
+    branches: [agent/m67-m69-input-display-polish]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  high-resolution-framebuffer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install framebuffer and lifecycle dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 ovmf gdisk dosfstools mtools xz-utils xorriso
+      - name: Static M68 policy audit
+        run: |
+          git diff --check
+          grep -Fqx '    resolution: 3440x1440x32' limine-m61-usb.conf
+          grep -Fqx '#define BORING_DISPLAY_MAX_WIDTH 3840U' kernel/include/boring/display_abi.h
+          grep -Fqx '#define BORING_DISPLAY_MAX_HEIGHT 2160U' kernel/include/boring/display_abi.h
+          grep -Fqx '#define BORING_DISPLAY_MAX_SCANOUT_BYTES (32ULL * 1024ULL * 1024ULL)' kernel/include/boring/display_abi.h
+          printf 'M68_HEAD=%s\nM68_TREE=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
+      - name: Exact 3440x1440 framebuffer display and WM model
+        run: |
+          make framebuffer-host-test display-host-test wm-host-test
+      - name: Larger real Limine QEMU framebuffer
+        env:
+          FRAMEBUFFER_LIMINE_CONF: limine-m68-framebuffer.conf
+          FRAMEBUFFER_EXPECT_WIDTH: '1920'
+          FRAMEBUFFER_EXPECT_HEIGHT: '1080'
+        run: sh tests/framebuffer-qemu.sh
+      - name: M67 held-key regression
+        run: M67_TYPEMATIC=1 python3 tests/m54-usb-only-desktop-qemu.py
+      - name: M53-M66 input USB and mouse regressions
+        run: |
+          ./tests/m53-usb-input-qemu.sh
+          python3 tests/m54-usb-only-desktop-qemu.py
+          make xhci-host-test
+          ./tests/m64-multi-xhci-qemu.sh
+          ./tests/m64-multi-usb-qemu.sh
+          ./tests/m65-usb-hub-mouse-qemu.sh
+          python3 tests/m66-usb-hub-desktop-qemu.py
+      - name: M63 storage and power host seams
+        run: |
+          mkdir -p build
+          cc -std=c11 -Wall -Wextra -Werror -Ikernel/include \
+            tests/m63-acpi-s5-host-test.c kernel/core/acpi_s5.c \
+            -o build/m63-acpi-s5-host-test
+          build/m63-acpi-s5-host-test
+          cc -std=c11 -Wall -Wextra -Werror -Ikernel/include \
+            tests/m63-block-flush-host-test.c kernel/core/block_device.c \
+            -o build/m63-block-flush-host-test
+          build/m63-block-flush-host-test
+          python3 tests/m63-system-power-verifier.py
+      - name: M63 real QEMU reboot shutdown and persistence regression
+        run: |
+          sh tests/m61-build.sh
+          env -u GITHUB_SHA sh tests/m61-build-usb-image.sh
+          python3 tests/m63-power-lifecycle-qemu.py
