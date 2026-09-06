@@ -13,35 +13,35 @@ Es ist **kein Linux**, **kein BSD** und verwendet keinen Kernel eines anderen Be
 
 ~~~text
 BoringKernel 0.0.62-dev
-Milestone 63 · physische System-Power-Basis
+Milestone 66 · physische Multi-xHCI-/USB-Hub-/Maus-Basis
 ~~~
 
-Am **05.09.2026** hat BoringOS auf der echten Maschine **Cthulhu** einen neuen physischen Basisstand erreicht:
+Am **06.09.2026** hat BoringOS auf der echten Maschine **Cthulhu** einen neuen physischen USB-Basisstand erreicht:
 
-- der native BoringWM-Desktop bootet vom schreibbaren USB-Image;
-- echte USB-Tastatureingaben laufen über den BoringOS-eigenen xHCI/HID-Pfad;
-- BoringTerminal, BoringEdit und BoringFiles laufen auf echter Hardware;
-- die dynamische Prozess-/Task-Kapazität ist physisch deutlich über der alten Acht-Slot-Bootstrap-Grenze bewiesen;
-- BoringFS erstellt und persistiert Dateien auf dem physischen USB-Root;
-- `reboot` führt einen echten Maschinen-Reset aus und BoringOS bootet danach erneut;
-- `shutdown` führt einen echten ACPI-S5-Poweroff aus;
-- vor dem Reboot geschriebene Daten überleben den vollständigen Power-Lifecycle.
+- der native BoringWM-Desktop bootet weiterhin vom schreibbaren USB-Image;
+- BoringOS besitzt die relevanten xHCI-Controller unabhängig voneinander statt nur eine globale Controller-Instanz anzunehmen;
+- der echte Genesys-Logic-USB-Hub wird über begrenzte Hub-Class-Power-/Status-/Reset-Pfade enumeriert;
+- die echte ROCCAT-Maus hinter diesem Hub erreicht BoringOS über den nativen xHCI-/HID-Pfad;
+- physische Mausbewegung bewegt den bestehenden Software-Cursor und wechselt den BoringWM-Fokus zwischen zwei laufenden Fenstern, sobald der Zeiger darüber fährt;
+- die echte USB-Tastatur funktioniert im selben Boot weiterhin;
+- die bereits eingefrorene M63-Basis bleibt der physische Nachweis für persistentes BoringFS, Reboot und ACPI S5.
 
 Der physisch akzeptierte Runtime-Stand ist eingefroren unter:
 
 ~~~text
-freeze/m63-system-power-lifecycle-physical-2026-09-05
-799d1e6529b8eafead37acc340f3fd18dbb2d655
+freeze/m66-usb-hub-mouse-physical-2026-09-06
+8ccd618dfc4e8163821de552a3c912bab4e6f36a
 ~~~
 
 Autoritatives physisches Image:
 
 ~~~text
 100663296 Bytes
-SHA256: 457535a2d27d98e489868a9d33cf8e8c2e2c83de13fc659bcea30e937c9018ab
+SHA256: 84dfb521c2359364ba2f3f78718b686638d81f3d07f35050f32e5a2f91bd0c61
+Artifact: 9987432260
 ~~~
 
-QEMU bleibt die automatisierte Regression-Plattform, aber Desktop, persistenter Storage, Reboot und Shutdown sind jetzt zusätzlich auf echter Hardware bewiesen.
+QEMU bleibt die automatisierte Regression-Plattform; Multi-Controller-xHCI, echte Hub-Enumeration und der Hub-verbundene physische Mauspfad sind jetzt zusätzlich auf Cthulhu bewiesen. M63 bleibt die akzeptierte physische Durability-/Reboot-/Shutdown-Basis.
 
 ## Was heute wirklich läuft
 
@@ -60,7 +60,7 @@ Ring 3 + natives SYSCALL/SYSRETQ-ABI
         ↓
 VFS + schreibbares BoringFS
         ↓
-xHCI USB Mass Storage / AHCI / VirtIO
+Multi-xHCI / USB-Hubs / HID / USB Mass Storage
         ↓
      boring-init
         ↓
@@ -148,22 +148,23 @@ Firmware:  AMI / Gigabyte F18d
 Display:   aktueller Firmware-Framebuffer 800x600x32, Pitch 3328
 ~~~
 
-Cthulhu besitzt mehrere xHCI-Controller. Die aktuelle Runtime besitzt weiterhin nur eine Controller-Instanz.
+Cthulhu besitzt mehrere xHCI-Controller; die M66-Basis besitzt die relevanten Controller-Instanzen jetzt unabhängig voneinander.
 
-Eine direkt angeschlossene Holtek-USB-Tastatur ist physisch durch den ganzen Pfad bewiesen:
+Die direkt angeschlossene Holtek-USB-Tastatur und die ROCCAT-Maus hinter dem echten Genesys-Logic-Hub sind physisch durch den nativen Pfad bewiesen:
 
 ~~~text
-xHCI Interrupt-IN
-→ HID-Decoding
+xHCI-Controller
+→ USB-Root / Hub-Topologie
+→ HID Interrupt-IN
 → BoringOS-Inputqueue
 → boring-display
 → BoringWM
-→ native Shortcuts / Anwendungen
+→ native Shortcuts / Cursor / Pointer-Fokus
 ~~~
 
 ## USB und Storage
 
-BoringOS unterstützt xHCI-Controller-Bring-up, direkte Root-Port-Adressierung, Descriptor Discovery, HID Interrupt-IN und USB Mass Storage über Bulk/BOT/SCSI.
+BoringOS unterstützt begrenzte Multi-xHCI-Controller-Ownership, Root-Port- und Downstream-Hub-Topologie, Descriptor Discovery, HID Interrupt-IN und USB Mass Storage über Bulk/BOT/SCSI. Der physische M66-Boot beweist den echten Genesys-Logic-Hub und die darunter angeschlossene ROCCAT-Maus auf Cthulhu.
 
 Der physische USB-Root besitzt jetzt einen strengen Durability-Pfad. Normale Geräte verwenden SCSI `SYNCHRONIZE CACHE(10)`. Meldet ein Gerät exakt den erwarteten SCSI-Sense-Nachweis dafür, dass dieses Kommando nicht unterstützt wird, schaltet BoringOS auf `WRITE(10)` mit FUA um, statt Flushfehler pauschal zu ignorieren. Andere Transport-, CSW-, Sense- oder FUA-Fehler bleiben harte I/O-Fehler.
 
@@ -171,16 +172,16 @@ Die physische M63-Abnahme hat schreibbares BoringFS, Persistenz über einen Rebo
 
 Weitere verifizierte Storage-Pfade sind VirtIO Block und begrenztes synchrones AHCI/SATA.
 
-## USB-Grenze / nächste Hardware-Arbeit
+## Physischer USB-Stand / nächstes Input-Polish
 
-Die nächste physische USB-Arbeit bleibt bewusst eng:
+Der frühere USB-Topologie-Blocker ist physisch geschlossen:
 
-1. **mehrere xHCI-Controller** statt nur des ersten kontrollierten Controllers unterstützen;
-2. **USB-Hub-Enumeration** ergänzen;
-3. danach die physische Maus in ihrer echten Hub-Topologie validieren;
-4. HID-Report-Support nur dann erweitern, wenn das reale Gerät ihn tatsächlich benötigt.
+1. **mehrere xHCI-Controller** werden unabhängig verwaltet;
+2. der echte **Genesys-Logic-Hub** wird auf Hardware enumeriert;
+3. die Downstream-**ROCCAT-Maus** bewegt den BoringOS-Cursor;
+4. BoringWM-Hit-Testing wechselt den Fokus physisch zwischen zwei Fenstern.
 
-Die aktuelle ROCCAT-Maus ist noch kein BoringOS-Erfolgsclaim. In der getesteten Verkabelung hängt sie hinter einem Genesys-Logic-Hub, den BoringOS bisher nicht enumeriert.
+Die nächste beobachtete Input-Ecke ist Tastatur-Typematic: Eine gehaltene Taste wie Backspace erzeugt auf dem USB-Boot-Keyboard-Pfad aktuell nur die erste Aktion; für wiederholtes Löschen muss die Taste erneut gedrückt werden. Das ist ein kleines Input-Polish und keine USB-Topologie-Regression.
 
 ## Grafik heute
 
@@ -200,29 +201,25 @@ Es gibt noch keinen nativen AMD-/NVIDIA-/Intel-Modesetting- oder Beschleunigungs
 
 ## Aktuelle Grenzen
 
-- nur eine kontrollierte xHCI-Controller-Instanz;
-- noch keine USB-Hub-Enumeration;
-- die physische Maus hinter dem Hub ist noch nicht unterstützt;
+- gehaltenes Tastatur-Typematic/Key-Repeat ist auf dem USB-Tastaturpfad noch nicht implementiert;
 - das physische Display nutzt aktuell den Firmware-Framebuffer mit 800x600;
 - die vollständige praktische Nutzung der installierten 32 GiB auf Cthulhu ist noch zukünftige Arbeit;
 - noch kein Netzwerk, Audio, NVMe, SMP-Runtime oder nativer GPU-Treiber.
 
 Das sind Implementierungsgrenzen und keine als Support verkleideten Versprechen.
 
-## Roadmap ab dem M63-Freeze
+## Roadmap ab dem M66-Freeze
 
 ~~~text
-M63 PHYSICAL FREEZE
+M66 PHYSICAL FREEZE
     ↓
-1. USB Multi-xHCI-Ownership
+1. Tastatur-Typematic / gehaltenes Key-Repeat
     ↓
-2. USB-Hub-Enumeration + physische Maus
+2. bessere / native GOP-Auflösung
     ↓
-3. bessere / native GOP-Auflösung
+3. schnellere Software-Grafik / Present
     ↓
-4. schnellere Software-Grafik / Present
-    ↓
-5. die vollen 32 GiB RAM physisch sinnvoll nutzen
+4. die vollen 32 GiB RAM physisch sinnvoll nutzen
     ↓
 ...
     ↓
@@ -250,6 +247,7 @@ Das Repository behält nur wenige immutable-by-policy physische Freeze-Branches:
 - `freeze/m61-physical-desktop-2026-09-04`
 - `freeze/m62-dynamic-capacity-physical-2026-09-05`
 - `freeze/m63-system-power-lifecycle-physical-2026-09-05`
+- `freeze/m66-usb-hub-mouse-physical-2026-09-06`
 
 Normale Entwicklung läuft von `main` weiter; Freeze-Branches sind Referenzpunkte und dürfen nicht bewegt werden.
 
