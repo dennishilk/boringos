@@ -5,6 +5,7 @@
 
 #include <boring/cpu.h>
 #include <boring/input.h>
+#include <boring/timer.h>
 #include <boring/ps2_keyboard.h>
 #include <boring/ps2_mouse.h>
 
