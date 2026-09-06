@@ -428,6 +428,7 @@ static void queue_tests(void) {
     size_t drained = 0U;
     size_t index;
     int32_t wrap_expected_dx;
+    uint64_t dropped_before;
     bool released = false;
 
     check(boring_input_claim(21ULL) == BORING_INPUT_RESULT_OK, "owner claim");
@@ -445,6 +446,8 @@ static void queue_tests(void) {
     check(boring_input_read(21ULL, events, 1U, &count) == BORING_INPUT_RESULT_OK &&
           count == 1U && events[0].code == BORING_KEY_A, "single dequeue");
 
+    check(boring_input_get_stats(&stats), "overflow baseline stats");
+    dropped_before = stats.dropped_events;
     for (index = 0U; index < (size_t)BORING_INPUT_QUEUE_CAPACITY; ++index) {
         check(boring_input_submit_key(BORING_KEY_A, (index & 1U) == 0U),
               "fill queue");
@@ -452,7 +455,7 @@ static void queue_tests(void) {
     check(!boring_input_submit_key(BORING_KEY_Q, true), "drop newest on overflow");
     check(boring_input_get_stats(&stats) &&
           stats.queued_events == (size_t)BORING_INPUT_QUEUE_CAPACITY &&
-          stats.dropped_events == 1ULL, "overflow accounting");
+          stats.dropped_events == dropped_before + 1ULL, "overflow accounting");
     while (drained < (size_t)BORING_INPUT_QUEUE_CAPACITY) {
         check(boring_input_read(21ULL, events, BORING_INPUT_READ_MAX, &count) ==
               BORING_INPUT_RESULT_OK && count != 0U, "drain chunk");
