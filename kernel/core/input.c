@@ -362,6 +362,21 @@ bool boring_input_repeat_tick(uint64_t now_ticks) {
     return pushed;
 }
 
+bool boring_input_repeat_active(uint64_t pid) {
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+    bool active;
+
+    x86_64_interrupts_disable();
+    active = input_state.initialized && input_state.owned &&
+             (input_state.owner_pid == pid) &&
+             (input_state.repeat_key != (uint32_t)BORING_KEY_NONE) &&
+             (input_state.repeat_key <= (uint32_t)BORING_KEY_MAX) &&
+             input_state.held[input_state.repeat_key] &&
+             input_key_repeatable(input_state.repeat_key);
+    input_restore_interrupts(interrupts_were_enabled);
+    return active;
+}
+
 bool boring_input_reset_keys(void) {
     const bool interrupts_were_enabled = x86_64_interrupts_enabled();
 
