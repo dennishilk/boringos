@@ -15,6 +15,7 @@
 #include <boring/syscall.h>
 #include <boring/syscall_abi.h>
 #include <boring/task.h>
+#include <boring/timer.h>
 #include <boring/vmm.h>
 #if defined(BORING_M54_USB_ONLY_DESKTOP)
 #include <boring/xhci.h>
@@ -131,6 +132,10 @@ static long poll_watches(struct process *process,
                          struct boring_event_watch *watches, size_t count) {
     size_t index;
     long ready = 0L;
+    /* Service due typematic work at every canonical event poll. */
+    if (boring_input_repeat_tick(timer_ticks())) {
+        boring_event_input_irq();
+    }
     for (index = 0U; index < count; ++index) {
         struct boring_event_watch *watch = &watches[index];
         watch->events = 0U;
