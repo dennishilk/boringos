@@ -101,8 +101,10 @@ def decode_tile(data, expected, width, height, tile, pointer):
 
 def decode(ppm, metadata):
     width, height, data = parse_ppm(Path(ppm))
-    if (width, height) != (800, 600) or (width, height) != (metadata["width"], metadata["height"]):
-        raise ValueError("framebuffer is not the requested exact 800x600 mode")
+    if (width, height) != (metadata["width"], metadata["height"]):
+        raise ValueError("framebuffer geometry differs from authoritative metadata")
+    if width < 800 or height < 600 or width > 3840 or height > 2160:
+        raise ValueError("framebuffer geometry is outside the M68 bounded desktop policy")
     tiles = metadata["tiles"]
     if metadata["count"] != len(tiles) or not 1 <= len(tiles) <= 2:
         raise ValueError("invalid terminal count")
@@ -192,7 +194,7 @@ def validate(ppm, metadata, mode):
             raise ValueError("surviving terminal did not accept independent input")
     else:
         raise ValueError(f"unknown validation mode: {mode}")
-    print(f"M36 visual validator passed: {mode}; 480000 exact pixels; terminal pids={sorted(screens)}; "
+    print(f"M36 visual validator passed: {mode}; {width * height} exact pixels; terminal pids={sorted(screens)}; "
           f"sha256={hashlib.sha256(Path(ppm).read_bytes()).hexdigest()}")
     return screens
 
