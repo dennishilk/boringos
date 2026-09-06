@@ -1,0 +1,79 @@
+name: Temporary M67 repair
+
+on:
+  push:
+    branches:
+      - agent/m67-m69-input-display-polish
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/m67-m69-input-display-polish
+      - name: Apply narrow M67 timer repair
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('kernel/core/event_syscall.c')
+          s = p.read_text()
+          old = '''            /*
+             * USB HID is normally polled cooperatively without depending on
+             * PIC delivery. While a repeatable key is held, however, the PIT
+             * is the deliberate typematic clock. Sleep for one hardware tick
+             * so repeat deadlines advance without host sleeps or fabricated
+             * HID transitions. The no-held-key path retains the existing
+             * fast polling behaviour.
+             */
+            if (boring_input_repeat_active(process->pid)) {
+                x86_64_enable_and_halt();
+            } else {
+                x86_64_interrupts_enable();
+            }
+            task_yield();
+'''
+          new = '''            /*
+             * Keep cooperative xHCI polling preemptible by the existing PIT.
+             * Typematic is clocked by timer IRQs in the transport-neutral
+             * input core; it must not turn the proven M54/M66 polling path
+             * into an HLT wait on an unrelated interrupt.
+             */
+            x86_64_interrupts_enable();
+            task_yield();
+'''
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise SystemExit('event wait repair anchor missing')
+
+          anchor = '            const bool serviced = xhci_service_hid_reports(&usb_state);\n'
+          preemptible = '            x86_64_interrupts_enable();\n            const bool serviced = xhci_service_hid_reports(&usb_state);\n'
+          if preemptible not in s:
+              if anchor not in s:
+                  raise SystemExit('xHCI service anchor missing')
+              s = s.replace(anchor, preemptible, 1)
+          p.write_text(s)
+
+          p = Path('kernel/core/m37_desktop_test.c')
+          s = p.read_text()
+          anchor = '#include <boring/task.h>\n#include <boring/user_memory.h>\n'
+          fixed = '#include <boring/task.h>\n#include <boring/timer.h>\n#include <boring/user_memory.h>\n'
+          if fixed not in s:
+              if anchor not in s:
+                  raise SystemExit('timer include anchor missing')
+              s = s.replace(anchor, fixed, 1)
+          p.write_text(s)
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add kernel/core/event_syscall.c kernel/core/m37_desktop_test.c
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'M67: keep cooperative HID timer-preemptible'
+          git push origin HEAD:agent/m67-m69-input-display-polish
