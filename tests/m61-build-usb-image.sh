@@ -20,7 +20,26 @@ macro() {
 }
 
 hash_blocks() {
-    dd if="$1" bs="$SECTOR" skip="$2" count="$3" status=none | sha256sum | awk '{print $1}'
+    python3 - "$1" "$SECTOR" "$2" "$3" <<'PY'
+import hashlib
+import sys
+
+path = sys.argv[1]
+sector = int(sys.argv[2])
+first = int(sys.argv[3])
+count = int(sys.argv[4])
+remaining = sector * count
+digest = hashlib.sha256()
+with open(path, "rb") as image:
+    image.seek(sector * first)
+    while remaining:
+        chunk = image.read(min(1024 * 1024, remaining))
+        if not chunk:
+            raise SystemExit("M61 hash slice truncated")
+        digest.update(chunk)
+        remaining -= len(chunk)
+print(digest.hexdigest())
+PY
 }
 
 SECTOR=$(macro M61_USB_SECTOR_SIZE)
@@ -82,8 +101,29 @@ sgdisk --clear \
     --partition-guid=2:424F5249-4E47-4D36-3102-000000000061 \
     "$IMAGE" >/dev/null
 sgdisk --verify "$IMAGE" | tee "$WORK/gpt-verify.txt"
-dd if="$ESP" of="$IMAGE" bs="$SECTOR" seek="$ESP_FIRST" conv=notrunc status=none
-dd if="$ROOTFS" of="$IMAGE" bs="$SECTOR" seek="$ROOT_FIRST" conv=notrunc status=none
+python3 - "$IMAGE" "$ESP" "$((ESP_FIRST * SECTOR))" "$ROOTFS" "$((ROOT_FIRST * SECTOR))" <<'PY'
+import os
+import sys
+
+image_path, esp_path, esp_offset, root_path, root_offset = sys.argv[1:]
+regions = (
+    (esp_path, int(esp_offset)),
+    (root_path, int(root_offset)),
+)
+image_size = os.path.getsize(image_path)
+with open(image_path, "r+b") as image:
+    for source_path, offset in regions:
+        source_size = os.path.getsize(source_path)
+        if offset < 0 or source_size > image_size - offset:
+            raise SystemExit("M61 image region exceeds raw image bounds")
+        image.seek(offset)
+        with open(source_path, "rb") as source:
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                image.write(chunk)
+PY
 
 PHYSICAL_PROOF=$WORK/image-proof
 mkdir -p "$PHYSICAL_PROOF"

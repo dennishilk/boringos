@@ -110,7 +110,12 @@ build/m61-block-slice-host-test | tee "$OUT/block-slice-host.txt"
 
 MALFORMED="$OUT/malformed-root.img"
 cp "$OUT/boringos-root.img" "$MALFORMED"
-dd if=/dev/zero of="$MALFORMED" bs=4096 count=1 conv=notrunc status=none
+python3 - "$MALFORMED" <<'PY'
+import sys
+with open(sys.argv[1], "r+b") as image:
+    image.seek(0)
+    image.write(b"\x00" * 4096)
+PY
 if build/boringfsck "$MALFORMED" >"$OUT/malformed.stdout" 2>"$OUT/malformed.stderr"; then
     echo 'M61 build FAILED: malformed BoringFS root accepted' >&2
     exit 1
