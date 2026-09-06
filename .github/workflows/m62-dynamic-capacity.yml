@@ -2,7 +2,7 @@ name: M62 dynamic process task capacity
 
 on:
   push:
-    branches: [agent/m62-dynamic-process-task-capacity]
+    branches: [agent/m62-dynamic-process-task-capacity, agent/m64-usb-topology-mouse]
   workflow_dispatch:
 
 permissions:
@@ -49,6 +49,7 @@ jobs:
       - name: Stress real persistent desktop above eight processes
         run: python3 tests/m62-desktop-capacity-qemu.py
       - name: Prepare one M62 physical USB artifact
+        if: ${{ github.ref_name == 'agent/m62-dynamic-process-task-capacity' || github.event_name == 'workflow_dispatch' }}
         id: physical
         run: |
           cp build/boringos-m61-usb.img build/boringos-m62-usb.img
@@ -59,6 +60,7 @@ jobs:
           echo "raw_sha=$raw_sha" >> "$GITHUB_OUTPUT"
           echo "raw_bytes=100663296" >> "$GITHUB_OUTPUT"
       - name: Publish exactly one M62 physical USB artifact
+        if: ${{ github.ref_name == 'agent/m62-dynamic-process-task-capacity' || github.event_name == 'workflow_dispatch' }}
         uses: actions/upload-artifact@v4
         with:
           name: m62-dynamic-capacity-${{ github.sha }}-${{ steps.physical.outputs.raw_sha }}

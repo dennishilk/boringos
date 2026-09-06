@@ -2,7 +2,7 @@ name: M63 system power lifecycle
 
 on:
   push:
-    branches: [agent/m63-system-power-lifecycle]
+    branches: [agent/m63-system-power-lifecycle, agent/m64-usb-topology-mouse]
   workflow_dispatch:
     inputs:
       publish_physical:
@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   m63-system-power-lifecycle:
@@ -125,6 +126,190 @@ jobs:
           raw_sha=$(awk '{print $1}' build/boringos-m61-usb.img.sha256)
           echo "raw_sha=$raw_sha" >> "$GITHUB_OUTPUT"
           echo "raw_bytes=100663296" >> "$GITHUB_OUTPUT"
+      - name: Gate M66 artifact on all other exact-head workflows
+        if: ${{ github.ref_name == 'agent/m64-usb-topology-mouse' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.request
+          from pathlib import Path
+
+          expected = [
+              "BoringKernel boot test",
+              "M37 native desktop session startup",
+              "M38 native desktop session supervision",
+              "M39 native BoringEdit",
+              "M40 native BoringFiles",
+              "M41 application shortcuts",
+              "M42 native client foundation",
+              "M43 real CPUID inventory",
+              "M44 real PCI inventory",
+              "M45 real SMBIOS platform identity",
+              "M46 boringfetch hardware edition",
+              "M47 real hardware boot readiness",
+              "M48 xHCI USB-HID foundation",
+              "M49 xHCI USB device addressing",
+              "M50 xHCI EP0 descriptor discovery",
+              "M51 xHCI USB HID endpoint setup",
+              "M52 xHCI HID interrupt-IN reports",
+              "M53 USB HID input queue",
+              "M54 USB-only graphical desktop",
+              "M55 AHCI SATA foundation",
+              "M56 AHCI read-only block path",
+              "M57 writable AHCI persistent root",
+              "M58 high-memory PMM",
+              "M59 Cthulhu physical smoke readiness",
+              "M60 USB mass storage",
+              "M61 bootable persistent USB",
+              "M62 dynamic process task capacity",
+              "M64 USB topology mouse",
+          ]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["GITHUB_SHA"]
+          token = os.environ["GH_TOKEN"]
+          url = (
+              f"https://api.github.com/repos/{repo}/actions/runs"
+              f"?head_sha={sha}&per_page=100"
+          )
+          deadline = time.monotonic() + 3600.0
+          latest = {}
+
+          while True:
+              request = urllib.request.Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  payload = json.load(response)
+
+              latest = {}
+              for run in payload.get("workflow_runs", []):
+                  name = run.get("name")
+                  if (run.get("head_sha") != sha or name not in expected):
+                      continue
+                  previous = latest.get(name)
+                  if previous is None or int(run["id"]) > int(previous["id"]):
+                      latest[name] = run
+
+              failures = [
+                  name for name, run in latest.items()
+                  if run.get("status") == "completed"
+                  and run.get("conclusion") != "success"
+              ]
+              if failures:
+                  details = {
+                      name: {
+                          "id": latest[name]["id"],
+                          "conclusion": latest[name].get("conclusion"),
+                      }
+                      for name in failures
+                  }
+                  raise SystemExit(f"exact-head workflow failure: {details}")
+
+              missing = [name for name in expected if name not in latest]
+              pending = [
+                  name for name in expected
+                  if name in latest and latest[name].get("status") != "completed"
+              ]
+              if not missing and not pending:
+                  break
+              if time.monotonic() >= deadline:
+                  raise SystemExit(
+                      f"exact-head gate timed out missing={missing} pending={pending}"
+                  )
+              print(
+                  f"EXACT_HEAD_WAIT missing={len(missing)} pending={len(pending)}",
+                  flush=True,
+              )
+              time.sleep(15.0)
+
+          lines = [
+              "EXACT_HEAD=" + sha,
+              "REQUIRED_OTHER_WORKFLOWS=28",
+              "REQUIRED_OTHER_SUCCESS=28",
+              "REQUIRED_OTHER_FAILURE=0",
+              "REQUIRED_OTHER_CANCELLED=0",
+          ]
+          for name in expected:
+              run = latest[name]
+              lines.append(
+                  f"{name}|{run['id']}|{run['head_sha']}|{run['conclusion']}"
+              )
+          proof = Path("build/m66-exact-head-gate.txt")
+          proof.write_text("\n".join(lines) + "\n")
+          print(proof.read_text(), end="")
+          PY
+      - name: Prepare authoritative M66 physical image
+        if: ${{ github.ref_name == 'agent/m64-usb-topology-mouse' }}
+        id: m66_physical
+        run: |
+          test -f build/m66-exact-head-gate.txt
+          grep -Fqx "EXACT_HEAD=$GITHUB_SHA" build/m66-exact-head-gate.txt
+          grep -Fqx 'REQUIRED_OTHER_SUCCESS=28' build/m66-exact-head-gate.txt
+          grep -Fqx 'REQUIRED_OTHER_FAILURE=0' build/m66-exact-head-gate.txt
+          grep -Fqx 'REQUIRED_OTHER_CANCELLED=0' build/m66-exact-head-gate.txt
+
+          test ! -e build/boringos-m61-usb-qemu.img
+          test ! -e build/boringos-m61-usb-qemu.img.sha256
+          grep -Fqx 'limine_timeout_seconds=5' build/m61-usb-image.txt
+          grep -Fqx 'physical_breadcrumbs=enabled' build/m61-usb-image.txt
+          test "$(stat -c %s build/boringos-m61-usb.img)" = "100663296"
+          (cd build && sha256sum -c boringos-m61-usb.img.sha256)
+
+          cp build/boringos-m61-usb.img build/boringos-m66-usb.img
+          sha256sum build/boringos-m66-usb.img > build/boringos-m66-usb.img.sha256
+          test "$(stat -c %s build/boringos-m66-usb.img)" = "100663296"
+          raw_sha=$(awk '{print $1}' build/boringos-m66-usb.img.sha256)
+          test "$raw_sha" = "$(awk '{print $1}' build/boringos-m61-usb.img.sha256)"
+
+          xz -T0 -6 -c build/boringos-m66-usb.img > build/boringos-m66-usb.img.xz
+          compressed_bytes=$(stat -c %s build/boringos-m66-usb.img.xz)
+          compressed_sha=$(sha256sum build/boringos-m66-usb.img.xz | awk '{print $1}')
+          tree=$(git rev-parse 'HEAD^{tree}')
+          artifact_name="m66-usb-hub-mouse-$GITHUB_SHA-$raw_sha"
+
+          {
+            echo "FINAL_HEAD=$GITHUB_SHA"
+            echo "FINAL_TREE=$tree"
+            echo 'RAW_BYTES=100663296'
+            echo "RAW_SHA256=$raw_sha"
+            echo "COMPRESSED_BYTES=$compressed_bytes"
+            echo "COMPRESSED_SHA256=$compressed_sha"
+            echo 'QEMU_TWIN_PUBLISHED=NO'
+            echo 'PRODUCT_RUNTIME_TREE_UNCHANGED=YES'
+            echo "ARTIFACT_NAME=$artifact_name"
+          } > build/m66-physical-identity.txt
+          cat build/m66-physical-identity.txt
+
+          echo "raw_sha=$raw_sha" >> "$GITHUB_OUTPUT"
+          echo "raw_bytes=100663296" >> "$GITHUB_OUTPUT"
+          echo "compressed_bytes=$compressed_bytes" >> "$GITHUB_OUTPUT"
+          echo "compressed_sha=$compressed_sha" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+      - name: Publish exactly one authoritative M66 physical USB artifact
+        if: ${{ github.ref_name == 'agent/m64-usb-topology-mouse' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.m66_physical.outputs.artifact_name }}
+          path: |
+            build/boringos-m66-usb.img.xz
+            build/boringos-m66-usb.img.sha256
+            build/m66-physical-identity.txt
+            build/m66-exact-head-gate.txt
+            build/m61-usb-image.txt
+            build/m61-qemu-twin-proof.txt
+            build/m63-system-power-lifecycle/proof.txt
+            build/m63-system-power-verifier.txt
+          if-no-files-found: error
+          retention-days: 14
       - name: Prepare authoritative M63 physical image
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_physical }}
         run: |
