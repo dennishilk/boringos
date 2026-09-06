@@ -250,14 +250,23 @@ def run():
 
     def wait_m67_cleanup_suffix(name, frame, pid, expected_suffix,
                                 timeout=2.0):
-        marker = "boring@boringos:/$ "
+        marker = "boring@boringos:/$"
         deadline = time.monotonic() + timeout
         last_matches = None
         attempt = 0
         while time.monotonic() < deadline:
             rows = decode_terminal(f"{name}-{attempt}", frame)[pid]
-            matches = [row.split(marker, 1)[1]
-                       for row in rows if marker in row]
+            matches = []
+            for row in rows:
+                if marker not in row:
+                    continue
+                tail = row.split(marker, 1)[1]
+                if tail == "":
+                    matches.append("")
+                elif tail.startswith(" "):
+                    matches.append(tail[1:])
+                else:
+                    matches.append(tail)
             last_matches = matches
             if len(matches) > 1:
                 raise RuntimeError(
