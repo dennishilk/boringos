@@ -982,7 +982,8 @@ bool xhci_parse_hid_configuration(
     struct xhci_hid_configuration *configuration) {
     enum xhci_hid_rejection_reason reason = XHCI_HID_REJECT_NONE;
     return xhci_parse_hid_configuration_ex(
-        bytes, received, speed, configuration, &reason);
+               bytes, received, speed, configuration, &reason) &&
+           (configuration->hid_interface_count != 0U);
 }
 
 bool xhci_select_supported_hid_configuration(
