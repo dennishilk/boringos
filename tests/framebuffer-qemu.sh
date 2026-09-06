@@ -102,31 +102,7 @@ for line in \
     'boring-shell ready.'; do
     grep -Fqx "${line}" "${LOG}" || fail "missing framebuffer boot marker: ${line}"
 done
-grep -Eq '^boring-framebuffer: [0-9]+x[0-9]+x(24|32)grep -Eq '^boring-framebuffer: pitch [1-9][0-9]*$' "${LOG}" ||
-    fail 'missing framebuffer pitch marker'
-
-send 'boringfetch'
-grep -Fqx 'boring-launch: VFS executable source /bin/boringfetch' "${LOG}" ||
-    fail 'boringfetch did not execute from persistent VFS after dashboard render'
-grep -Fq 'Root FS: BoringFS' "${LOG}" || fail 'boringfetch root identity regressed'
-grep -Fq 'Root device: virtio-blk' "${LOG}" || fail 'boringfetch block identity regressed'
-
-send 'cat /README.txt'
-grep -Fqx 'Welcome to BoringOS.' "${LOG}" ||
-    fail 'standalone cat did not read persistent-root README'
-grep -Eq '^fd-open: pid [0-9]+ path /README.txt fd 3$' "${LOG}" ||
-    fail 'descriptor-backed cat open marker is missing'
-grep -Eq '^fd-write: pid [0-9]+ fd 1 bytes [1-9][0-9]*$' "${LOG}" ||
-    fail 'descriptor-backed cat stdout marker is missing'
-
-python3 "${ROOT}/tests/qmp-screendump.py" "${QMP_SOCKET}" "${SCREENSHOT}"
-python3 "${ROOT}/tests/validate-framebuffer-screenshot.py" "${SCREENSHOT}" "${LOG}"
-"${ROOT}/build/boringfsck" "${IMAGE}" | grep -Fqx 'Status: VALID' ||
-    fail 'post-framebuffer BoringFS image is invalid'
-
-stop_vm
-echo 'Real Limine framebuffer and BoringOS dashboard verification passed.'
- "${LOG}" ||
+grep -Eq '^boring-framebuffer: [0-9]+x[0-9]+x(24|32)$' "${LOG}" ||
     fail 'missing supported framebuffer geometry marker'
 if [ -n "${FRAMEBUFFER_EXPECT_WIDTH}" ] || [ -n "${FRAMEBUFFER_EXPECT_HEIGHT}" ]; then
     [ -n "${FRAMEBUFFER_EXPECT_WIDTH}" ] && [ -n "${FRAMEBUFFER_EXPECT_HEIGHT}" ] ||
