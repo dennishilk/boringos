@@ -131,7 +131,7 @@ echo 'Real Limine framebuffer and BoringOS dashboard verification passed.'
 if [ -n "${FRAMEBUFFER_EXPECT_WIDTH}" ] || [ -n "${FRAMEBUFFER_EXPECT_HEIGHT}" ]; then
     [ -n "${FRAMEBUFFER_EXPECT_WIDTH}" ] && [ -n "${FRAMEBUFFER_EXPECT_HEIGHT}" ] ||
         fail 'both expected framebuffer dimensions must be specified'
-    grep -Eq "^boring-framebuffer: ${FRAMEBUFFER_EXPECT_WIDTH}x${FRAMEBUFFER_EXPECT_HEIGHT}x(24|32)$" "${LOG}" ||
+    grep -Eq "^boring-framebuffer: ${FRAMEBUFFER_EXPECT_WIDTH}x${FRAMEBUFFER_EXPECT_HEIGHT}x(24|32)\$" "${LOG}" ||
         fail "requested framebuffer geometry not selected: ${FRAMEBUFFER_EXPECT_WIDTH}x${FRAMEBUFFER_EXPECT_HEIGHT}"
 fi
 grep -Eq '^boring-framebuffer: pitch [1-9][0-9]*$' "${LOG}" ||
