@@ -325,6 +325,13 @@ static bool m52_submit_endpoint(const struct xhci_state *active,
         return false;
     }
     m52_mmio_write32(mmio, doorbell, (uint32_t)descriptor->endpoint_id);
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    if ((device->topology.depth != 0U) &&
+        (descriptor->report_format == XHCI_HID_REPORT_BOOT_MOUSE)) {
+        boring_m66_physical_usb_mouse_witness(
+            (uint8_t)M66_POST_DOWNSTREAM_INTERRUPT_ARMED);
+    }
+#endif
     return true;
 }
 
@@ -512,7 +519,20 @@ static bool m52_decode_report(struct xhci_addressed_device *device,
         runtime->last_pointer_buttons = decoded.buttons;
         runtime->pointer_valid = true;
         ++runtime->pointer_reports;
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        if (device->topology.depth != 0U) {
+            boring_m66_physical_usb_mouse_witness(
+                (uint8_t)M66_POST_DOWNSTREAM_MOUSE_REPORT);
+        }
+#endif
         m53_publish_pointer_move((int32_t)decoded.dx, (int32_t)decoded.dy);
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        if ((device->topology.depth != 0U) &&
+            ((decoded.dx != 0) || (decoded.dy != 0))) {
+            boring_m66_physical_usb_mouse_witness(
+                (uint8_t)M66_POST_CANONICAL_MOUSE_MOVE);
+        }
+#endif
         m53_publish_pointer_buttons(previous_buttons, decoded.buttons);
     } else if (descriptor->report_format ==
                XHCI_HID_REPORT_QEMU_ABSOLUTE_TABLET) {

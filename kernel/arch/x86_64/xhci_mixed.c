@@ -4,6 +4,9 @@
 #include <boring/vmm.h>
 #include <boring/xhci.h>
 #include <boring/xhci_mixed.h>
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+#include <boring/m61_runtime_hid.h>
+#endif
 
 bool xhci_configure_hid_devices_mixed(struct xhci_state *state) {
     const struct xhci_state *published;
@@ -45,7 +48,15 @@ bool xhci_configure_hid_devices_mixed(struct xhci_state *state) {
             (const uint8_t *)descriptor_virtual,
             device->descriptors.configuration_length, device->speed,
             device->descriptors.vendor_id, device->descriptors.product_id);
-        if (classification == XHCI_HID_CLASS_INVALID) { return false; }
+        if (classification == XHCI_HID_CLASS_INVALID) {
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+            if (device->topology.depth != 0U) {
+                boring_m66_physical_usb_mouse_witness(
+                    (uint8_t)M66_POST_DOWNSTREAM_HID_UNSUPPORTED);
+            }
+#endif
+            return false;
+        }
         if (classification == XHCI_HID_CLASS_SUPPORTED) {
             hid_original_index[hid_count] = index;
             ++hid_count;
@@ -63,6 +74,25 @@ bool xhci_configure_hid_devices_mixed(struct xhci_state *state) {
     active->addressed_count = hid_count;
 
     configured = xhci_configure_hid_devices(active);
+
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    if (configured) {
+        for (index = 0U; index < hid_count; ++index) {
+            const struct xhci_addressed_device *device = &active->addressed[index];
+            uint8_t endpoint_index;
+            if (device->topology.depth == 0U) { continue; }
+            for (endpoint_index = 0U;
+                 endpoint_index < device->hid_configuration.endpoint_count;
+                 ++endpoint_index) {
+                if (device->hid_configuration.endpoints[endpoint_index].report_format ==
+                    XHCI_HID_REPORT_BOOT_MOUSE) {
+                    boring_m66_physical_usb_mouse_witness(
+                        (uint8_t)M66_POST_DOWNSTREAM_HID_SUPPORTED);
+                }
+            }
+        }
+    }
+#endif
 
     /* Preserve all HID-side runtime changes, including bounded partial failure. */
     for (index = 0U; index < hid_count; ++index) {

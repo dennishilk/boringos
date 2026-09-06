@@ -37,11 +37,27 @@ enum m61_runtime_xhci_observation_code {
     M61_RUNTIME_XHCI_POST_OTHER_EVENT_AT_HEAD = 0xcf
 };
 
+enum m66_physical_usb_mouse_post_code {
+    M66_POST_ALL_XHCI_READY = 0xd0,
+    M66_POST_HUB_DETECTED = 0xd1,
+    M66_POST_HUB_DESCRIPTOR_ACCEPTED = 0xd2,
+    M66_POST_DOWNSTREAM_CONNECTED = 0xd3,
+    M66_POST_DOWNSTREAM_RESET = 0xd4,
+    M66_POST_DOWNSTREAM_ADDRESSED = 0xd5,
+    M66_POST_DOWNSTREAM_DESCRIPTORS = 0xd6,
+    M66_POST_DOWNSTREAM_HID_SUPPORTED = 0xd7,
+    M66_POST_DOWNSTREAM_HID_UNSUPPORTED = 0xd8,
+    M66_POST_DOWNSTREAM_INTERRUPT_ARMED = 0xd9,
+    M66_POST_DOWNSTREAM_MOUSE_REPORT = 0xda,
+    M66_POST_CANONICAL_MOUSE_MOVE = 0xdb
+};
+
 void boring_m61_runtime_hid_arm(void);
 bool boring_m61_runtime_hid_is_armed(void);
 void boring_m61_post37_witness(uint8_t code);
 void boring_m61_runtime_hid_post(uint8_t code);
 void boring_m61_runtime_xhci_observe(uint8_t code);
+void boring_m66_physical_usb_mouse_witness(uint8_t code);
 #endif
 
 #endif

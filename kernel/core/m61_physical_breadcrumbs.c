@@ -57,6 +57,8 @@ static uint16_t m61_post37_observed;
 static uint8_t m61_runtime_hid_highest;
 static uint8_t m61_runtime_xhci_observed;
 
+static uint16_t m66_physical_usb_mouse_observed;
+
 void boring_m61_runtime_hid_arm(void) {
     m61_post37_observed = 0U;
     m61_runtime_hid_highest =
@@ -114,6 +116,22 @@ void boring_m61_runtime_xhci_observe(uint8_t code) {
     }
     if ((m61_runtime_xhci_observed & bit) != 0U) { return; }
     m61_runtime_xhci_observed = (uint8_t)(m61_runtime_xhci_observed | bit);
+    x86_64_out8((uint16_t)M61_HANDOFF_POST_PORT, code);
+}
+
+void boring_m66_physical_usb_mouse_witness(uint8_t code) {
+    uint8_t offset;
+    uint16_t bit;
+
+    if ((code < (uint8_t)M66_POST_ALL_XHCI_READY) ||
+        (code > (uint8_t)M66_POST_CANONICAL_MOUSE_MOVE)) {
+        return;
+    }
+    offset = (uint8_t)(code - (uint8_t)M66_POST_ALL_XHCI_READY);
+    bit = (uint16_t)(1U << offset);
+    if ((m66_physical_usb_mouse_observed & bit) != 0U) { return; }
+    m66_physical_usb_mouse_observed =
+        (uint16_t)(m66_physical_usb_mouse_observed | bit);
     x86_64_out8((uint16_t)M61_HANDOFF_POST_PORT, code);
 }
 

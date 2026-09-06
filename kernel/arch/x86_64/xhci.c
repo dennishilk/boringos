@@ -11,6 +11,7 @@
 
 #ifdef BORING_M61_PHYSICAL_BREADCRUMBS
 #include <boring/io.h>
+#include <boring/m61_runtime_hid.h>
 
 enum xhci_m61_post_code {
     XHCI_M61_RINGS_FALSE_SCRATCHPAD_UNSUPPORTED = 0x40,
@@ -1533,6 +1534,10 @@ static bool configure_and_enumerate_hub(
         return false;
     }
     hub->hub_ready = true;
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    boring_m66_physical_usb_mouse_witness(
+        (uint8_t)M66_POST_HUB_DESCRIPTOR_ACCEPTED);
+#endif
 
     for (port = 1U; port <= hub->hub_descriptor.port_count; ++port) {
         struct boring_usb_hub_port_status status;
@@ -1548,6 +1553,10 @@ static bool configure_and_enumerate_hub(
             return false;
         }
         if (!status.connected) { continue; }
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        boring_m66_physical_usb_mouse_witness(
+            (uint8_t)M66_POST_DOWNSTREAM_CONNECTED);
+#endif
         if (!ep0_submit_hub_set_port_feature(controller, hub, port, 4U) ||
             (controller->state.hub_ports_reset == UINT32_MAX)) {
             return false;
@@ -1560,6 +1569,10 @@ static bool configure_and_enumerate_hub(
             (status.speed == 0U)) {
             return false;
         }
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        boring_m66_physical_usb_mouse_witness(
+            (uint8_t)M66_POST_DOWNSTREAM_RESET);
+#endif
         if (controller->state.addressed_count == XHCI_MAX_ADDRESSED_DEVICES) {
             controller->state.addressing_truncated = true;
             return false;
@@ -1569,6 +1582,10 @@ static bool configure_and_enumerate_hub(
                                      child)) {
             return false;
         }
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        boring_m66_physical_usb_mouse_witness(
+            (uint8_t)M66_POST_DOWNSTREAM_ADDRESSED);
+#endif
         ++controller->state.addressed_count;
         if (controller->state.downstream_devices_addressed == UINT32_MAX) {
             return false;
@@ -1757,6 +1774,12 @@ bool xhci_init(struct xhci_state *state) {
         }
     }
     *state = controller_registry[0].state;
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    if (all_running && controller_registry[0].state.controller_running) {
+        boring_m66_physical_usb_mouse_witness(
+            (uint8_t)M66_POST_ALL_XHCI_READY);
+    }
+#endif
     return all_running && controller_registry[0].state.controller_running;
 }
 
@@ -1823,6 +1846,12 @@ bool xhci_discover_descriptors(struct xhci_state *state) {
             *state = controller->state;
             return false;
         }
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        if (device->topology.depth != 0U) {
+            boring_m66_physical_usb_mouse_witness(
+                (uint8_t)M66_POST_DOWNSTREAM_DESCRIPTORS);
+        }
+#endif
     }
     *state = controller->state;
     return true;
@@ -1864,6 +1893,10 @@ bool xhci_enumerate_hubs(struct xhci_state *state) {
             continue;
         }
         found = true;
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        boring_m66_physical_usb_mouse_witness(
+            (uint8_t)M66_POST_HUB_DETECTED);
+#endif
         if (!configure_and_enumerate_hub(controller, device)) {
             *state = controller->state;
             return false;
