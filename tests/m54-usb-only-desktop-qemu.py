@@ -363,6 +363,8 @@ def run():
             qmp("input-send-event", {"events": [
                 QMP["key_event"]("backspace", True)]})
             time.sleep(0.85)
+            due_before_up = text().count("M67_REPEAT_DUE")
+            print(f"M67 diagnostic due_before_up={due_before_up}")
             qmp("input-send-event", {"events": [
                 QMP["key_event"]("backspace", False)]})
             time.sleep(0.20)
@@ -374,7 +376,9 @@ def run():
                     len(after_suffix) > len(before_suffix) - 3):
                 raise RuntimeError(
                     "M67 held Backspace did not delete multiple characters: "
-                    f"before={before_suffix!r} after={after_suffix!r}")
+                    f"before={before_suffix!r} after={after_suffix!r} "
+                    f"due_before_up={due_before_up} "
+                    f"repeat_key_up={text().count(chr(77)+chr(54)+chr(55)+chr(95)+chr(82)+chr(69)+chr(80)+chr(69)+chr(65)+chr(84)+chr(95)+chr(75)+chr(69)+chr(89)+chr(95)+chr(85)+chr(80))}")
             print("M67 held Backspace deleted "
                   f"{len(before_suffix) - len(after_suffix)} characters "
                   "from one QMP key-down")
