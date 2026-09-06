@@ -8,6 +8,6 @@ cc -Ikernel/include \
    -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
    -Wstrict-prototypes -Wmissing-prototypes \
    tests/m61-xhci-event-coexistence-host.c kernel/core/xhci.c \
-   kernel/core/usb_hid.c \
+   kernel/core/usb_topology.c kernel/core/usb_hid.c \
    -o build/m61-xhci-event-coexistence-host
 build/m61-xhci-event-coexistence-host

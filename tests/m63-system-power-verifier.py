@@ -108,7 +108,6 @@ if "KERNEL_PROCESS_POLICY_LIMIT 64U" not in read("kernel/include/boring/process.
 unchanged = [
     "kernel/core/task.c", "kernel/core/m36_syscall.c", "kernel/core/ipc.c",
     "user/runtime/include/boring/wm.h", "user/boringwm/main.c",
-    "user/boring-display/server.c",
 ]
 if subprocess.run(["git", "diff", "--quiet", M62, "HEAD", "--", *unchanged],
                   cwd=ROOT).returncode != 0:
@@ -117,9 +116,11 @@ if subprocess.run(["git", "diff", "--quiet", M62, "HEAD", "--", *unchanged],
 changed = set(subprocess.check_output(
     ["git", "diff", "--name-only", M62, "HEAD"], cwd=ROOT, text=True
 ).splitlines())
+# M64-M66 deliberately extend xHCI/HID and add a Ring3 mouse witness.
+# Keep the non-USB physical subsystems frozen while the explicit M63
+# durability and power-path checks above remain authoritative.
 frozen_prefixes = (
-    "kernel/core/xhci.c", "kernel/arch/x86_64/xhci.c",
-    "kernel/core/usb_hid.c", "kernel/core/framebuffer.c",
+    "kernel/core/framebuffer.c",
     "kernel/core/framebuffer_user.c", "kernel/arch/x86_64/vmm.c",
     "kernel/core/pmm.c",
 )

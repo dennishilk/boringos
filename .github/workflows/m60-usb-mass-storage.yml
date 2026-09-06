@@ -25,7 +25,8 @@ jobs:
             -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
             -Wstrict-prototypes -Wmissing-prototypes \
             tests/xhci-mixed-host-test.c kernel/core/xhci.c \
-            kernel/core/xhci_mixed.c kernel/core/usb_hid.c \
+            kernel/core/usb_topology.c kernel/core/xhci_mixed.c \
+            kernel/core/usb_hid.c \
             -o build/xhci-mixed-host-test
           build/xhci-mixed-host-test
       - name: Real q35 xHCI BOT SCSI usb0 persistence
