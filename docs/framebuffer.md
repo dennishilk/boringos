@@ -28,6 +28,29 @@ The Limine response is inspected through a small bounded search. Unsupported
 or malformed framebuffer metadata disables graphics rather than halting the
 kernel.
 
+## M68 high-resolution boot policy
+
+M68 keeps mode ownership at the firmware/Limine boundary. The physical USB
+entry requests `3440x1440x32`; Limine may select another firmware-provided mode
+when that exact mode is unavailable, and BoringOS consumes only the resulting
+framebuffer metadata. There is no runtime GOP `SetMode` path and no refresh-rate
+claim.
+
+The managed desktop accepts packed XRGB8888 scanouts up to 3840x2160 and 32 MiB,
+which includes 3440x1440x32 (19,814,400 bytes) and a bounded 3840x2160 fallback.
+The existing userspace buffer limit and dedicated framebuffer mapping window
+remain 64 MiB. Physical framebuffer pitch may exceed the active row width; all
+surface-size arithmetic remains checked.
+
+For RGB firmware geometry, explicit valid masks are preserved. A fully maskless
+24- or 32-bpp RGB surface is normalized to the BoringOS canonical 8:8:8
+red/green/blue layout (shifts 16/8/0); partially missing, overlapping, or
+otherwise malformed masks remain rejected.
+
+Repository acceptance models exact 3440x1440 geometry and exercises a larger
+real QEMU framebuffer. This is not physical proof that Cthulhu exposes or boots
+3440x1440, and 144 Hz is outside the framebuffer protocol and is not claimed.
+
 ## Integer-only software renderer
 
 `kernel/core/graphics.c` implements a deliberately small immediate renderer:
