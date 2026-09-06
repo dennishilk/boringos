@@ -22,41 +22,37 @@ jobs:
 
           p = Path('kernel/core/event_syscall.c')
           s = p.read_text()
-          old = '''            /*
-             * USB HID is normally polled cooperatively without depending on
-             * PIC delivery. While a repeatable key is held, however, the PIT
-             * is the deliberate typematic clock. Sleep for one hardware tick
-             * so repeat deadlines advance without host sleeps or fabricated
-             * HID transitions. The no-held-key path retains the existing
-             * fast polling behaviour.
-             */
-            if (boring_input_repeat_active(process->pid)) {
-                x86_64_enable_and_halt();
-            } else {
-                x86_64_interrupts_enable();
-            }
-            task_yield();
-          '''
-          new = '''            /*
-             * Keep cooperative xHCI polling preemptible by the existing PIT.
-             * Typematic is clocked by timer IRQs in the transport-neutral
-             * input core; it must not turn the proven M54/M66 polling path
-             * into an HLT wait on an unrelated interrupt.
-             */
-            x86_64_interrupts_enable();
-            task_yield();
-          '''
-          if old in s:
-              s = s.replace(old, new, 1)
-          elif new not in s:
-              raise SystemExit('event wait repair anchor missing')
 
-          anchor = '            const bool serviced = xhci_service_hid_reports(&usb_state);\n'
-          preemptible = '            x86_64_interrupts_enable();\n            const bool serviced = xhci_service_hid_reports(&usb_state);\n'
+          service = '            const bool serviced = xhci_service_hid_reports(&usb_state);\n'
+          preemptible = '            x86_64_interrupts_enable();\n' + service
           if preemptible not in s:
-              if anchor not in s:
+              if service not in s:
                   raise SystemExit('xHCI service anchor missing')
-              s = s.replace(anchor, preemptible, 1)
+              s = s.replace(service, preemptible, 1)
+
+          start_marker = (
+              '            /*\n'
+              '             * USB HID is normally polled cooperatively without depending on\n'
+          )
+          end_marker = (
+              '            /*\n'
+              '             * The yield can run a peer that makes any watched object ready.\n'
+          )
+          replacement = (
+              '            /*\n'
+              '             * Keep cooperative xHCI polling preemptible by the PIT.\n'
+              '             * Typematic is clocked by timer IRQs in the transport-neutral\n'
+              '             * input core; never turn the proven M54/M66 polling path into\n'
+              '             * an HLT wait on an unrelated interrupt.\n'
+              '             */\n'
+              '            task_yield();\n\n'
+          )
+          if start_marker in s:
+              start = s.index(start_marker)
+              end = s.index(end_marker, start)
+              s = s[:start] + replacement + s[end:]
+          elif replacement not in s:
+              raise SystemExit('event wait repair anchor missing')
           p.write_text(s)
 
           p = Path('kernel/core/m37_desktop_test.c')
