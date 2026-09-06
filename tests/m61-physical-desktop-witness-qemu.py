@@ -98,9 +98,9 @@ def run():
             if geometry is None:
                 raise RuntimeError("missing framebuffer geometry for boot console")
             width, height = map(int, geometry.groups())
-            if (width, height) != (800, 600):
+            if width < 800 or height < 600 or width > 3840 or height > 2160:
                 raise RuntimeError(
-                    "M61 boot-console witness requires exact 800x600 QEMU scanout")
+                    f"M61 boot-console framebuffer outside M68 bounds: {width}x{height}")
 
             ppm = out / "boot-console-during-boot.ppm"
             qmp("screendump", {"filename": str(ppm)})
@@ -212,8 +212,9 @@ def run():
         if geometry is None:
             raise RuntimeError("missing framebuffer geometry for empty desktop witness")
         width, height = map(int, geometry.groups())
-        if (width, height) != (800, 600):
-            raise RuntimeError("M61 empty-desktop witness requires exact 800x600 QEMU scanout")
+        if width < 800 or height < 600 or width > 3840 or height > 2160:
+            raise RuntimeError(
+                f"M61 empty-desktop framebuffer outside M68 bounds: {width}x{height}")
 
         qmp("stop")
         try:
