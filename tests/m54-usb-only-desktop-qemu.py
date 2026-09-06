@@ -248,7 +248,7 @@ def run():
             time.sleep(0.04)
         raise RuntimeError(f"timeout waiting for {description}: last={last!r}")
 
-    def wait_m67_cleanup_suffix(name, frame, pid, expected_suffix,
+    def wait_m67_prompt_suffix(name, frame, pid, expected_suffix,
                                 timeout=2.0):
         marker = "boring@boringos:/$"
         deadline = time.monotonic() + timeout
@@ -415,7 +415,7 @@ def run():
             for remaining in range(len(after_suffix) - 1, -1, -1):
                 key("backspace")
                 expected_suffix = after_suffix[:remaining]
-                cleared = wait_m67_cleanup_suffix(
+                cleared = wait_m67_prompt_suffix(
                     "m67-clear-line", prompt, terminal_a, expected_suffix)
             if cleared != "":
                 raise RuntimeError(f"M67 line did not clear: {cleared!r}")
@@ -439,9 +439,8 @@ def run():
             focused_pid = next(tile["pid"] for tile in dual["tiles"]
                                if tile["token"] == dual["focus"])
             type_text("normal")
-            dual_screens = decode_terminal("m67-ordinary-typing", dual)
-            if not any("normal" in row for row in dual_screens[focused_pid]):
-                raise RuntimeError("M67 ordinary typing regression")
+            wait_m67_prompt_suffix(
+                "m67-ordinary-typing", dual, focused_pid, "normal")
 
             key("q", super_key=True)
             witness("boring-terminal: graceful cleanup complete")
