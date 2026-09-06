@@ -13,6 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 HUB_MOUSE = os.environ.get("M66_USB_HUB_MOUSE", "0") == "1"
+TYPEMATIC = os.environ.get("M67_TYPEMATIC", "0") == "1"
 OUT = ROOT / ("build/m66-usb-hub-desktop-reference"
               if HUB_MOUSE else "build/m54-usb-only-desktop-reference")
 QMP = runpy.run_path(str(ROOT / "tests/qmp-input.py"))
@@ -209,6 +210,30 @@ def run():
         finally:
             qmp("cont")
 
+    def decode_terminal(name, frame):
+        geometry = re.search(r"boring-framebuffer: (\d+)x(\d+)x(?:24|32)", text())
+        if geometry is None:
+            raise RuntimeError("missing framebuffer geometry")
+        width, height = map(int, geometry.groups())
+        qmp("stop")
+        try:
+            ppm = OUT / f"{name}.ppm"
+            qmp("screendump", {"filename": str(ppm)})
+            cursor_x = width // 2 + 23 if HUB_MOUSE else width - 1
+            cursor_y = height // 2 - 17 if HUB_MOUSE else height - 1
+            meta = dict(frame, width=width, height=height,
+                        cursor_x=cursor_x, cursor_y=cursor_y)
+            return TERM["decode"](ppm, meta)
+        finally:
+            qmp("cont")
+
+    def prompt_suffix(rows):
+        marker = "boring@boringos:/$ "
+        matches = [row.split(marker, 1)[1] for row in rows if marker in row]
+        if len(matches) != 1:
+            raise RuntimeError(f"expected one prompt row, got {matches!r}")
+        return matches[0]
+
     def settled_capture(name, frame, mode):
         deadline = time.monotonic() + 20
         while True:
@@ -311,6 +336,88 @@ def run():
         prompt = latest(1)
         settled_capture("prompt", prompt, "prompt")
         terminal_a = prompt["tiles"][0]["pid"]
+
+        if TYPEMATIC:
+            type_text("abcdefghij")
+            before_screens = decode_terminal("m67-before-repeat", prompt)
+            before_rows = before_screens[terminal_a]
+            before_suffix = prompt_suffix(before_rows)
+            if before_suffix != "abcdefghij":
+                raise RuntimeError(
+                    f"M67 pre-repeat line mismatch: {before_suffix!r}")
+
+            # One physical/QMP key-down only. The guest PIT must create every
+            # subsequent Backspace repeat until the single key-up below.
+            qmp("input-send-event", {"events": [
+                QMP["key_event"]("backspace", True)]})
+            time.sleep(0.85)
+            qmp("input-send-event", {"events": [
+                QMP["key_event"]("backspace", False)]})
+            time.sleep(0.20)
+
+            after_screens = decode_terminal("m67-after-repeat", prompt)
+            after_rows = after_screens[terminal_a]
+            after_suffix = prompt_suffix(after_rows)
+            if (not before_suffix.startswith(after_suffix) or
+                    len(after_suffix) > len(before_suffix) - 3):
+                raise RuntimeError(
+                    "M67 held Backspace did not delete multiple characters: "
+                    f"before={before_suffix!r} after={after_suffix!r}")
+            print("M67 held Backspace deleted "
+                  f"{len(before_suffix) - len(after_suffix)} characters "
+                  "from one QMP key-down")
+
+            for _ in after_suffix:
+                key("backspace")
+            cleared = prompt_suffix(
+                decode_terminal("m67-cleared-line", prompt)[terminal_a])
+            if cleared != "":
+                raise RuntimeError(f"M67 line did not clear: {cleared!r}")
+
+            launch_marker = "wm: Super+Return spawned /bin/boring-terminal"
+            before_launches = text().count(launch_marker)
+            qmp("input-send-event", {"events": [
+                QMP["key_event"]("meta_l", True),
+                QMP["key_event"]("ret", True)]})
+            time.sleep(0.85)
+            qmp("input-send-event", {"events": [
+                QMP["key_event"]("ret", False),
+                QMP["key_event"]("meta_l", False)]})
+            witness(launch_marker, before_launches + 1)
+            time.sleep(0.25)
+            if text().count(launch_marker) != before_launches + 1:
+                raise RuntimeError(
+                    "M67 held Super+Return launched more than one terminal")
+
+            dual = latest(2, prompt["frame"])
+            focused_pid = next(tile["pid"] for tile in dual["tiles"]
+                               if tile["token"] == dual["focus"])
+            type_text("normal")
+            dual_screens = decode_terminal("m67-ordinary-typing", dual)
+            if not any("normal" in row for row in dual_screens[focused_pid]):
+                raise RuntimeError("M67 ordinary typing regression")
+
+            key("q", super_key=True)
+            witness("boring-terminal: graceful cleanup complete")
+            single = latest(1, dual["frame"])
+            key("q", super_key=True)
+            witness("boring-terminal: graceful cleanup complete", 2)
+            witness("wm: session empty; clean exit")
+            witness("boring-init: desktop WM exited status 0")
+            witness("display: session drained; exiting with claims")
+            witness("boring-init: desktop display exited status 0")
+            witness("boring-init: desktop session drained")
+            witness("m37-desktop: IPC/input/framebuffer/M32/PTY desktop resources drained")
+            witness("m37-desktop: all spawned desktop tasks/processes reaped; PID 1 remains")
+            witness("M54 USB-only graphical desktop acceptance passed.")
+            witness("M37 native desktop session startup acceptance passed.")
+            (OUT / "SUCCESS.txt").write_text(
+                "M67 typematic + M54 USB-only desktop SUCCESS\n"
+                "One QMP key-down held Backspace deleted multiple characters; "
+                "held Super+Return launched exactly one terminal; ordinary typing "
+                "and desktop teardown remained green.\n")
+            print(f"M67 typematic USB desktop SUCCESS; evidence: {OUT}")
+            return
 
         run_fetch(terminal_a)
         fetch_frame = latest(1, prompt["frame"] - 1)
