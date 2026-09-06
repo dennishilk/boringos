@@ -129,14 +129,28 @@ def main():
     runtime_xhci_observe = function_body(
         breadcrumbs,
         "void boring_m61_runtime_xhci_observe(")
+    m66_usb_mouse_witness = function_body(
+        breadcrumbs,
+        "void boring_m66_physical_usb_mouse_witness(")
     if (console.count("x86_64_out8") != 0 or
-            breadcrumbs.count("x86_64_out8") != 5 or
+            breadcrumbs.count("x86_64_out8") != 6 or
             framebuffer_fault.count("x86_64_out8") != 1 or
             post37_witness.count("x86_64_out8") != 1 or
             runtime_hid_post.count("x86_64_out8") != 1 or
-            runtime_xhci_observe.count("x86_64_out8") != 1):
+            runtime_xhci_observe.count("x86_64_out8") != 1 or
+            m66_usb_mouse_witness.count("x86_64_out8") != 1):
         raise RuntimeError(
-            "M61 direct port-0x80 diagnostics escaped their bounded seams")
+            "M61/M66 direct port-0x80 diagnostics escaped their bounded seams")
+    for required in (
+            "(code < (uint8_t)M66_POST_ALL_XHCI_READY)",
+            "(code > (uint8_t)M66_POST_CANONICAL_MOUSE_MOVE)",
+            "(m66_physical_usb_mouse_observed & bit) != 0U",
+            "m66_physical_usb_mouse_observed =",
+            "(uint16_t)(m66_physical_usb_mouse_observed | bit);",
+    ):
+        if required not in m66_usb_mouse_witness:
+            raise RuntimeError(
+                f"M66 USB mouse POST diagnostic lost bounded guard: {required}")
     for required in (
             "!m61_runtime_hid_armed",
             "m61_runtime_hid_highest >=",
@@ -164,6 +178,7 @@ def main():
     print("POST90_FAULT_DIAGNOSTIC_BOUNDED=YES")
     print("HANDOFF_GAP_POST_DIAGNOSTIC_BOUNDED=YES")
     print("POST37_CONTROL_FLOW_DIAGNOSTIC_BOUNDED=YES")
+    print("M66_USB_MOUSE_POST_DIAGNOSTIC_BOUNDED=YES")
     print("EARLY_STATIC_HISTORY_BOUNDED=YES")
     print("FRAMEBUFFER_ACTIVATION_POINT=after successful normal framebuffer present")
 
