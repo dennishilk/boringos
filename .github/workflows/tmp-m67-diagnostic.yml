@@ -1,0 +1,94 @@
+name: Temporary M67 diagnostic
+
+on:
+  push:
+    branches: [agent/m67-m69-input-display-polish]
+
+permissions:
+  contents: write
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/m67-m69-input-display-polish
+      - name: Add narrow typematic witnesses
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('kernel/core/input.c')
+          s = p.read_text()
+          inc = '#include <boring/timer.h>\n#if defined(BORING_M54_USB_ONLY_DESKTOP)\n#include <boring/serial.h>\n#endif\n'
+          old = '#include <boring/timer.h>\n'
+          if inc not in s:
+              if old not in s:
+                  raise SystemExit('input include anchor missing')
+              s = s.replace(old, inc, 1)
+
+          old = '''    } else if ((!down) && (input_state.repeat_key == code)) {
+        input_clear_repeat();
+    }
+'''
+          new = '''    } else if ((!down) && (input_state.repeat_key == code)) {
+#if defined(BORING_M54_USB_ONLY_DESKTOP)
+        serial_write_string("M67_REPEAT_KEY_UP\\n");
+#endif
+        input_clear_repeat();
+    }
+'''
+          if new not in s:
+              if old not in s:
+                  raise SystemExit('keyup anchor missing')
+              s = s.replace(old, new, 1)
+
+          old = '    event.type = BORING_INPUT_EVENT_KEY;\n    event.code = input_state.repeat_key;\n'
+          new = '''#if defined(BORING_M54_USB_ONLY_DESKTOP)
+    serial_write_string("M67_REPEAT_DUE\\n");
+#endif
+    event.type = BORING_INPUT_EVENT_KEY;
+    event.code = input_state.repeat_key;
+'''
+          if new not in s:
+              if old not in s:
+                  raise SystemExit('repeat anchor missing')
+              s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          p = Path('tests/m54-usb-only-desktop-qemu.py')
+          s = p.read_text()
+          old = '''            time.sleep(0.85)
+            qmp("input-send-event", {"events": [
+                QMP["key_event"]("backspace", False)]})
+'''
+          new = '''            time.sleep(0.85)
+            due_before_up = text().count("M67_REPEAT_DUE")
+            print(f"M67 diagnostic due_before_up={due_before_up}")
+            qmp("input-send-event", {"events": [
+                QMP["key_event"]("backspace", False)]})
+'''
+          if new not in s:
+              if old not in s:
+                  raise SystemExit('harness hold anchor missing')
+              s = s.replace(old, new, 1)
+          old = '''                    "M67 held Backspace did not delete multiple characters: "
+                    f"before={before_suffix!r} after={after_suffix!r}")
+'''
+          new = '''                    "M67 held Backspace did not delete multiple characters: "
+                    f"before={before_suffix!r} after={after_suffix!r} "
+                    f"due_before_up={due_before_up} "
+                    f"repeat_key_up={text().count('M67_REPEAT_KEY_UP')}")
+'''
+          if new not in s:
+              if old not in s:
+                  raise SystemExit('harness error anchor missing')
+              s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add kernel/core/input.c tests/m54-usb-only-desktop-qemu.py
+          git commit -m 'diag: witness M67 repeat generation'
+          git push origin HEAD:agent/m67-m69-input-display-polish
