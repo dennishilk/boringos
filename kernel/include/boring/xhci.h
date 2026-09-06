@@ -300,6 +300,10 @@ bool xhci_build_hub_set_port_feature_control_td(
     struct xhci_control_td *td, uint64_t ep0_ring_physical,
     uint16_t producer_index, bool producer_cycle,
     uint8_t port, uint16_t feature);
+bool xhci_build_hub_clear_port_feature_control_td(
+    struct xhci_control_td *td, uint64_t ep0_ring_physical,
+    uint16_t producer_index, bool producer_cycle,
+    uint8_t port, uint16_t feature);
 bool xhci_build_hid_set_protocol_control_td(
     struct xhci_control_td *td, uint64_t ep0_ring_physical,
     uint16_t producer_index, bool producer_cycle, uint8_t interface_number);

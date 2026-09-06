@@ -171,11 +171,115 @@ static void port_status_test(void) {
           "short port status rejected");
 }
 
+
+static void hub_reset_state_test(void) {
+    struct boring_usb_hub_port_status port;
+    enum boring_usb_hub_reset_observation observation =
+        BORING_USB_HUB_RESET_INVALID;
+    bool clear_reset_change = false;
+    uint8_t resetting[4] = {0x11U, 0x05U, 0x00U, 0x00U};
+    uint8_t resetting_enabled[4] = {0x13U, 0x05U, 0x01U, 0x00U};
+    uint8_t complete_disabled[4] = {0x01U, 0x05U, 0x00U, 0x00U};
+    uint8_t complete[4] = {0x03U, 0x05U, 0x10U, 0x00U};
+    uint8_t complete_mixed_change[4] = {0x03U, 0x05U, 0x11U, 0x00U};
+    uint8_t disconnected[4] = {0x00U, 0x05U, 0x00U, 0x00U};
+    unsigned poll;
+
+    check(BORING_USB_HUB_RESET_POLL_LIMIT == 80U,
+          "bounded hub reset poll limit");
+    check(boring_usb_parse_hub_port_status(
+              complete, (uint16_t)sizeof(complete), &port) &&
+          (boring_usb_hub_port_reset_observe(
+               &port, &clear_reset_change) == BORING_USB_HUB_RESET_READY) &&
+          clear_reset_change,
+          "hub reset completes immediately");
+
+    for (poll = 0U; poll < 3U; ++poll) {
+        clear_reset_change = true;
+        check(boring_usb_parse_hub_port_status(
+                  resetting, (uint16_t)sizeof(resetting), &port) &&
+              (boring_usb_hub_port_reset_observe(
+                   &port, &clear_reset_change) ==
+               BORING_USB_HUB_RESET_WAIT_RESET) &&
+              !clear_reset_change,
+              "hub reset remains active across polls");
+    }
+    check(boring_usb_parse_hub_port_status(
+              complete, (uint16_t)sizeof(complete), &port) &&
+          (boring_usb_hub_port_reset_observe(
+               &port, &clear_reset_change) == BORING_USB_HUB_RESET_READY),
+          "hub reset completes after several polls");
+
+    check(boring_usb_parse_hub_port_status(
+              resetting_enabled, (uint16_t)sizeof(resetting_enabled), &port) &&
+          (boring_usb_hub_port_reset_observe(
+               &port, &clear_reset_change) ==
+           BORING_USB_HUB_RESET_WAIT_RESET),
+          "enable does not outrun reset completion");
+    check(boring_usb_parse_hub_port_status(
+              complete_disabled, (uint16_t)sizeof(complete_disabled), &port) &&
+          (boring_usb_hub_port_reset_observe(
+               &port, &clear_reset_change) ==
+           BORING_USB_HUB_RESET_WAIT_ENABLE),
+          "hub reset waits for enable after reset clears");
+
+    check(boring_usb_parse_hub_port_status(
+              disconnected, (uint16_t)sizeof(disconnected), &port) &&
+          (boring_usb_hub_port_reset_observe(
+               &port, &clear_reset_change) ==
+           BORING_USB_HUB_RESET_DISCONNECTED),
+          "disconnect during hub reset fails");
+    check(!boring_usb_parse_hub_port_status(resetting, 3U, &port),
+          "malformed reset GET_STATUS fails");
+
+    port.status = 0U;
+    port.change = 0U;
+    port.speed = 0U;
+    port.connected = true;
+    port.enabled = true;
+    port.reset = false;
+    port.powered = true;
+    check(boring_usb_hub_port_reset_observe(
+              &port, &clear_reset_change) ==
+          BORING_USB_HUB_RESET_INVALID_SPEED,
+          "invalid reset-complete speed fails");
+
+    for (poll = 0U; poll < BORING_USB_HUB_RESET_POLL_LIMIT; ++poll) {
+        check(boring_usb_parse_hub_port_status(
+                  resetting, (uint16_t)sizeof(resetting), &port),
+              "timeout reset status parses");
+        observation = boring_usb_hub_port_reset_observe(
+            &port, &clear_reset_change);
+        if (observation != BORING_USB_HUB_RESET_WAIT_RESET) { break; }
+    }
+    check((poll == BORING_USB_HUB_RESET_POLL_LIMIT) &&
+          (observation == BORING_USB_HUB_RESET_WAIT_RESET),
+          "hub reset timeout stays bounded");
+
+    check(boring_usb_parse_hub_port_status(
+              complete_mixed_change,
+              (uint16_t)sizeof(complete_mixed_change), &port) &&
+          (boring_usb_hub_port_reset_observe(
+               &port, &clear_reset_change) == BORING_USB_HUB_RESET_READY) &&
+          clear_reset_change,
+          "C_PORT_RESET completion change requests reset clear");
+
+    resetting[2] = 0x01U;
+    check(boring_usb_parse_hub_port_status(
+              resetting, (uint16_t)sizeof(resetting), &port) &&
+          (boring_usb_hub_port_reset_observe(
+               &port, &clear_reset_change) ==
+           BORING_USB_HUB_RESET_WAIT_RESET) &&
+          !clear_reset_change,
+          "unrelated change bit cannot fake reset completion");
+}
+
 int main(void) {
     route_test();
     tt_test();
     hub_descriptor_test();
     port_status_test();
+    hub_reset_state_test();
     if (failures != 0U) {
         fprintf(stderr, "usb-topology-host-test: %u failure(s)\n", failures);
         return 1;

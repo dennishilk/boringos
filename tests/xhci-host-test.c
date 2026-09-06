@@ -780,8 +780,18 @@ static void hub_xhci_model_test(void) {
           (td.setup.parameter == 0x0000000400080323ULL),
           "hub PORT_POWER setup");
     check(xhci_build_hub_set_port_feature_control_td(
-              &td, ring, 8U, true, 4U, 4U),
+              &td, ring, 8U, true, 4U,
+              BORING_USB_HUB_PORT_FEATURE_RESET),
           "hub PORT_RESET setup");
+    check(xhci_build_hub_clear_port_feature_control_td(
+              &td, ring, 10U, true, 4U,
+              BORING_USB_HUB_PORT_FEATURE_C_RESET) &&
+          (td.setup.parameter == 0x0000000400140123ULL),
+          "hub C_PORT_RESET clear setup");
+    check(!xhci_build_hub_clear_port_feature_control_td(
+              &td, ring, 12U, true, 4U,
+              BORING_USB_HUB_PORT_FEATURE_POWER),
+          "hub unrelated change clear rejected");
     check(!xhci_build_hub_get_port_status_control_td(
               &td, ring, 0U, true, buffer, 0U) &&
           !xhci_build_hub_set_port_feature_control_td(

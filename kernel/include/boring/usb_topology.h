@@ -9,6 +9,15 @@
 #define BORING_USB_HUB_DESCRIPTOR_MAX_PORTS 15U
 #define BORING_USB_HUB_DESCRIPTOR_MAX_BYTES 11U
 
+#define BORING_USB_HUB_PORT_FEATURE_RESET 4U
+#define BORING_USB_HUB_PORT_FEATURE_POWER 8U
+#define BORING_USB_HUB_PORT_FEATURE_C_RESET 20U
+#define BORING_USB_HUB_PORT_CHANGE_RESET (1U << 4)
+#define BORING_USB_HUB_RESET_POLL_INTERVAL_MS 10U
+#define BORING_USB_HUB_RESET_TIMEOUT_MS 800U
+#define BORING_USB_HUB_RESET_POLL_LIMIT \
+    (BORING_USB_HUB_RESET_TIMEOUT_MS / BORING_USB_HUB_RESET_POLL_INTERVAL_MS)
+
 #define BORING_USB_SPEED_FULL 1U
 #define BORING_USB_SPEED_LOW 2U
 #define BORING_USB_SPEED_HIGH 3U
@@ -49,6 +58,15 @@ struct boring_usb_hub_port_status {
     bool powered;
 };
 
+enum boring_usb_hub_reset_observation {
+    BORING_USB_HUB_RESET_INVALID = 0,
+    BORING_USB_HUB_RESET_DISCONNECTED,
+    BORING_USB_HUB_RESET_WAIT_RESET,
+    BORING_USB_HUB_RESET_WAIT_ENABLE,
+    BORING_USB_HUB_RESET_INVALID_SPEED,
+    BORING_USB_HUB_RESET_READY
+};
+
 bool boring_usb_topology_root(struct boring_usb_topology *topology,
                               uint8_t root_port, uint8_t speed);
 bool boring_usb_topology_child(const struct boring_usb_topology *parent_hub,
@@ -67,5 +85,7 @@ bool boring_usb_parse_hub_descriptor(const uint8_t *bytes, uint16_t length,
                                      struct boring_usb_hub_descriptor *hub);
 bool boring_usb_parse_hub_port_status(const uint8_t *bytes, uint16_t length,
                                       struct boring_usb_hub_port_status *port);
+enum boring_usb_hub_reset_observation boring_usb_hub_port_reset_observe(
+    const struct boring_usb_hub_port_status *port, bool *clear_reset_change);
 
 #endif

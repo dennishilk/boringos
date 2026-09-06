@@ -135,6 +135,8 @@ uint8_t boring_m61_xhci_failure_reason(void) {
 #define XHCI_PORT_BASE 0x400U
 #define XHCI_PORT_STRIDE 0x10U
 #define XHCI_RUNTIME_INTERRUPTER0 0x20U
+#define XHCI_MFINDEX_MASK 0x3fffU
+#define XHCI_MICROFRAMES_PER_MS 8U
 #define XHCI_WAIT_LIMIT 10000000U
 #define XHCI_EXTENDED_CAP_LIMIT 64U
 #define XHCI_LEGACY_CAP_ID 1U
@@ -287,6 +289,45 @@ static bool wait_mask(volatile uint8_t *base, uint32_t offset,
         x86_64_pause();
     }
     return false;
+}
+
+static bool wait_microframes(struct xhci_controller *controller,
+                             uint32_t microframes) {
+    uint32_t previous;
+    uint32_t elapsed = 0U;
+    uint32_t stalled = 0U;
+    uint32_t offset;
+
+    if ((controller == NULL) || (controller->runtime.mmio == NULL) ||
+        (microframes == 0U) || (microframes > XHCI_MFINDEX_MASK)) {
+        return false;
+    }
+    offset = controller->state.capabilities.runtime_offset;
+    previous = mmio_read32(controller->runtime.mmio, offset) &
+               XHCI_MFINDEX_MASK;
+    while (elapsed < microframes) {
+        const uint32_t current =
+            mmio_read32(controller->runtime.mmio, offset) & XHCI_MFINDEX_MASK;
+        if (current == previous) {
+            if (stalled == XHCI_WAIT_LIMIT) { return false; }
+            ++stalled;
+            x86_64_pause();
+            continue;
+        }
+        elapsed += (current - previous) & XHCI_MFINDEX_MASK;
+        previous = current;
+        stalled = 0U;
+    }
+    return true;
+}
+
+static bool wait_milliseconds(struct xhci_controller *controller,
+                              uint16_t milliseconds) {
+    const uint32_t microframes =
+        (uint32_t)milliseconds * XHCI_MICROFRAMES_PER_MS;
+    return (milliseconds == 0U) ||
+           ((microframes <= XHCI_MFINDEX_MASK) &&
+            wait_microframes(controller, microframes));
 }
 
 static bool frame_alloc_zero(uint64_t *physical, void **virtual_address) {
@@ -1411,6 +1452,56 @@ static bool ep0_submit_hub_set_port_feature(
     return true;
 }
 
+static bool ep0_submit_hub_clear_port_feature(
+    struct xhci_controller *controller, struct xhci_addressed_device *device,
+    uint8_t port, uint16_t feature) {
+    void *ep0_virtual = NULL;
+    volatile struct xhci_trb *ring;
+    struct xhci_control_td td;
+    struct xhci_dispatch_result result;
+    uint16_t start_index;
+    uint32_t doorbell;
+
+    if ((controller == NULL) || (device == NULL) || !device->addressed ||
+        device->control_outstanding || controller->runtime.command_outstanding ||
+        (device->slot_id == 0U) ||
+        !vmm_pmm_frame_to_hhdm(device->ep0_ring_physical, &ep0_virtual) ||
+        !xhci_build_hub_clear_port_feature_control_td(
+            &td, device->ep0_ring_physical, device->ep0_producer_index,
+            device->ep0_producer_cycle, port, feature)) {
+        return false;
+    }
+    ring = (volatile struct xhci_trb *)ep0_virtual;
+    start_index = device->ep0_producer_index;
+    ring[start_index] = td.setup;
+    ring[(uint16_t)(start_index + 1U)] = td.status;
+    if (start_index == XHCI_EP0_RING_USABLE - 2U) {
+        ring[XHCI_EP0_RING_USABLE].parameter = device->ep0_ring_physical;
+        ring[XHCI_EP0_RING_USABLE].status = 0U;
+        ring[XHCI_EP0_RING_USABLE].control =
+            ((uint32_t)XHCI_TRB_TYPE_LINK << XHCI_TRB_TYPE_SHIFT) |
+            XHCI_TRB_TOGGLE_CYCLE |
+            (device->ep0_producer_cycle ? XHCI_TRB_CYCLE : 0U);
+    }
+    device->expected_status_trb_physical = td.status_physical;
+    device->control_outstanding = true;
+    device->ep0_producer_index = td.next_producer_index;
+    device->ep0_producer_cycle = td.next_producer_cycle;
+    memory_barrier();
+    doorbell = controller->state.capabilities.doorbell_offset +
+               ((uint32_t)device->slot_id * 4U);
+    mmio_write32(controller->runtime.mmio, doorbell, 1U);
+    if (!event_dispatch_wait(controller, XHCI_EXPECT_CONTROL_NODATA_STATUS,
+                             0ULL, device, &result)) {
+        device->control_outstanding = false;
+        device->expected_status_trb_physical = 0ULL;
+        return false;
+    }
+    device->control_outstanding = false;
+    device->expected_status_trb_physical = 0ULL;
+    return true;
+}
+
 static bool configure_hub_slot(struct xhci_controller *controller,
                                struct xhci_addressed_device *device) {
     void *input_virtual = NULL;
@@ -1502,6 +1593,117 @@ fail:
     return false;
 }
 
+static bool wait_for_downstream_port_reset(
+    struct xhci_controller *controller, struct xhci_addressed_device *hub,
+    uint8_t port, uint8_t *hub_bytes,
+    struct boring_usb_hub_port_status *completed_status) {
+    uint16_t actual = 0U;
+    uint16_t poll;
+    bool first_status = true;
+
+    if ((controller == NULL) || (hub == NULL) || (hub_bytes == NULL) ||
+        (completed_status == NULL)) {
+        return false;
+    }
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    boring_m66_physical_usb_mouse_witness((uint8_t)M66_POST_RESET_SET_ENTER);
+#endif
+    if (!ep0_submit_hub_set_port_feature(
+            controller, hub, port, BORING_USB_HUB_PORT_FEATURE_RESET) ||
+        (controller->state.hub_ports_reset == UINT32_MAX)) {
+        return false;
+    }
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    boring_m66_physical_usb_mouse_witness(
+        (uint8_t)M66_POST_RESET_SET_COMPLETE);
+#endif
+    ++controller->state.hub_ports_reset;
+
+    for (poll = 0U; poll < (uint16_t)BORING_USB_HUB_RESET_POLL_LIMIT; ++poll) {
+        struct boring_usb_hub_port_status status;
+        enum boring_usb_hub_reset_observation observation;
+        bool clear_reset_change = false;
+
+        if (!wait_milliseconds(
+                controller,
+                (uint16_t)BORING_USB_HUB_RESET_POLL_INTERVAL_MS) ||
+            !ep0_submit_hub_in(controller, hub, false, port, 4U, &actual)) {
+            return false;
+        }
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        if (first_status) {
+            boring_m66_physical_usb_mouse_witness(
+                (uint8_t)M66_POST_RESET_FIRST_STATUS_COMPLETE);
+        }
+#endif
+        if (actual != 4U) { return false; }
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        if (first_status) {
+            boring_m66_physical_usb_mouse_witness(
+                (uint8_t)M66_POST_RESET_FIRST_STATUS_RAW);
+        }
+#endif
+        if (!boring_usb_parse_hub_port_status(
+                hub_bytes, actual, &status)) {
+            return false;
+        }
+        first_status = false;
+        observation = boring_usb_hub_port_reset_observe(
+            &status, &clear_reset_change);
+        if ((observation == BORING_USB_HUB_RESET_DISCONNECTED) ||
+            (observation == BORING_USB_HUB_RESET_INVALID)) {
+            return false;
+        }
+        if (observation == BORING_USB_HUB_RESET_WAIT_RESET) {
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+            boring_m66_physical_usb_mouse_witness(
+                (uint8_t)M66_POST_RESET_STILL_ACTIVE);
+#endif
+            continue;
+        }
+        if (observation == BORING_USB_HUB_RESET_WAIT_ENABLE) {
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+            boring_m66_physical_usb_mouse_witness(
+                (uint8_t)M66_POST_RESET_COMPLETE_DISABLED);
+#endif
+            continue;
+        }
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        boring_m66_physical_usb_mouse_witness(
+            (uint8_t)M66_POST_RESET_COMPLETE_ENABLED);
+#endif
+        if (observation == BORING_USB_HUB_RESET_INVALID_SPEED) {
+            return false;
+        }
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        boring_m66_physical_usb_mouse_witness(
+            (uint8_t)M66_POST_RESET_SPEED_VALID);
+#endif
+        if (clear_reset_change) {
+            enum boring_usb_hub_reset_observation after_clear;
+            bool still_clear = false;
+            if (!ep0_submit_hub_clear_port_feature(
+                    controller, hub, port,
+                    BORING_USB_HUB_PORT_FEATURE_C_RESET) ||
+                !ep0_submit_hub_in(
+                    controller, hub, false, port, 4U, &actual) ||
+                (actual != 4U) ||
+                !boring_usb_parse_hub_port_status(
+                    hub_bytes, actual, &status)) {
+                return false;
+            }
+            after_clear = boring_usb_hub_port_reset_observe(
+                &status, &still_clear);
+            if ((after_clear != BORING_USB_HUB_RESET_READY) || still_clear) {
+                return false;
+            }
+        }
+        *completed_status = status;
+        return true;
+    }
+    return false;
+}
+
 static bool configure_and_enumerate_hub(
     struct xhci_controller *controller, struct xhci_addressed_device *hub) {
     void *hub_buffer_virtual = NULL;
@@ -1542,12 +1744,16 @@ static bool configure_and_enumerate_hub(
     for (port = 1U; port <= hub->hub_descriptor.port_count; ++port) {
         struct boring_usb_hub_port_status status;
         struct xhci_addressed_device *child;
-        if (!ep0_submit_hub_set_port_feature(controller, hub, port, 8U) ||
+        if (!ep0_submit_hub_set_port_feature(
+                controller, hub, port, BORING_USB_HUB_PORT_FEATURE_POWER) ||
             (controller->state.hub_ports_powered == UINT32_MAX)) {
             return false;
         }
         ++controller->state.hub_ports_powered;
-        if (!ep0_submit_hub_in(controller, hub, false, port, 4U, &actual) ||
+        if (!wait_milliseconds(
+                controller,
+                (uint16_t)((uint16_t)hub->hub_descriptor.power_good_2ms * 2U)) ||
+            !ep0_submit_hub_in(controller, hub, false, port, 4U, &actual) ||
             (actual != 4U) ||
             !boring_usb_parse_hub_port_status(hub_bytes, actual, &status)) {
             return false;
@@ -1557,16 +1763,8 @@ static bool configure_and_enumerate_hub(
         boring_m66_physical_usb_mouse_witness(
             (uint8_t)M66_POST_DOWNSTREAM_CONNECTED);
 #endif
-        if (!ep0_submit_hub_set_port_feature(controller, hub, port, 4U) ||
-            (controller->state.hub_ports_reset == UINT32_MAX)) {
-            return false;
-        }
-        ++controller->state.hub_ports_reset;
-        if (!ep0_submit_hub_in(controller, hub, false, port, 4U, &actual) ||
-            (actual != 4U) ||
-            !boring_usb_parse_hub_port_status(hub_bytes, actual, &status) ||
-            !status.connected || !status.enabled || status.reset ||
-            (status.speed == 0U)) {
+        if (!wait_for_downstream_port_reset(
+                controller, hub, port, hub_bytes, &status)) {
             return false;
         }
 #ifdef BORING_M61_PHYSICAL_BREADCRUMBS

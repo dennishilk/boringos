@@ -913,7 +913,22 @@ bool xhci_build_hub_set_port_feature_control_td(
         port, 0U, 0U, 0U
     };
     return (port != 0U) && (port <= BORING_USB_HUB_PORT_MAX) &&
-           ((feature == 4U) || (feature == 8U)) &&
+           ((feature == BORING_USB_HUB_PORT_FEATURE_RESET) ||
+            (feature == BORING_USB_HUB_PORT_FEATURE_POWER)) &&
+           build_no_data_control_td(td, ep0_ring_physical, producer_index,
+                                    producer_cycle, setup);
+}
+
+bool xhci_build_hub_clear_port_feature_control_td(
+    struct xhci_control_td *td, uint64_t ep0_ring_physical,
+    uint16_t producer_index, bool producer_cycle,
+    uint8_t port, uint16_t feature) {
+    const uint8_t setup[8] = {
+        0x23U, 0x01U, (uint8_t)feature, (uint8_t)(feature >> 8U),
+        port, 0U, 0U, 0U
+    };
+    return (port != 0U) && (port <= BORING_USB_HUB_PORT_MAX) &&
+           (feature == BORING_USB_HUB_PORT_FEATURE_C_RESET) &&
            build_no_data_control_td(td, ep0_ring_physical, producer_index,
                                     producer_cycle, setup);
 }

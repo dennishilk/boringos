@@ -187,6 +187,33 @@ bool boring_usb_parse_hub_descriptor(const uint8_t *bytes, uint16_t length,
     return true;
 }
 
+enum boring_usb_hub_reset_observation boring_usb_hub_port_reset_observe(
+    const struct boring_usb_hub_port_status *port, bool *clear_reset_change) {
+    if (clear_reset_change == NULL) {
+        return BORING_USB_HUB_RESET_INVALID;
+    }
+    *clear_reset_change = false;
+    if (port == NULL) {
+        return BORING_USB_HUB_RESET_INVALID;
+    }
+    if (!port->connected) {
+        return BORING_USB_HUB_RESET_DISCONNECTED;
+    }
+    if (port->reset) {
+        return BORING_USB_HUB_RESET_WAIT_RESET;
+    }
+    if (!port->enabled) {
+        return BORING_USB_HUB_RESET_WAIT_ENABLE;
+    }
+    if ((port->speed < BORING_USB_SPEED_FULL) ||
+        (port->speed > BORING_USB_SPEED_HIGH)) {
+        return BORING_USB_HUB_RESET_INVALID_SPEED;
+    }
+    *clear_reset_change =
+        (port->change & (uint16_t)BORING_USB_HUB_PORT_CHANGE_RESET) != 0U;
+    return BORING_USB_HUB_RESET_READY;
+}
+
 bool boring_usb_parse_hub_port_status(const uint8_t *bytes, uint16_t length,
                                       struct boring_usb_hub_port_status *port) {
     struct boring_usb_hub_port_status value = {0U};
