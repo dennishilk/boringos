@@ -178,9 +178,48 @@ int main(void) {
            (input_events == 1U) && (input_irqs == 1U),
            "real mouse movement reaches input submission");
 
+    input_events = 0U;
+    input_irqs = 0U;
+    expected = TEST_RING_PHYSICAL + (5ULL * XHCI_TRB_SIZE);
+    runtime = prepare_keyboard(&state, expected);
+    state.addressed[0].hid_configuration.endpoints[0].max_packet = 5U;
+    state.addressed[0].hid_configuration.endpoints[0].report_format =
+        XHCI_HID_REPORT_GENERIC_MOUSE;
+    state.addressed[0].hid_configuration.endpoints[0].mouse_layout =
+        (struct usb_hid_mouse_layout){
+            .report_bits = 32U,
+            .buttons_bit_offset = 0U,
+            .x_bit_offset = 8U,
+            .y_bit_offset = 16U,
+            .wheel_bit_offset = 24U,
+            .report_id = 5U,
+            .button_count = 3U,
+            .x_bits = 8U,
+            .y_bits = 8U,
+            .wheel_bits = 8U,
+            .has_report_id = true,
+            .has_wheel = true,
+        };
+    report_page[0] = 5U;
+    report_page[1] = 1U;
+    report_page[2] = 0xfeU;
+    report_page[3] = 3U;
+    report_page[4] = 0U;
+    event = transfer_event(expected, 0U);
+    completed = 0U;
+    expect(m52_complete_event(&state, &event, &completed) &&
+           (runtime->pointer_reports == 1U) &&
+           (runtime->last_pointer_x == (uint16_t)-2) &&
+           (runtime->last_pointer_y == 3U) &&
+           (runtime->last_pointer_buttons == 1U) &&
+           (completed == 1U) && (input_events == 2U) &&
+           (input_irqs == 2U),
+           "generic Report-ID mouse reaches canonical input submission");
+
     if (failures != 0) { return 1; }
     puts("M61 HID decode failure transaction: PASS");
     puts("M61 HID valid no-change completion: PASS");
     puts("M61 HID real key/mouse transition submission: PASS");
+    puts("M66 generic Report-ID mouse transition submission: PASS");
     return 0;
 }

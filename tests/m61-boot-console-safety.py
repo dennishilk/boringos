@@ -142,8 +142,11 @@ def main():
         raise RuntimeError(
             "M61/M66 direct port-0x80 diagnostics escaped their bounded seams")
     for required in (
-            "(code < (uint8_t)M66_POST_ALL_XHCI_READY)",
-            "(code > (uint8_t)M66_POST_RESET_SPEED_VALID)",
+            "code >= (uint8_t)M66_POST_CONFIGURATION_VALID",
+            "code <= (uint8_t)M66_POST_MOUSE_LAYOUT_SELECTED",
+            "code >= (uint8_t)M66_POST_ALL_XHCI_READY",
+            "code <= (uint8_t)M66_POST_RESET_SPEED_VALID",
+            "(uint8_t)(20U +",
             "(m66_physical_usb_mouse_observed & bit) != 0U",
             "m66_physical_usb_mouse_observed =",
             "(uint32_t)(m66_physical_usb_mouse_observed | bit);",

@@ -842,6 +842,7 @@ static void device_frames_release(struct xhci_addressed_device *device) {
     for (index = 0U; index < XHCI_MAX_HID_ENDPOINTS; ++index) {
         frame_release(device->hid_ring_physical[index]);
     }
+    frame_release(device->hid_report_descriptor_physical);
     frame_release(device->hub_control_buffer_physical);
     frame_release(device->descriptor_buffer_physical);
     frame_release(device->ep0_ring_physical);
@@ -916,11 +917,11 @@ fail:
     return false;
 }
 
-static bool ep0_submit_get_descriptor(struct xhci_controller *controller, struct xhci_addressed_device *device,
-                                      uint8_t descriptor_type,
-                                      uint8_t descriptor_index,
-                                      uint16_t length,
-                                      uint16_t *actual_length) {
+static bool ep0_submit_descriptor_to(
+    struct xhci_controller *controller, struct xhci_addressed_device *device,
+    uint64_t buffer_physical, uint8_t descriptor_type,
+    uint8_t descriptor_index, uint8_t interface_number,
+    bool hid_report, uint16_t length, uint16_t *actual_length) {
     void *ep0_virtual = NULL;
     void *buffer_virtual = NULL;
     volatile struct xhci_trb *ring;
@@ -935,7 +936,7 @@ static bool ep0_submit_get_descriptor(struct xhci_controller *controller, struct
 
     if ((device == NULL) || (actual_length == NULL) || !device->addressed ||
         device->control_outstanding || controller->runtime.command_outstanding ||
-        (device->descriptor_buffer_physical == 0ULL) ||
+        (buffer_physical == 0ULL) ||
         (length == 0U) || (length > XHCI_DESCRIPTOR_BUFFER_BYTES) ||
         (device->slot_id == 0U) ||
         (controller->state.capabilities.doorbell_offset >
@@ -944,12 +945,22 @@ static bool ep0_submit_get_descriptor(struct xhci_controller *controller, struct
          (XHCI_MMIO_WINDOW_SIZE - controller->state.capabilities.doorbell_offset -
           4U) / 4U) ||
         !vmm_pmm_frame_to_hhdm(device->ep0_ring_physical, &ep0_virtual) ||
-        !vmm_pmm_frame_to_hhdm(device->descriptor_buffer_physical,
-                               &buffer_virtual) ||
-        !xhci_build_get_descriptor_control_td(
-            &td, device->ep0_ring_physical, device->ep0_producer_index,
-            device->ep0_producer_cycle, device->descriptor_buffer_physical,
-            descriptor_type, descriptor_index, length)) {
+        !vmm_pmm_frame_to_hhdm(buffer_physical, &buffer_virtual)) {
+        return false;
+    }
+    if (hid_report) {
+        if ((descriptor_type != XHCI_USB_DESCRIPTOR_REPORT) ||
+            !xhci_build_hid_get_report_descriptor_control_td(
+                &td, device->ep0_ring_physical, device->ep0_producer_index,
+                device->ep0_producer_cycle, buffer_physical,
+                interface_number, length)) {
+            return false;
+        }
+    } else if (!xhci_build_get_descriptor_control_td(
+                   &td, device->ep0_ring_physical,
+                   device->ep0_producer_index, device->ep0_producer_cycle,
+                   buffer_physical, descriptor_type, descriptor_index,
+                   length)) {
         return false;
     }
     ring = (volatile struct xhci_trb *)ep0_virtual;
@@ -977,6 +988,12 @@ static bool ep0_submit_get_descriptor(struct xhci_controller *controller, struct
     memory_barrier();
     doorbell = controller->state.capabilities.doorbell_offset +
                ((uint32_t)device->slot_id * 4U);
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    if (hid_report && (device->topology.depth != 0U)) {
+        boring_m66_physical_usb_mouse_witness(
+            (uint8_t)M66_POST_REPORT_DESCRIPTOR_REQUESTED);
+    }
+#endif
     mmio_write32(controller->runtime.mmio, doorbell, 1U);
 
     if (!event_dispatch_wait(controller, XHCI_EXPECT_CONTROL_FIRST, 0ULL, device, &first)) {
@@ -1001,7 +1018,33 @@ static bool ep0_submit_get_descriptor(struct xhci_controller *controller, struct
     }
     device->descriptor_bytes += (uint32_t)actual;
     *actual_length = actual;
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    if (hid_report && (device->topology.depth != 0U)) {
+        boring_m66_physical_usb_mouse_witness(
+            (uint8_t)M66_POST_REPORT_DESCRIPTOR_RECEIVED);
+    }
+#endif
     return true;
+}
+
+static bool ep0_submit_get_descriptor(
+    struct xhci_controller *controller, struct xhci_addressed_device *device,
+    uint8_t descriptor_type, uint8_t descriptor_index,
+    uint16_t length, uint16_t *actual_length) {
+    if (device == NULL) { return false; }
+    return ep0_submit_descriptor_to(
+        controller, device, device->descriptor_buffer_physical,
+        descriptor_type, descriptor_index, 0U, false, length, actual_length);
+}
+
+static bool ep0_submit_hid_report_descriptor(
+    struct xhci_controller *controller, struct xhci_addressed_device *device,
+    uint8_t interface_number, uint16_t length, uint16_t *actual_length) {
+    if (device == NULL) { return false; }
+    return ep0_submit_descriptor_to(
+        controller, device, device->hid_report_descriptor_physical,
+        XHCI_USB_DESCRIPTOR_REPORT, 0U, interface_number, true,
+        length, actual_length);
 }
 
 static bool descriptor_buffer_bytes(struct xhci_addressed_device *device,
@@ -1176,6 +1219,148 @@ static bool command_configure_hid(struct xhci_controller *controller, struct xhc
     return true;
 }
 
+static enum xhci_hid_rejection_reason report_parse_rejection(
+    enum usb_hid_report_parse_result result) {
+    switch (result) {
+        case USB_HID_REPORT_PARSE_MALFORMED:
+            return XHCI_HID_REJECT_REPORT_DESCRIPTOR_MALFORMED;
+        case USB_HID_REPORT_PARSE_BIT_OVERFLOW:
+            return XHCI_HID_REJECT_REPORT_BIT_OVERFLOW;
+        case USB_HID_REPORT_PARSE_VALID_UNSUPPORTED:
+            return XHCI_HID_REJECT_REPORT_LAYOUT_UNSUPPORTED;
+        case USB_HID_REPORT_PARSE_SUPPORTED:
+        default:
+            return XHCI_HID_REJECT_NONE;
+    }
+}
+
+static bool select_generic_mouse_reports(
+    struct xhci_controller *controller, struct xhci_addressed_device *device,
+    const struct xhci_hid_configuration *parsed,
+    struct xhci_hid_configuration *selected,
+    enum xhci_hid_rejection_reason *first_reason) {
+    uint8_t processed_interfaces[XHCI_MAX_HID_ENDPOINTS] = {0U};
+    uint8_t processed_count = 0U;
+    uint8_t index;
+
+    if ((controller == NULL) || (device == NULL) || (parsed == NULL) ||
+        (selected == NULL) || (first_reason == NULL)) {
+        return false;
+    }
+    for (index = 0U; index < parsed->endpoint_count; ++index) {
+        const struct xhci_hid_endpoint_descriptor *candidate =
+            &parsed->endpoints[index];
+        struct usb_hid_mouse_layout layout;
+        enum usb_hid_report_parse_result parse_result;
+        void *report_virtual = NULL;
+        uint16_t actual = 0U;
+        uint16_t report_bytes;
+        uint8_t previous;
+        bool processed = false;
+
+        if (candidate->report_format != XHCI_HID_REPORT_UNSUPPORTED) {
+            continue;
+        }
+        for (previous = 0U; previous < processed_count; ++previous) {
+            if (processed_interfaces[previous] == candidate->interface_number) {
+                processed = true;
+                break;
+            }
+        }
+        if (processed) { continue; }
+        if (processed_count == XHCI_MAX_HID_ENDPOINTS) {
+            return false;
+        }
+        processed_interfaces[processed_count++] = candidate->interface_number;
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        if (device->topology.depth != 0U) {
+            boring_m66_physical_usb_mouse_witness(
+                (uint8_t)M66_POST_GENERIC_MOUSE_CANDIDATE);
+        }
+#endif
+        if (!candidate->hid_descriptor_present ||
+            (candidate->report_descriptor_type !=
+             XHCI_USB_DESCRIPTOR_REPORT) ||
+            (candidate->report_descriptor_length == 0U)) {
+            if (*first_reason == XHCI_HID_REJECT_NONE) {
+                *first_reason = XHCI_HID_REJECT_HID_DESCRIPTOR_MISSING;
+            }
+            continue;
+        }
+        if (candidate->report_descriptor_length >
+            USB_HID_REPORT_DESCRIPTOR_MAX_BYTES) {
+            if (*first_reason == XHCI_HID_REJECT_NONE) {
+                *first_reason = XHCI_HID_REJECT_REPORT_DESCRIPTOR_TOO_LARGE;
+            }
+            continue;
+        }
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        if (device->topology.depth != 0U) {
+            boring_m66_physical_usb_mouse_witness(
+                (uint8_t)M66_POST_HID_DESCRIPTOR_ACCEPTED);
+        }
+#endif
+        if ((device->hid_report_descriptor_physical == 0ULL) &&
+            !frame_alloc_zero(&device->hid_report_descriptor_physical,
+                              &report_virtual)) {
+            if (*first_reason == XHCI_HID_REJECT_NONE) {
+                *first_reason = XHCI_HID_REJECT_RUNTIME_CONFIGURATION;
+            }
+            continue;
+        }
+        if (!ep0_submit_hid_report_descriptor(
+                controller, device, candidate->interface_number,
+                candidate->report_descriptor_length, &actual) ||
+            (actual == 0U) ||
+            !vmm_pmm_frame_to_hhdm(
+                device->hid_report_descriptor_physical, &report_virtual)) {
+            if (*first_reason == XHCI_HID_REJECT_NONE) {
+                *first_reason = XHCI_HID_REJECT_REPORT_CONTROL_TRANSFER;
+            }
+            continue;
+        }
+        parse_result = usb_hid_parse_mouse_report_descriptor(
+            (const uint8_t *)report_virtual, (size_t)actual, &layout);
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        if ((device->topology.depth != 0U) &&
+            ((parse_result == USB_HID_REPORT_PARSE_SUPPORTED) ||
+             (parse_result == USB_HID_REPORT_PARSE_VALID_UNSUPPORTED))) {
+            boring_m66_physical_usb_mouse_witness(
+                (uint8_t)M66_POST_REPORT_DESCRIPTOR_PARSED);
+        }
+#endif
+        if (parse_result != USB_HID_REPORT_PARSE_SUPPORTED) {
+            if (*first_reason == XHCI_HID_REJECT_NONE) {
+                *first_reason = report_parse_rejection(parse_result);
+            }
+            continue;
+        }
+        report_bytes = (uint16_t)((layout.report_bits + 7U) / 8U);
+        if (layout.has_report_id) { ++report_bytes; }
+        if (report_bytes > candidate->max_packet) {
+            if (*first_reason == XHCI_HID_REJECT_NONE) {
+                *first_reason = XHCI_HID_REJECT_REPORT_PACKET_MISMATCH;
+            }
+            continue;
+        }
+        if (selected->endpoint_count == XHCI_MAX_HID_ENDPOINTS) {
+            return false;
+        }
+        selected->endpoints[selected->endpoint_count] = *candidate;
+        selected->endpoints[selected->endpoint_count].report_format =
+            XHCI_HID_REPORT_GENERIC_MOUSE;
+        selected->endpoints[selected->endpoint_count].mouse_layout = layout;
+        ++selected->endpoint_count;
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+        if (device->topology.depth != 0U) {
+            boring_m66_physical_usb_mouse_witness(
+                (uint8_t)M66_POST_MOUSE_LAYOUT_SELECTED);
+        }
+#endif
+    }
+    return true;
+}
+
 static bool configure_hid_device(struct xhci_controller *controller, struct xhci_addressed_device *device) {
     struct xhci_hid_configuration parsed_configuration;
     struct xhci_hid_configuration configuration;
@@ -1183,22 +1368,67 @@ static bool configure_hid_device(struct xhci_controller *controller, struct xhci
     void *input_virtual = NULL;
     uint8_t *descriptor_bytes = NULL;
     uint8_t index;
+    enum xhci_hid_rejection_reason rejection = XHCI_HID_REJECT_NONE;
     bool success = false;
+    if (device != NULL) {
+        device->hid_rejection_reason = XHCI_HID_REJECT_NONE;
+    }
     if ((device == NULL) || !device->addressed || !device->descriptors_ready ||
         device->device_configured || device->hid_endpoint_ready ||
         device->control_outstanding || controller->runtime.command_outstanding ||
         !descriptor_buffer_bytes(device, &descriptor_bytes) ||
-        !xhci_parse_hid_configuration(
+        !xhci_parse_hid_configuration_ex(
             descriptor_bytes, device->descriptors.configuration_length,
-            device->speed, &parsed_configuration) ||
+            device->speed, &parsed_configuration, &rejection) ||
         !xhci_select_supported_hid_configuration(
             &parsed_configuration, device->descriptors.vendor_id,
             device->descriptors.product_id, &configuration)) {
+        if (device != NULL) {
+            device->hid_rejection_reason =
+                (rejection != XHCI_HID_REJECT_NONE)
+                    ? rejection : XHCI_HID_REJECT_RUNTIME_CONFIGURATION;
+        }
         return false;
     }
-    if (configuration.endpoint_count == 0U) { return true; }
-    if (!ep0_submit_set_configuration(controller, device, configuration.configuration_value) ||
-        !configure_hid_boot_protocols(controller, device, &configuration)) {
+    configuration.hid_interface_count = parsed_configuration.hid_interface_count;
+    if (parsed_configuration.endpoint_count == 0U) {
+        device->hid_rejection_reason =
+            XHCI_HID_REJECT_REPORT_LAYOUT_UNSUPPORTED;
+        return true;
+    }
+    if (!ep0_submit_set_configuration(
+            controller, device, configuration.configuration_value)) {
+        device->hid_rejection_reason = XHCI_HID_REJECT_RUNTIME_CONFIGURATION;
+        return false;
+    }
+#ifdef BORING_M61_PHYSICAL_BREADCRUMBS
+    if (device->topology.depth != 0U) {
+        for (index = 0U; index < configuration.endpoint_count; ++index) {
+            if (configuration.endpoints[index].report_format ==
+                XHCI_HID_REPORT_BOOT_MOUSE) {
+                boring_m66_physical_usb_mouse_witness(
+                    (uint8_t)M66_POST_BOOT_MOUSE_FOUND);
+                boring_m66_physical_usb_mouse_witness(
+                    (uint8_t)M66_POST_MOUSE_LAYOUT_SELECTED);
+                break;
+            }
+        }
+    }
+#endif
+    if (!select_generic_mouse_reports(
+            controller, device, &parsed_configuration, &configuration,
+            &rejection)) {
+        device->hid_rejection_reason = XHCI_HID_REJECT_ENDPOINT_CAPACITY;
+        return false;
+    }
+    if (configuration.endpoint_count == 0U) {
+        device->hid_rejection_reason =
+            (rejection != XHCI_HID_REJECT_NONE)
+                ? rejection : XHCI_HID_REJECT_REPORT_LAYOUT_UNSUPPORTED;
+        return true;
+    }
+    if (!configure_hid_boot_protocols(controller, device, &configuration)) {
+        device->hid_rejection_reason = XHCI_HID_REJECT_RUNTIME_CONFIGURATION;
         return false;
     }
     for (index = 0U; index < configuration.endpoint_count; ++index) {
@@ -1232,10 +1462,14 @@ static bool configure_hid_device(struct xhci_controller *controller, struct xhci
     ++device->configure_endpoint_completions;
     device->device_configured = true;
     device->hid_endpoint_ready = true;
+    device->hid_rejection_reason = XHCI_HID_REJECT_NONE;
     success = true;
 out:
     for (index = 0U; index < XHCI_MAX_HID_ENDPOINTS; ++index) {
         frame_release(rings[index]);
+    }
+    if (!success && (device->hid_rejection_reason == XHCI_HID_REJECT_NONE)) {
+        device->hid_rejection_reason = XHCI_HID_REJECT_RUNTIME_CONFIGURATION;
     }
     return success;
 }

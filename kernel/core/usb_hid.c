@@ -152,8 +152,26 @@ static enum m60_hid_classification m60_classify_hid_device(
     struct xhci_hid_configuration parsed;
     struct xhci_hid_configuration supported;
 
-    if ((device == NULL) || !device->addressed || !device->descriptors_ready ||
-        (device->descriptor_buffer_physical == 0ULL) ||
+    if ((device == NULL) || !device->addressed || !device->descriptors_ready) {
+        return M60_HID_INVALID;
+    }
+    if (device->device_configured && device->hid_endpoint_ready) {
+        uint8_t index;
+        if ((device->hid_configuration.endpoint_count == 0U) ||
+            (device->hid_configuration.endpoint_count >
+             XHCI_MAX_HID_ENDPOINTS)) {
+            return M60_HID_INVALID;
+        }
+        for (index = 0U;
+             index < device->hid_configuration.endpoint_count; ++index) {
+            if (device->hid_configuration.endpoints[index].report_format ==
+                XHCI_HID_REPORT_UNSUPPORTED) {
+                return M60_HID_INVALID;
+            }
+        }
+        return M60_HID_SUPPORTED;
+    }
+    if ((device->descriptor_buffer_physical == 0ULL) ||
         (device->descriptors.configuration_length < 9U) ||
         (device->descriptors.configuration_length >
          XHCI_DESCRIPTOR_BUFFER_BYTES) ||

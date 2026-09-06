@@ -123,11 +123,16 @@ void boring_m66_physical_usb_mouse_witness(uint8_t code) {
     uint8_t offset;
     uint32_t bit;
 
-    if ((code < (uint8_t)M66_POST_ALL_XHCI_READY) ||
-        (code > (uint8_t)M66_POST_RESET_SPEED_VALID)) {
+    if ((code >= (uint8_t)M66_POST_CONFIGURATION_VALID) &&
+        (code <= (uint8_t)M66_POST_MOUSE_LAYOUT_SELECTED)) {
+        offset = (uint8_t)(20U +
+            (uint8_t)(code - (uint8_t)M66_POST_CONFIGURATION_VALID));
+    } else if ((code >= (uint8_t)M66_POST_ALL_XHCI_READY) &&
+               (code <= (uint8_t)M66_POST_RESET_SPEED_VALID)) {
+        offset = (uint8_t)(code - (uint8_t)M66_POST_ALL_XHCI_READY);
+    } else {
         return;
     }
-    offset = (uint8_t)(code - (uint8_t)M66_POST_ALL_XHCI_READY);
     bit = (uint32_t)(1U << offset);
     if ((m66_physical_usb_mouse_observed & bit) != 0U) { return; }
     m66_physical_usb_mouse_observed =

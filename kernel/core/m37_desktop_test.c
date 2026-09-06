@@ -188,7 +188,8 @@ static bool m54_hid_protocols_ready(const struct xhci_state *state) {
                 keyboard = true;
             } else if ((report_format == XHCI_HID_REPORT_BOOT_MOUSE) ||
                        (report_format ==
-                        XHCI_HID_REPORT_QEMU_ABSOLUTE_TABLET)) {
+                        XHCI_HID_REPORT_QEMU_ABSOLUTE_TABLET) ||
+                       (report_format == XHCI_HID_REPORT_GENERIC_MOUSE)) {
                 pointer = true;
             }
         }
@@ -230,7 +231,8 @@ static bool m54_usb_runtime_evidence(void) {
                 key_releases += runtime->key_releases;
             } else if ((report_format == XHCI_HID_REPORT_BOOT_MOUSE) ||
                        (report_format ==
-                        XHCI_HID_REPORT_QEMU_ABSOLUTE_TABLET)) {
+                        XHCI_HID_REPORT_QEMU_ABSOLUTE_TABLET) ||
+                       (report_format == XHCI_HID_REPORT_GENERIC_MOUSE)) {
                 pointer = true;
                 pointer_reports += runtime->pointer_reports;
                 if (runtime->last_pointer_buttons != 0U) {

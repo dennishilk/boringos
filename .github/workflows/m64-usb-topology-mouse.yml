@@ -28,6 +28,25 @@ jobs:
             tests/xhci-host-test.c kernel/core/xhci.c kernel/core/usb_topology.c kernel/core/usb_hid.c \
             -o build/xhci-host-test-sanitized
           ASAN_OPTIONS=detect_leaks=0 ./build/xhci-host-test-sanitized
+      - name: Mixed composite HID classification
+        run: |
+          cc -Ikernel/include -std=c11 -fno-builtin -fno-tree-loop-distribute-patterns \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            tests/xhci-mixed-host-test.c kernel/core/xhci.c \
+            kernel/core/usb_topology.c kernel/core/xhci_mixed.c \
+            kernel/core/usb_hid.c -o build/xhci-mixed-host-test
+          build/xhci-mixed-host-test
+          cc -Ikernel/include -std=c11 -fno-builtin -fno-tree-loop-distribute-patterns \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/xhci-mixed-host-test.c kernel/core/xhci.c \
+            kernel/core/usb_topology.c kernel/core/xhci_mixed.c \
+            kernel/core/usb_hid.c -o build/xhci-mixed-host-test-sanitized
+          ASAN_OPTIONS=detect_leaks=0 build/xhci-mixed-host-test-sanitized
+      - name: M66 bounded descriptor fallback contract
+        run: python3 tests/m66-hid-post-contract.py
       - name: Bounded hub topology host acceptance
         run: |
           mkdir -p build
