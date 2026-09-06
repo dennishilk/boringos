@@ -5,9 +5,6 @@
 #include <boring/cpu.h>
 #include <boring/input.h>
 #include <boring/timer.h>
-#if defined(BORING_M54_USB_ONLY_DESKTOP)
-#include <boring/serial.h>
-#endif
 #if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
 #include <boring/m61_runtime_hid.h>
 #endif
@@ -317,9 +314,6 @@ bool boring_input_submit_key(uint32_t code, bool down) {
         input_state.next_repeat_tick =
             timer_ticks() + BORING_INPUT_REPEAT_DELAY_TICKS;
     } else if ((!down) && (input_state.repeat_key == code)) {
-#if defined(BORING_M54_USB_ONLY_DESKTOP)
-        serial_write_string("M67_REPEAT_KEY_UP\\n");
-#endif
         input_clear_repeat();
     }
     event.type = BORING_INPUT_EVENT_KEY;
@@ -349,9 +343,6 @@ bool boring_input_repeat_tick(uint64_t now_ticks) {
         return false;
     }
 
-#if defined(BORING_M54_USB_ONLY_DESKTOP)
-    serial_write_string("M67_REPEAT_DUE\\n");
-#endif
     event.type = BORING_INPUT_EVENT_KEY;
     event.code = input_state.repeat_key;
     event.value1 = BORING_KEY_DOWN_VALUE;
