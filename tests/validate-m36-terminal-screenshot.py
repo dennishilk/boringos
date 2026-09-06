@@ -194,7 +194,7 @@ def validate(ppm, metadata, mode):
             raise ValueError("surviving terminal did not accept independent input")
     else:
         raise ValueError(f"unknown validation mode: {mode}")
-    print(f"M36 visual validator passed: {mode}; {width * height} exact pixels; terminal pids={sorted(screens)}; "
+    print(f"M36 visual validator passed: {mode}; {metadata['width'] * metadata['height']} exact pixels; terminal pids={sorted(screens)}; "
           f"sha256={hashlib.sha256(Path(ppm).read_bytes()).hexdigest()}")
     return screens
 
