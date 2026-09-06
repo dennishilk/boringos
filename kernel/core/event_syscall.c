@@ -344,6 +344,7 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
             M61_POST37_DISPLAY_WITNESS(
                 process, M61_POST37_INPUT_OWNER_TRUE);
             M61_RUNTIME_HID_WITNESS(M61_RUNTIME_HID_POST_A_SERVICE_LOOP);
+            x86_64_interrupts_enable();
             const bool serviced = xhci_service_hid_reports(&usb_state);
             static bool m54_initial_service_witness;
             if (!m54_initial_service_witness) {
@@ -374,18 +375,11 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
                 m61_trace_failed_hid_service();
             }
             /*
-             * USB HID is normally polled cooperatively without depending on
-             * PIC delivery. While a repeatable key is held, however, the PIT
-             * is the deliberate typematic clock. Sleep for one hardware tick
-             * so repeat deadlines advance without host sleeps or fabricated
-             * HID transitions. The no-held-key path retains the existing
-             * fast polling behaviour.
+             * Keep cooperative xHCI polling preemptible by the PIT.
+             * Typematic is clocked by timer IRQs in the transport-neutral
+             * input core; never turn the proven M54/M66 polling path into
+             * an HLT wait on an unrelated interrupt.
              */
-            if (boring_input_repeat_active(process->pid)) {
-                x86_64_enable_and_halt();
-            } else {
-                x86_64_interrupts_enable();
-            }
             task_yield();
 
             /*
