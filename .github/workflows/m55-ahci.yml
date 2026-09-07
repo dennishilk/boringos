@@ -1,0 +1,39 @@
+name: M55 AHCI SATA foundation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ahci-foundation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install focused QEMU dependencies
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 xorriso
+      - name: Bounded AHCI host fixtures
+        run: |
+          mkdir -p build
+          cc -Ikernel/include -std=c11 -fno-builtin \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            tests/ahci-host-test.c kernel/core/ahci.c \
+            -o build/ahci-host-test
+          ./build/ahci-host-test
+      - name: Sanitized AHCI host fixtures
+        run: |
+          cc -Ikernel/include -std=c11 -fno-builtin \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/ahci-host-test.c kernel/core/ahci.c \
+            -o build/ahci-host-test-sanitized
+          ASAN_OPTIONS=detect_leaks=0 ./build/ahci-host-test-sanitized
+      - name: Real q35 AHCI controller and SATA presence
+        run: ./tests/m55-ahci-qemu.sh

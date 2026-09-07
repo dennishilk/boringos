@@ -1,0 +1,36 @@
+name: M46 boringfetch hardware edition
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  boringfetch-hardware:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Install build and QEMU dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential binutils xorriso qemu-system-x86 python3
+      - name: Bounded host snapshot and standalone ELF
+        run: make boringfetch-host-test boringfetch-audit
+      - name: Real Ring3 hardware framebuffer and three-client regression
+        run: python3 tests/m46-boringfetch-qemu.py
+      - name: Upload real hardware and desktop evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boringos-m46-boringfetch-reference
+          path: build/m46-boringfetch-reference/
+          if-no-files-found: error
+          retention-days: 30

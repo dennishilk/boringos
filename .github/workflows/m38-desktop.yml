@@ -1,0 +1,40 @@
+name: M38 native desktop session supervision
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  supervision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install build and QEMU dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang lld nasm xorriso qemu-system-x86 python3
+
+      - name: Prove legacy exact-PID WAITPID compatibility
+        run: sh ./tests/m36-spawn-qemu.sh
+
+      - name: Run M38 real-QEMU supervision matrix
+        run: python3 ./tests/m38-desktop-qemu.py
+
+      - name: Upload M38 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boringos-m38-desktop-reference
+          path: build/m38-desktop-reference/
+          if-no-files-found: warn
+          retention-days: 30

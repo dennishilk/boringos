@@ -1,0 +1,205 @@
+name: M61 bootable persistent USB
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bootable-persistent-usb:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install focused UEFI USB-image dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 ovmf gdisk dosfstools mtools xz-utils
+      - name: Prove HID-before-Storage shared Event Ring ordering
+        run: sh tests/m61-xhci-event-coexistence-host.sh
+      - name: Build M61 runtime and negative contracts
+        run: sh tests/m61-build.sh
+      - name: Prove diagnostic-only pre-IDT fault containment
+        run: |
+          M61_EARLY_FAULT_TEST=1 sh tests/m61-physical-trace-kernel.sh
+          env -u GITHUB_SHA sh tests/m61-build-usb-image.sh
+          python3 tests/m61-early-fault-qemu.py
+          cat build/m61-early-fault/proof.txt
+          grep -Fqx 'EARLY_FAULT_CONTAINMENT_PROVEN=YES' build/m61-early-fault/proof.txt
+          grep -Fqx 'guest_reset_observed=no' build/m61-early-fault/proof.txt
+      - name: Relink normal M61 physical handoff bisector kernel
+        run: sh tests/m61-physical-handoff-bisector.sh
+      - name: Build physical image and deterministic QEMU test twin
+        run: env -u GITHUB_SHA sh tests/m61-build-usb-image.sh
+      - name: Prove physical/QEMU twin runtime payload equivalence
+        run: |
+          cat build/m61-qemu-twin-proof.txt
+          grep -Fqx 'physical_timeout_seconds=5' build/m61-qemu-twin-proof.txt
+          grep -Fqx 'qemu_twin_timeout_seconds=0' build/m61-qemu-twin-proof.txt
+          grep -Fqx 'sole_logical_difference=Limine timeout value 5 -> 0' build/m61-qemu-twin-proof.txt
+          grep -Fqx 'qemu_twin_publishable=no' build/m61-qemu-twin-proof.txt
+      - name: Two-boot QEMU-twin USB-root persistence acceptance
+        run: |
+          physical=build/boringos-m61-usb.img
+          physical_sha=build/boringos-m61-usb.img.sha256
+          twin=build/boringos-m61-usb-qemu.img
+          twin_sha=build/boringos-m61-usb-qemu.img.sha256
+          saved=build/.m61-physical-before-qemu.img
+          saved_sha=build/.m61-physical-before-qemu.img.sha256
+
+          restore_physical() {
+            if [ -f "$saved" ]; then
+              rm -f "$physical"
+              mv "$saved" "$physical"
+            fi
+            if [ -f "$saved_sha" ]; then
+              rm -f "$physical_sha"
+              mv "$saved_sha" "$physical_sha"
+            fi
+          }
+          trap restore_physical EXIT INT TERM
+
+          cp "$physical" "$saved"
+          cp "$physical_sha" "$saved_sha"
+          cp "$twin" "$physical"
+          cp "$twin_sha" "$physical_sha"
+
+          set +e
+          python3 tests/m61-physical-desktop-witness-qemu.py
+          rc=$?
+          set -e
+
+          restore_physical
+          trap - EXIT INT TERM
+          expected=$(awk '{print $1}' "$physical_sha")
+          actual=$(sha256sum "$physical" | awk '{print $1}')
+          test "$actual" = "$expected"
+          test "$actual" = "$(grep '^sha256=' build/m61-usb-image.txt | cut -d= -f2)"
+          rm -f "$twin" "$twin_sha"
+          test ! -e "$twin"
+          test ! -e "$twin_sha"
+          if [ "$rc" -ne 0 ]; then
+            echo '--- M61 QEMU test-twin focused diagnostic tail ---'
+            tail -n 500 build/m61-bootable-persistent-usb/first-boot/serial.log || true
+            tail -n 500 build/m61-bootable-persistent-usb/first-boot/qemu.log || true
+          fi
+          exit "$rc"
+      - name: Verify serial, safe boot console, and runtime framebuffer proofs
+        run: |
+          log=build/m61-bootable-persistent-usb/first-boot/serial.log
+          grep -Fq 'M61 TRACE [08+] EXCEPTIONS' "$log"
+          grep -Fq 'M61 TRACE [16+] XHCI HID CONFIG' "$log"
+          grep -Fq 'M61 TRACE [18+] BORINGFS ROOT' "$log"
+          grep -Fq 'M61 TRACE [25+] WM SERVICE' "$log"
+          grep -Fq 'M61 TRACE [26+] DESKTOP PRESENT' "$log"
+          grep -Fq 'wm: frame=1 count=0 focus=0' "$log"
+          grep -Fq 'wm: Super+Return spawned /bin/boring-terminal' "$log"
+          ! grep -Fq 'M61 PHYSICAL: automatic terminal' "$log"
+          python3 - "$log" <<'PY'
+          import sys
+          from pathlib import Path
+          source = Path(sys.argv[1]).read_text(errors="replace")
+          markers = (
+              "M61 TRACE [25+] WM SERVICE",
+              "M61 TRACE [26+] DESKTOP PRESENT",
+              "wm: frame=1 count=0 focus=0",
+              "wm: Super+Return spawned /bin/boring-terminal",
+          )
+          positions = [source.find(marker) for marker in markers]
+          if any(position < 0 for position in positions) or positions != sorted(positions):
+              raise SystemExit(f"M61 empty-desktop/manual-launch order changed: {positions!r}")
+          terminal_trace = source.find("M61 TRACE [27+] TERMINAL START")
+          if terminal_trace >= 0 and terminal_trace <= positions[-1]:
+              raise SystemExit(
+                  "M61 terminal-start trace occurred before manual Super+Return")
+          PY
+          proof=build/m61-bootable-persistent-usb/first-boot/physical-trace-proof.txt
+          grep -Fqx 'DIAGNOSTIC_FRAMEBUFFER_WRITES_BYPASSED=YES' "$proof"
+          grep -Fqx 'EARLY_DIAGNOSTIC_FRAMEBUFFER_WRITE_COUNT=0' "$proof"
+          safety=build/m61-bundle/boot-console-safety.txt
+          grep -Fqx 'EARLY_FRAMEBUFFER_WRITE_ADDED=NO' "$safety"
+          grep -Fqx 'ACQUIRE_FRAMEBUFFERS_WRITES_PIXELS=NO' "$safety"
+          grep -Fqx 'PRE_SAFE_POINT_BOOT_CONSOLE_FRAMEBUFFER_WRITES=0' "$safety"
+          grep -Fqx 'GENERIC_X86_64_OUT8_MODIFIED=NO' "$safety"
+          grep -Fqx 'POST_FALLBACK_INDEPENDENT=YES' "$safety"
+          grep -Fq 'BOOT-CONSOLE framebuffer activated at safe normal present' "$log"
+          grep -Fq 'BOOT-CONSOLE history replay complete events=' "$log"
+          grep -Fq 'BOOT-CONSOLE framebuffer handoff complete; redraw disabled' "$log"
+          boot_console=build/m61-bootable-persistent-usb/first-boot/boot-console-witness.txt
+          grep -Fqx 'BOOT_CONSOLE_VISIBLE_DURING_BOOT=YES' "$boot_console"
+          grep -Fqx 'BOOT_CONSOLE_AUTO_TERMINAL_STAGE_REMOVED=YES' "$boot_console"
+          grep -Fqx 'GRAPHICAL_BOOT_STAGE_TEXT_PROVEN=YES' "$boot_console"
+          grep -Fqx 'REPLAY_STAGE_ORDER_PROVEN=YES' "$boot_console"
+          grep -Fqx 'REAL_SUCCESS_ONLY_PROVEN=YES' "$boot_console"
+          grep -Fqx 'EARLY_FRAMEBUFFER_WRITE_ADDED=NO' "$boot_console"
+          grep -Fqx 'PRE_SAFE_POINT_BOOT_CONSOLE_FRAMEBUFFER_WRITES=0' "$boot_console"
+          desktop=build/m61-bootable-persistent-usb/first-boot/physical-desktop-witness.txt
+          grep -Fqx 'AUTO_TERMINAL_REMOVED=YES' "$desktop"
+          grep -Fqx 'INITIAL_EMPTY_WM_PRESENT=YES' "$desktop"
+          grep -Fqx 'INITIAL_EMPTY_WM_PRESENT_REAL_DISPLAY_RPC=YES' "$desktop"
+          grep -Fqx 'EMPTY_DESKTOP_PROVEN=YES' "$desktop"
+          grep -Fqx 'MANUAL_TERMINAL_NOT_STARTED_BEFORE_DESKTOP=YES' "$desktop"
+          grep -Fqx 'WALLPAPER_PROVEN=YES' "$desktop"
+          grep -Fqx 'NORMAL_FRAMEBUFFER_RUNTIME_PROVEN=YES' "$desktop"
+          grep -Fqx 'BOOT_CONSOLE_OVERLAY_ABSENT=YES' "$desktop"
+          grep -Fqx 'EXTRA_EARLY_PRESENT_ADDED=NO' "$desktop"
+          lifecycle=build/m61-bootable-persistent-usb/first-boot/desktop-lifecycle-proof.txt
+          grep -Fqx 'M61_EMPTY_DESKTOP_PERSISTS_AFTER_LAST_WINDOW=YES' "$lifecycle"
+          grep -Fqx 'M61_WM_DOES_NOT_EXIT_ON_ZERO_CLIENTS=YES' "$lifecycle"
+          grep -Fqx 'M61_DISPLAY_DOES_NOT_DRAIN_ON_NORMAL_EMPTY_DESKTOP=YES' "$lifecycle"
+          grep -Fqx 'MANUAL_TERMINAL_RELAUNCH_AFTER_EMPTY=YES' "$lifecycle"
+          grep -Fqx 'MANUAL_EDIT_RELAUNCH_AFTER_EMPTY=YES' "$lifecycle"
+          grep -Fqx 'BORING_FILES_INCLUDED_IN_M61_ROOT=YES' "$lifecycle"
+          grep -Fqx 'SUPER_F_LAUNCHER_TARGET_PRESENT=YES' "$lifecycle"
+          source_proof=build/m61-empty-desktop-verifier.txt
+          grep -Fqx 'HISTORICAL_M38_DRAIN_ACCEPTANCE_PRESERVED=YES' "$source_proof"
+          printf '%s\n' 'SERIAL_TRACE_PROVEN=YES'
+          printf '%s\n' 'DIAGNOSTIC_FRAMEBUFFER_WRITES_BYPASSED=YES'
+          printf '%s\n' 'SAFE_GRAPHICAL_BOOT_CONSOLE_PROVEN=YES'
+          printf '%s\n' 'INITIAL_EMPTY_WM_PRESENT_PROVEN=YES'
+          printf '%s\n' 'NORMAL_FRAMEBUFFER_RUNTIME_PROVEN=YES'
+          printf '%s\n' 'PHYSICAL_DESKTOP_WITNESS_PROVEN=YES'
+      - name: Verify restored physical raw and compressed artifact hashes
+        run: |
+          test ! -e build/boringos-m61-usb-qemu.img
+          test ! -e build/boringos-m61-usb-qemu.img.sha256
+          (cd build && sha256sum -c boringos-m61-usb.img.sha256)
+          expected=$(awk '{print $1}' build/boringos-m61-usb.img.sha256)
+          actual=$(xz -dc build/boringos-m61-usb.img.xz | sha256sum | awk '{print $1}')
+          test "$actual" = "$expected"
+          grep -Fqx 'limine_timeout_seconds=5' build/m61-usb-image.txt
+          grep -Fqx 'physical_breadcrumbs=enabled' build/m61-usb-image.txt
+      - name: Record physical raw identity
+        id: physical
+        run: |
+          raw_size=$(stat -c %s build/boringos-m61-usb.img)
+          raw_sha256=$(awk '{print $1}' build/boringos-m61-usb.img.sha256)
+          echo "raw_size=$raw_size" >> "$GITHUB_OUTPUT"
+          echo "raw_sha256=$raw_sha256" >> "$GITHUB_OUTPUT"
+          printf 'physical raw size=%s sha256=%s\n' "$raw_size" "$raw_sha256"
+      - name: Publish final physical M61 image and acceptance evidence
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: m61-bootable-persistent-usb-${{ github.event.pull_request.head.sha || github.sha }}-${{ steps.physical.outputs.raw_size }}-${{ steps.physical.outputs.raw_sha256 }}
+          path: |
+            build/boringos-m61-usb.img.xz
+            build/boringos-m61-usb.img.sha256
+            build/m61-usb-image.txt
+            build/m61-qemu-twin-proof.txt
+            build/m61-empty-desktop-verifier.txt
+            build/m61-bundle/geometry.txt
+            build/m61-bundle/boringfsck-before.txt
+            build/m61-bundle/serial-failopen-host.txt
+            build/m61-bundle/boot-console-safety.txt
+            build/m61-bundle/boot-console-host.txt
+            build/m61-early-fault/**
+            build/m61-bootable-persistent-usb/**
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,36 @@
+name: M37 native desktop session startup
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  m37-desktop:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact event head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install build and QEMU dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential binutils curl xorriso qemu-system-x86
+
+      - name: M37 PID1 BoringFS desktop-session startup and drain
+        run: python3 ./tests/m37-desktop-qemu.py
+
+      - name: Upload M37 real framebuffer and lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boringos-m37-desktop-reference
+          path: |
+            build/m37-desktop-reference/
+            build/m37-bundle-test/geometry.txt
+            build/m37-bundle-test/boringfsck.txt
+            build/m37-bundle-test/SHA256SUMS
+          if-no-files-found: error

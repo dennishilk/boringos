@@ -1,0 +1,39 @@
+name: M52 xHCI HID interrupt-IN reports
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hid-reports:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install focused QEMU dependencies
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 xorriso
+      - name: M52 interrupt transport model fixtures
+        run: |
+          mkdir -p build
+          cc -Ikernel/include -std=c11 -fno-builtin \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            tests/m52-xhci-host-test.c kernel/core/usb_hid.c \
+            -o build/m52-xhci-host-test
+          ./build/m52-xhci-host-test
+      - name: Sanitized M52 model fixtures
+        run: |
+          cc -Ikernel/include -std=c11 -fno-builtin \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/m52-xhci-host-test.c kernel/core/usb_hid.c \
+            -o build/m52-xhci-host-test-sanitized
+          ASAN_OPTIONS=detect_leaks=0 ./build/m52-xhci-host-test-sanitized
+      - name: Real xHCI keyboard and tablet Interrupt-IN reports
+        run: sh ./tests/m52-xhci-hid-qemu.sh
