@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   high-resolution-framebuffer:
@@ -70,3 +71,167 @@ jobs:
           sh tests/m61-build.sh
           env -u GITHUB_SHA sh tests/m61-build-usb-image.sh
           python3 tests/m63-power-lifecycle-qemu.py
+      - name: Gate M68 physical artifact on full exact-head CI
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.request
+          from pathlib import Path
+
+          expected = [
+              "BoringKernel boot test",
+              "M37 native desktop session startup",
+              "M38 native desktop session supervision",
+              "M39 native BoringEdit",
+              "M40 native BoringFiles",
+              "M41 application shortcuts",
+              "M42 native client foundation",
+              "M43 real CPUID inventory",
+              "M44 real PCI inventory",
+              "M45 real SMBIOS platform identity",
+              "M46 boringfetch hardware edition",
+              "M47 real hardware boot readiness",
+              "M48 xHCI USB-HID foundation",
+              "M49 xHCI USB device addressing",
+              "M50 xHCI EP0 descriptor discovery",
+              "M51 xHCI USB HID endpoint setup",
+              "M52 xHCI HID interrupt-IN reports",
+              "M53 USB HID input queue",
+              "M54 USB-only graphical desktop",
+              "M55 AHCI SATA foundation",
+              "M56 AHCI read-only block path",
+              "M57 writable AHCI persistent root",
+              "M58 high-memory PMM",
+              "M59 Cthulhu physical smoke readiness",
+              "M60 USB mass storage",
+              "M61 bootable persistent USB",
+              "M67 keyboard typematic",
+          ]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["GITHUB_SHA"]
+          token = os.environ["GH_TOKEN"]
+          url = (
+              f"https://api.github.com/repos/{repo}/actions/runs"
+              f"?head_sha={sha}&per_page=100"
+          )
+          deadline = time.monotonic() + 3600.0
+
+          while True:
+              request = urllib.request.Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  payload = json.load(response)
+
+              latest = {}
+              for run in payload.get("workflow_runs", []):
+                  name = run.get("name")
+                  if run.get("head_sha") != sha or name not in expected:
+                      continue
+                  previous = latest.get(name)
+                  if previous is None or int(run["id"]) > int(previous["id"]):
+                      latest[name] = run
+
+              failures = [
+                  name for name, run in latest.items()
+                  if run.get("status") == "completed"
+                  and run.get("conclusion") != "success"
+              ]
+              if failures:
+                  details = {
+                      name: {
+                          "id": latest[name]["id"],
+                          "conclusion": latest[name].get("conclusion"),
+                      }
+                      for name in failures
+                  }
+                  raise SystemExit(f"exact-head workflow failure: {details}")
+
+              missing = [name for name in expected if name not in latest]
+              pending = [
+                  name for name in expected
+                  if name in latest and latest[name].get("status") != "completed"
+              ]
+              if not missing and not pending:
+                  break
+              if time.monotonic() >= deadline:
+                  raise SystemExit(
+                      f"exact-head gate timed out missing={missing} pending={pending}"
+                  )
+              print(
+                  f"M68_EXACT_HEAD_WAIT missing={len(missing)} pending={len(pending)}",
+                  flush=True,
+              )
+              time.sleep(15.0)
+
+          lines = [
+              "EXACT_HEAD=" + sha,
+              "REQUIRED_OTHER_WORKFLOWS=27",
+              "REQUIRED_OTHER_SUCCESS=27",
+              "REQUIRED_OTHER_FAILURE=0",
+              "REQUIRED_OTHER_CANCELLED=0",
+          ]
+          for name in expected:
+              run = latest[name]
+              lines.append(
+                  f"{name}|{run['id']}|{run['head_sha']}|{run['conclusion']}"
+              )
+          proof = Path("build/m68-exact-head-gate.txt")
+          proof.write_text("\n".join(lines) + "\n")
+          print(proof.read_text(), end="")
+          PY
+      - name: Prepare one M68 physical Cthulhu artifact
+        if: ${{ github.event_name == 'push' }}
+        id: physical
+        run: |
+          test -f build/m68-exact-head-gate.txt
+          grep -Fqx "EXACT_HEAD=$GITHUB_SHA" build/m68-exact-head-gate.txt
+          grep -Fqx 'REQUIRED_OTHER_SUCCESS=27' build/m68-exact-head-gate.txt
+          grep -Fqx 'REQUIRED_OTHER_FAILURE=0' build/m68-exact-head-gate.txt
+          grep -Fqx 'REQUIRED_OTHER_CANCELLED=0' build/m68-exact-head-gate.txt
+
+          test "$(stat -c %s build/boringos-m61-usb.img)" = "100663296"
+          (cd build && sha256sum -c boringos-m61-usb.img.sha256)
+          raw_sha=$(awk '{print $1}' build/boringos-m61-usb.img.sha256)
+          compressed_raw_sha=$(xz -dc build/boringos-m61-usb.img.xz | sha256sum | awk '{print $1}')
+          test "$compressed_raw_sha" = "$raw_sha"
+          tree=$(git rev-parse 'HEAD^{tree}')
+          artifact_name="m68-high-resolution-framebuffer-$GITHUB_SHA-$raw_sha"
+
+          {
+            echo "FINAL_HEAD=$GITHUB_SHA"
+            echo "FINAL_TREE=$tree"
+            echo 'RAW_BYTES=100663296'
+            echo "RAW_SHA256=$raw_sha"
+            echo "ARTIFACT_NAME=$artifact_name"
+            echo 'QEMU_TWIN_PUBLISHED=NO'
+            echo 'PHYSICAL_ACCEPTANCE_PENDING=YES'
+          } > build/m68-physical-identity.txt
+          cat build/m68-physical-identity.txt
+
+          echo "raw_sha=$raw_sha" >> "$GITHUB_OUTPUT"
+          echo "raw_bytes=100663296" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+      - name: Publish exactly one M68 physical Cthulhu artifact
+        if: ${{ github.event_name == 'push' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.physical.outputs.artifact_name }}
+          path: |
+            build/boringos-m61-usb.img.xz
+            build/boringos-m61-usb.img.sha256
+            build/m68-physical-identity.txt
+            build/m68-exact-head-gate.txt
+            build/m61-usb-image.txt
+          if-no-files-found: error
+          retention-days: 14
