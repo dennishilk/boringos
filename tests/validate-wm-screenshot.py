@@ -16,7 +16,7 @@ GLYPHS = (
 LETTERS = ((14, 17, 17, 31, 17, 17, 17), (30, 17, 17, 30, 17, 17, 30), GLYPHS[0])
 BODY = (0x32382A, 0x26363C, 0x3E2E34)
 ACCENT = (0xB8BB26, 0x83A598, 0xD3869B)
-WALLPAPER_WIDTH, WALLPAPER_HEIGHT = 800, 600
+WALLPAPER_REFERENCE_WIDTH, WALLPAPER_REFERENCE_HEIGHT = 800, 600
 WALLPAPER_MARK = "boring by design."
 WALLPAPER_GLYPHS = {
     "b": (16, 16, 30, 17, 17, 17, 30),
@@ -31,7 +31,7 @@ WALLPAPER_GLYPHS = {
     "y": (0, 0, 17, 17, 15, 1, 14),
     ".": (0, 0, 0, 0, 0, 0, 4),
 }
-_WALLPAPER_RGB = None
+_WALLPAPER_RGB = {}
 
 
 def frames(log):
@@ -84,44 +84,57 @@ def rgb(color):
     return bytes((color >> 16, (color >> 8) & 255, color & 255))
 
 
+def scale_reference(value, actual, reference):
+    return value * actual // reference
+
+
 def desktop_background(width, height):
-    global _WALLPAPER_RGB
-    if (width, height) != (WALLPAPER_WIDTH, WALLPAPER_HEIGHT):
-        return bytearray(rgb(0x282828) * (width * height))
-    if _WALLPAPER_RGB is None:
-        result = bytearray(width * height * 3)
-        for y in range(height):
-            vertical_distance = abs(y - 365)
-            for x in range(width):
-                hash_value = ((x * 0x45D9F3B) & 0xFFFFFFFF) ^ \
-                    ((y * 0x119DE1F3) & 0xFFFFFFFF)
-                hash_value ^= hash_value >> 16
-                glow = 0
-                if x < 520 and vertical_distance < 300:
-                    glow = ((520 - x) * (300 - vertical_distance) * 18) // (520 * 300)
-                noise = (hash_value >> 29) & 3
-                if hash_value & 0x1FFF == 0:
-                    noise += 9
-                noise = min(noise, 29 - glow)
-                offset = (y * width + x) * 3
-                result[offset:offset + 3] = bytes((glow + noise,
-                                                   glow + noise + 1,
-                                                   glow + noise + 3))
-        x = 596
-        for index, character in enumerate(WALLPAPER_MARK):
-            glyph = WALLPAPER_GLYPHS.get(character, (0,) * 7)
-            color = bytes((98, 96, 100) if index < 6 else (76, 75, 80))
-            for row, bits in enumerate(glyph):
-                for column in range(5):
-                    if bits & (1 << (4 - column)):
-                        for yy in range(2):
-                            for xx in range(2):
-                                offset = ((529 + row * 2 + yy) * width +
-                                          x + column * 2 + xx) * 3
+    key = (width, height)
+    cached = _WALLPAPER_RGB.get(key)
+    if cached is not None:
+        return bytearray(cached)
+
+    result = bytearray(width * height * 3)
+    glow_width = scale_reference(520, width, WALLPAPER_REFERENCE_WIDTH)
+    glow_center_y = scale_reference(365, height, WALLPAPER_REFERENCE_HEIGHT)
+    glow_radius_y = scale_reference(300, height, WALLPAPER_REFERENCE_HEIGHT)
+
+    for y in range(height):
+        vertical_distance = abs(y - glow_center_y)
+        for x in range(width):
+            hash_value = ((x * 0x45D9F3B) & 0xFFFFFFFF) ^ ((y * 0x119DE1F3) & 0xFFFFFFFF)
+            hash_value ^= hash_value >> 16
+            glow = 0
+            if (glow_width and glow_radius_y and x < glow_width and
+                    vertical_distance < glow_radius_y):
+                glow = ((glow_width - x) * (glow_radius_y - vertical_distance) * 18) // (
+                    glow_width * glow_radius_y)
+            noise = (hash_value >> 29) & 3
+            if hash_value & 0x1FFF == 0:
+                noise += 9
+            noise = min(noise, 29 - glow)
+            offset = (y * width + x) * 3
+            result[offset:offset + 3] = bytes((glow + noise, glow + noise + 1, glow + noise + 3))
+
+    x = scale_reference(596, width, WALLPAPER_REFERENCE_WIDTH)
+    origin_y = scale_reference(529, height, WALLPAPER_REFERENCE_HEIGHT)
+    for index, character in enumerate(WALLPAPER_MARK):
+        glyph = WALLPAPER_GLYPHS.get(character, (0,) * 7)
+        color = bytes((98, 96, 100) if index < 6 else (76, 75, 80))
+        for row, bits in enumerate(glyph):
+            for column in range(5):
+                if bits & (1 << (4 - column)):
+                    for yy in range(2):
+                        for xx in range(2):
+                            pixel_x = x + column * 2 + xx
+                            pixel_y = origin_y + row * 2 + yy
+                            if pixel_x < width and pixel_y < height:
+                                offset = (pixel_y * width + pixel_x) * 3
                                 result[offset:offset + 3] = color
-            x += 8 if character == " " else 12
-        _WALLPAPER_RGB = bytes(result)
-    return bytearray(_WALLPAPER_RGB)
+        x += 8 if character == " " else 12
+
+    _WALLPAPER_RGB[key] = bytes(result)
+    return bytearray(_WALLPAPER_RGB[key])
 
 
 def client_pixel(client, x, y):
