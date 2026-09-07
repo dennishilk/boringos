@@ -240,7 +240,12 @@ def run():
         last = None
         attempt = 0
         while time.monotonic() < deadline:
-            rows = decode_terminal(f"{name}-{attempt}", frame)[pid]
+            try:
+                rows = decode_terminal(f"{name}-{attempt}", frame)[pid]
+            except ValueError:
+                attempt += 1
+                time.sleep(0.04)
+                continue
             last = prompt_suffix(rows)
             if predicate(last):
                 return last
@@ -255,7 +260,12 @@ def run():
         last_matches = None
         attempt = 0
         while time.monotonic() < deadline:
-            rows = decode_terminal(f"{name}-{attempt}", frame)[pid]
+            try:
+                rows = decode_terminal(f"{name}-{attempt}", frame)[pid]
+            except ValueError:
+                attempt += 1
+                time.sleep(0.04)
+                continue
             matches = []
             for row in rows:
                 if marker not in row:
@@ -399,14 +409,11 @@ def run():
                 QMP["key_event"]("backspace", False)]})
             time.sleep(0.20)
 
-            after_screens = decode_terminal("m67-after-repeat", prompt)
-            after_rows = after_screens[terminal_a]
-            after_suffix = prompt_suffix(after_rows)
-            if (not before_suffix.startswith(after_suffix) or
-                    len(after_suffix) > len(before_suffix) - 3):
-                raise RuntimeError(
-                    "M67 held Backspace did not delete multiple characters: "
-                    f"before={before_suffix!r} after={after_suffix!r}")
+            after_suffix = wait_prompt_suffix(
+                "m67-after-repeat", prompt, terminal_a,
+                lambda value: before_suffix.startswith(value) and
+                len(value) <= len(before_suffix) - 3,
+                "held Backspace deleting multiple characters")
             print("M67 held Backspace deleted "
                   f"{len(before_suffix) - len(after_suffix)} characters "
                   "from one QMP key-down")
