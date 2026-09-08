@@ -1,0 +1,261 @@
+name: M66 physical bisect exact-head CI
+
+on:
+  push:
+    branches: [agent/m66-physical-bisect-52fcffd5]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  BISECTOR_RUNTIME_COMMIT: 52fcffd5ade0d09f23013ecbb86fbaaff389dae0
+  BISECTOR_RUNTIME_TREE: f3d971e8a479679401b3da4706d6c21709c64386
+
+jobs:
+  dispatch-required-ci:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - name: Prove the branch is runtime-equivalent to the semantic midpoint
+        run: |
+          test "$(git rev-parse "$BISECTOR_RUNTIME_COMMIT^{tree}")" = "$BISECTOR_RUNTIME_TREE"
+          git merge-base --is-ancestor "$BISECTOR_RUNTIME_COMMIT" HEAD
+          git diff --exit-code "$BISECTOR_RUNTIME_COMMIT"..HEAD -- . \
+            ':(exclude).github/workflows/m66-physical-bisect-ci.yml' \
+            ':(exclude)docs/m66-physical-provenance-correction.md'
+          changed=$(git diff --name-only "$BISECTOR_RUNTIME_COMMIT"..HEAD | sort)
+          expected=$(printf '%s\n' \
+            '.github/workflows/m66-physical-bisect-ci.yml' \
+            'docs/m66-physical-provenance-correction.md' | sort)
+          test "$changed" = "$expected"
+          {
+            echo "BISECTOR_HEAD=$GITHUB_SHA"
+            echo "BISECTOR_HEAD_TREE=$(git rev-parse 'HEAD^{tree}')"
+            echo "RUNTIME_COMMIT=$BISECTOR_RUNTIME_COMMIT"
+            echo "RUNTIME_TREE=$BISECTOR_RUNTIME_TREE"
+            echo 'RUNTIME_DIFF=NONE'
+            echo 'ALLOWED_NON_RUNTIME_CHANGES=.github/workflows/m66-physical-bisect-ci.yml docs/m66-physical-provenance-correction.md'
+          } | tee m66-bisector-runtime-equivalence.txt
+      - name: Dispatch every required exact-head workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          workflows = [
+              "boot-test.yml",
+              "m37-desktop.yml",
+              "m38-desktop.yml",
+              "m39-edit.yml",
+              "m40-files.yml",
+              "m41-shortcuts.yml",
+              "m42-client.yml",
+              "m43-cpuid.yml",
+              "m44-pci.yml",
+              "m45-smbios.yml",
+              "m46-boringfetch.yml",
+              "m47-readiness.yml",
+              "m48-xhci.yml",
+              "m49-xhci-address.yml",
+              "m50-xhci-descriptors.yml",
+              "m51-xhci-configuration.yml",
+              "m52-xhci-hid-reports.yml",
+              "m53-usb-hid-input-queue.yml",
+              "m54-usb-only-desktop.yml",
+              "m55-ahci.yml",
+              "m56-ahci-readonly.yml",
+              "m57-ahci-persistent-root.yml",
+              "m58-high-memory.yml",
+              "m59-physical-smoke.yml",
+              "m60-usb-mass-storage.yml",
+              "m61-bootable-persistent-usb.yml",
+              "m62-dynamic-capacity.yml",
+              "m63-system-power-lifecycle.yml",
+              "m64-usb-topology-mouse.yml",
+          ]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          ref = os.environ["GITHUB_REF_NAME"]
+          token = os.environ["GH_TOKEN"]
+          for workflow in workflows:
+              workflow_id = urllib.parse.quote(workflow, safe="")
+              url = (
+                  f"https://api.github.com/repos/{repo}/actions/workflows/"
+                  f"{workflow_id}/dispatches"
+              )
+              body = json.dumps({"ref": ref}).encode()
+              request = urllib.request.Request(
+                  url,
+                  data=body,
+                  method="POST",
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "Content-Type": "application/json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  if response.status != 204:
+                      raise SystemExit(
+                          f"dispatch failed: {workflow}: HTTP {response.status}"
+                      )
+              print(f"DISPATCHED={workflow}", flush=True)
+          PY
+      - name: Preserve runtime-equivalence proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: m66-bisector-runtime-equivalence-${{ github.sha }}
+          path: m66-bisector-runtime-equivalence.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  collect-required-ci:
+    needs: dispatch-required-ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Collect exact-head outcomes without suppressing failures
+        id: collect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p build
+          python3 - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.request
+          from pathlib import Path
+
+          expected = [
+              "BoringKernel boot test",
+              "M37 native desktop session startup",
+              "M38 native desktop session supervision",
+              "M39 native BoringEdit",
+              "M40 native BoringFiles",
+              "M41 application shortcuts",
+              "M42 native client foundation",
+              "M43 real CPUID inventory",
+              "M44 real PCI inventory",
+              "M45 real SMBIOS platform identity",
+              "M46 boringfetch hardware edition",
+              "M47 real hardware boot readiness",
+              "M48 xHCI USB-HID foundation",
+              "M49 xHCI USB device addressing",
+              "M50 xHCI EP0 descriptor discovery",
+              "M51 xHCI USB HID endpoint setup",
+              "M52 xHCI HID interrupt-IN reports",
+              "M53 USB HID input queue",
+              "M54 USB-only graphical desktop",
+              "M55 AHCI SATA foundation",
+              "M56 AHCI read-only block path",
+              "M57 writable AHCI persistent root",
+              "M58 high-memory PMM",
+              "M59 Cthulhu physical smoke readiness",
+              "M60 USB mass storage",
+              "M61 bootable persistent USB",
+              "M62 dynamic process task capacity",
+              "M63 system power lifecycle",
+              "M64 USB topology mouse",
+          ]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["GITHUB_SHA"]
+          token = os.environ["GH_TOKEN"]
+          url = (
+              f"https://api.github.com/repos/{repo}/actions/runs"
+              f"?head_sha={sha}&per_page=100"
+          )
+          deadline = time.monotonic() + 10500.0
+          latest = {}
+          while True:
+              request = urllib.request.Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  payload = json.load(response)
+              latest = {}
+              for run in payload.get("workflow_runs", []):
+                  name = run.get("name")
+                  if (
+                      run.get("head_sha") != sha
+                      or run.get("event") != "workflow_dispatch"
+                      or name not in expected
+                  ):
+                      continue
+                  previous = latest.get(name)
+                  if previous is None or int(run["id"]) > int(previous["id"]):
+                      latest[name] = run
+              missing = [name for name in expected if name not in latest]
+              pending = [
+                  name
+                  for name in expected
+                  if name in latest and latest[name].get("status") != "completed"
+              ]
+              if not missing and not pending:
+                  break
+              if time.monotonic() >= deadline:
+                  raise SystemExit(
+                      f"exact-head CI timed out: missing={missing} pending={pending}"
+                  )
+              print(
+                  f"EXACT_HEAD_WAIT missing={len(missing)} pending={len(pending)}",
+                  flush=True,
+              )
+              time.sleep(15.0)
+
+          failures = [
+              name
+              for name in expected
+              if latest[name].get("conclusion") != "success"
+          ]
+          lines = [
+              f"EXACT_HEAD={sha}",
+              f"RUNTIME_COMMIT={os.environ['BISECTOR_RUNTIME_COMMIT']}",
+              f"RUNTIME_TREE={os.environ['BISECTOR_RUNTIME_TREE']}",
+              f"REQUIRED_WORKFLOWS={len(expected)}",
+              f"SUCCESS={len(expected) - len(failures)}",
+              f"FAILURE={len(failures)}",
+          ]
+          for name in expected:
+              run = latest[name]
+              lines.append(
+                  f"{name}|{run['id']}|{run['head_sha']}|"
+                  f"{run['event']}|{run['conclusion']}"
+              )
+          proof = Path("build/m66-bisector-exact-head-ci.txt")
+          proof.write_text("\n".join(lines) + "\n")
+          print(proof.read_text(), end="")
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a") as stream:
+              stream.write(f"failure_count={len(failures)}\n")
+              stream.write("failed_names=" + ", ".join(failures) + "\n")
+          PY
+      - name: Preserve complete exact-head CI record
+        uses: actions/upload-artifact@v4
+        with:
+          name: m66-bisector-exact-head-ci-${{ github.sha }}
+          path: build/m66-bisector-exact-head-ci.txt
+          if-no-files-found: error
+          retention-days: 14
+      - name: Keep required CI failures fatal
+        if: ${{ steps.collect.outputs.failure_count != '0' }}
+        env:
+          FAILED_NAMES: ${{ steps.collect.outputs.failed_names }}
+        run: |
+          echo "required exact-head CI failed: $FAILED_NAMES" >&2
+          exit 1
