@@ -911,6 +911,11 @@ static void m66_hid_report_descriptor_test(void) {
 }
 
 static void m66_hid_configuration_test(void) {
+    static const uint8_t non_hid_configuration[] = {
+        9, 2, 25, 0, 1, 1, 0, 0x80, 50,
+        9, 4, 0, 0, 1, 8, 6, 0x50, 0,
+        7, 5, 0x81, 2, 64, 0, 0
+    };
     static const uint8_t generic_with_out_and_vendor[] = {
         9, 2, 57, 0, 2, 1, 0, 0x80, 50,
         9, 4, 0, 0, 2, 3, 0, 0, 0,
@@ -934,6 +939,14 @@ static void m66_hid_configuration_test(void) {
     struct xhci_control_td td;
     enum xhci_hid_rejection_reason reason = XHCI_HID_REJECT_NONE;
 
+    check(xhci_parse_hid_configuration_ex(
+              non_hid_configuration,
+              (uint16_t)sizeof(non_hid_configuration), 3U,
+              &parsed, &reason) && (parsed.hid_interface_count == 0U) &&
+          !xhci_parse_hid_configuration(
+              non_hid_configuration,
+              (uint16_t)sizeof(non_hid_configuration), 3U, &parsed),
+          "M66 structural parser distinguishes a valid non-HID device");
     check(xhci_parse_hid_configuration_ex(
               generic_with_out_and_vendor,
               (uint16_t)sizeof(generic_with_out_and_vendor), 3U,
