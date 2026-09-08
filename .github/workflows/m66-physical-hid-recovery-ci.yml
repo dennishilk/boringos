@@ -3,6 +3,8 @@ name: M66 physical HID recovery exact-head CI
 on:
   push:
     branches: [agent/m66-physical-hid-recovery-ci]
+  pull_request:
+    branches: [agent/m66-physical-hid-recovery-ci]
 
 permissions:
   contents: read
