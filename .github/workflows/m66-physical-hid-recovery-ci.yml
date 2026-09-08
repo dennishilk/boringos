@@ -1,0 +1,306 @@
+name: M66 physical HID recovery exact-head CI
+
+on:
+  push:
+    branches: [agent/m66-physical-hid-recovery-ci]
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  TARGET_BRANCH: agent/m66-physical-hid-recovery
+  TARGET_HEAD: bd3f181d24547189b004328aea54c54fd194fc96
+  TARGET_TREE: 96f5b177a5afa8ea24c9f94168117ce09c1c8507
+
+jobs:
+  exact-head:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.TARGET_HEAD }}
+
+      - name: Verify immutable recovery target
+        run: |
+          test "$(git rev-parse HEAD)" = "$TARGET_HEAD"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$TARGET_TREE"
+          test "$(git merge-base origin/main HEAD)" = "$(git rev-parse origin/main)"
+
+      - name: Dispatch pre-artifact exact-head workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          workflows = [
+              "boot-test.yml",
+              "m37-desktop.yml",
+              "m38-desktop.yml",
+              "m39-edit.yml",
+              "m40-files.yml",
+              "m41-shortcuts.yml",
+              "m42-client.yml",
+              "m43-cpuid.yml",
+              "m44-pci.yml",
+              "m45-smbios.yml",
+              "m46-boringfetch.yml",
+              "m47-readiness.yml",
+              "m48-xhci.yml",
+              "m49-xhci-address.yml",
+              "m50-xhci-descriptors.yml",
+              "m51-xhci-configuration.yml",
+              "m52-xhci-hid-reports.yml",
+              "m53-usb-hid-input-queue.yml",
+              "m54-usb-only-desktop.yml",
+              "m55-ahci.yml",
+              "m56-ahci-readonly.yml",
+              "m57-ahci-persistent-root.yml",
+              "m58-high-memory.yml",
+              "m59-physical-smoke.yml",
+              "m60-usb-mass-storage.yml",
+              "m62-dynamic-capacity.yml",
+              "m63-system-power-lifecycle.yml",
+              "m64-usb-topology-mouse.yml",
+          ]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          ref = os.environ["TARGET_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          for workflow in workflows:
+              workflow_id = urllib.parse.quote(workflow, safe="")
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{repo}/actions/workflows/"
+                  f"{workflow_id}/dispatches",
+                  data=json.dumps({"ref": ref}).encode(),
+                  method="POST",
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "Content-Type": "application/json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  if response.status != 204:
+                      raise SystemExit(
+                          f"dispatch failed: {workflow}: HTTP {response.status}"
+                      )
+              print(f"DISPATCHED={workflow}", flush=True)
+          PY
+
+      - name: Require all pre-artifact checks green
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p build
+          python3 - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.request
+          from pathlib import Path
+
+          expected = [
+              "BoringKernel boot test",
+              "M37 native desktop session startup",
+              "M38 native desktop session supervision",
+              "M39 native BoringEdit",
+              "M40 native BoringFiles",
+              "M41 application shortcuts",
+              "M42 native client foundation",
+              "M43 real CPUID inventory",
+              "M44 real PCI inventory",
+              "M45 real SMBIOS platform identity",
+              "M46 boringfetch hardware edition",
+              "M47 real hardware boot readiness",
+              "M48 xHCI USB-HID foundation",
+              "M49 xHCI USB device addressing",
+              "M50 xHCI EP0 descriptor discovery",
+              "M51 xHCI USB HID endpoint setup",
+              "M52 xHCI HID interrupt-IN reports",
+              "M53 USB HID input queue",
+              "M54 USB-only graphical desktop",
+              "M55 AHCI SATA foundation",
+              "M56 AHCI read-only block path",
+              "M57 writable AHCI persistent root",
+              "M58 high-memory PMM",
+              "M59 Cthulhu physical smoke readiness",
+              "M60 USB mass storage",
+              "M62 dynamic process task capacity",
+              "M63 system power lifecycle",
+              "M64 USB topology mouse",
+          ]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["TARGET_HEAD"]
+          token = os.environ["GH_TOKEN"]
+          url = f"https://api.github.com/repos/{repo}/actions/runs?head_sha={sha}&per_page=100"
+          deadline = time.monotonic() + 9600.0
+          while True:
+              request = urllib.request.Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  payload = json.load(response)
+              latest = {}
+              for run in payload.get("workflow_runs", []):
+                  name = run.get("name")
+                  if (
+                      run.get("head_sha") != sha
+                      or run.get("event") != "workflow_dispatch"
+                      or name not in expected
+                  ):
+                      continue
+                  previous = latest.get(name)
+                  if previous is None or int(run["id"]) > int(previous["id"]):
+                      latest[name] = run
+              missing = [name for name in expected if name not in latest]
+              pending = [
+                  name for name in expected
+                  if name in latest and latest[name].get("status") != "completed"
+              ]
+              if not missing and not pending:
+                  break
+              if time.monotonic() >= deadline:
+                  raise SystemExit(
+                      f"pre-artifact CI timed out: missing={missing} pending={pending}"
+                  )
+              print(
+                  f"PRE_ARTIFACT_WAIT missing={len(missing)} pending={len(pending)}",
+                  flush=True,
+              )
+              time.sleep(15.0)
+
+          failures = [
+              name for name in expected
+              if latest[name].get("conclusion") != "success"
+          ]
+          lines = [
+              f"EXACT_HEAD={sha}",
+              f"EXACT_TREE={os.environ['TARGET_TREE']}",
+              f"PRE_ARTIFACT_WORKFLOWS={len(expected)}",
+              f"PRE_ARTIFACT_SUCCESS={len(expected) - len(failures)}",
+              f"PRE_ARTIFACT_FAILURE={len(failures)}",
+          ]
+          for name in expected:
+              run = latest[name]
+              lines.append(
+                  f"{name}|{run['id']}|{run['head_sha']}|"
+                  f"{run['event']}|{run['conclusion']}"
+              )
+          Path("build/m66-physical-hid-recovery-ci.txt").write_text(
+              "\n".join(lines) + "\n"
+          )
+          print("\n".join(lines), flush=True)
+          if failures:
+              raise SystemExit(f"pre-artifact CI failures: {failures}")
+          PY
+
+      - name: Dispatch final M61 physical image gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          workflow = urllib.parse.quote("m61-bootable-persistent-usb.yml", safe="")
+          request = urllib.request.Request(
+              f"https://api.github.com/repos/{repo}/actions/workflows/"
+              f"{workflow}/dispatches",
+              data=json.dumps({"ref": os.environ["TARGET_BRANCH"]}).encode(),
+              method="POST",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "Content-Type": "application/json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              if response.status != 204:
+                  raise SystemExit(f"M61 dispatch failed: HTTP {response.status}")
+          print("DISPATCHED=m61-bootable-persistent-usb.yml")
+          PY
+
+      - name: Require M61 success and record full exact-head result
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.request
+          from pathlib import Path
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["TARGET_HEAD"]
+          token = os.environ["GH_TOKEN"]
+          url = f"https://api.github.com/repos/{repo}/actions/runs?head_sha={sha}&per_page=100"
+          deadline = time.monotonic() + 7200.0
+          selected = None
+          while True:
+              request = urllib.request.Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  payload = json.load(response)
+              candidates = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == sha
+                  and run.get("event") == "workflow_dispatch"
+                  and run.get("name") == "M61 bootable persistent USB"
+              ]
+              if candidates:
+                  selected = max(candidates, key=lambda run: int(run["id"]))
+              if selected is not None and selected.get("status") == "completed":
+                  break
+              if time.monotonic() >= deadline:
+                  raise SystemExit("M61 exact-head run timed out")
+              print("M61_WAIT", flush=True)
+              time.sleep(15.0)
+
+          if selected.get("conclusion") != "success":
+              raise SystemExit(
+                  f"M61 exact-head failure: run={selected['id']} "
+                  f"conclusion={selected.get('conclusion')}"
+              )
+          proof = Path("build/m66-physical-hid-recovery-ci.txt")
+          with proof.open("a") as stream:
+              stream.write("FULL_EXACT_HEAD_WORKFLOWS=29\n")
+              stream.write("FULL_EXACT_HEAD_SUCCESS=29\n")
+              stream.write("FULL_EXACT_HEAD_FAILURE=0\n")
+              stream.write(
+                  f"M61 bootable persistent USB|{selected['id']}|"
+                  f"{selected['head_sha']}|{selected['event']}|"
+                  f"{selected['conclusion']}\n"
+              )
+          print(proof.read_text(), end="")
+          PY
+
+      - name: Preserve exact-head recovery record
+        uses: actions/upload-artifact@v4
+        with:
+          name: m66-physical-hid-recovery-ci-${{ env.TARGET_HEAD }}
+          path: build/m66-physical-hid-recovery-ci.txt
+          if-no-files-found: error
+          retention-days: 14
