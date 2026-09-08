@@ -120,6 +120,512 @@ bool usb_hid_absolute_tablet_decode(
     return true;
 }
 
+#define HID_USAGE_PAGE_GENERIC_DESKTOP 0x01U
+#define HID_USAGE_PAGE_BUTTON 0x09U
+#define HID_USAGE_POINTER 0x01U
+#define HID_USAGE_MOUSE 0x02U
+#define HID_USAGE_X 0x30U
+#define HID_USAGE_Y 0x31U
+#define HID_USAGE_WHEEL 0x38U
+#define HID_REPORT_STATE_CAPACITY 8U
+#define HID_GLOBAL_STACK_CAPACITY 4U
+#define HID_LOCAL_USAGE_CAPACITY 16U
+#define HID_COLLECTION_DEPTH_CAPACITY 8U
+
+struct hid_report_global_state {
+    uint32_t usage_page;
+    uint32_t report_size;
+    uint32_t report_count;
+    int32_t logical_minimum;
+    int32_t logical_maximum;
+    uint8_t report_id;
+    bool report_size_set;
+    bool report_count_set;
+    bool logical_minimum_set;
+    bool logical_maximum_set;
+};
+
+struct hid_report_local_state {
+    uint32_t usages[HID_LOCAL_USAGE_CAPACITY];
+    uint32_t usage_minimum;
+    uint32_t usage_maximum;
+    uint8_t usage_count;
+    bool usage_minimum_set;
+    bool usage_maximum_set;
+};
+
+struct hid_mouse_report_state {
+    struct usb_hid_mouse_layout layout;
+    uint16_t bits;
+    uint8_t report_id;
+    bool used;
+    bool x_found;
+    bool y_found;
+};
+
+static uint32_t hid_item_unsigned(const uint8_t *bytes, uint8_t size) {
+    uint32_t value = 0U;
+    uint8_t index;
+    for (index = 0U; index < size; ++index) {
+        value |= (uint32_t)bytes[index] << ((uint32_t)index * 8U);
+    }
+    return value;
+}
+
+static int32_t hid_item_signed(const uint8_t *bytes, uint8_t size) {
+    const uint32_t value = hid_item_unsigned(bytes, size);
+    if ((size != 0U) && (size < 4U) &&
+        ((value & (1U << ((uint32_t)size * 8U - 1U))) != 0U)) {
+        const uint32_t mask = UINT32_MAX << ((uint32_t)size * 8U);
+        return (int32_t)(value | mask);
+    }
+    return (int32_t)value;
+}
+
+static void hid_local_reset(struct hid_report_local_state *local) {
+    *local = (struct hid_report_local_state){0};
+}
+
+static uint32_t hid_usage_page(uint32_t usage, uint32_t global_page) {
+    return (usage > 0xffffU) ? (usage >> 16U) : global_page;
+}
+
+static uint32_t hid_usage_value(uint32_t usage) {
+    return usage & 0xffffU;
+}
+
+static bool hid_local_usage_for_field(
+    const struct hid_report_local_state *local, uint32_t index,
+    uint32_t *usage) {
+    if ((local == NULL) || (usage == NULL)) { return false; }
+    if (index < local->usage_count) {
+        *usage = local->usages[index];
+        return true;
+    }
+    if (local->usage_minimum_set && local->usage_maximum_set &&
+        (local->usage_minimum <= local->usage_maximum) &&
+        (index <= local->usage_maximum - local->usage_minimum)) {
+        *usage = local->usage_minimum + index;
+        return true;
+    }
+    if (local->usage_count != 0U) {
+        *usage = local->usages[local->usage_count - 1U];
+        return true;
+    }
+    return false;
+}
+
+static struct hid_mouse_report_state *hid_report_state(
+    struct hid_mouse_report_state states[HID_REPORT_STATE_CAPACITY],
+    uint8_t report_id) {
+    uint8_t index;
+    for (index = 0U; index < HID_REPORT_STATE_CAPACITY; ++index) {
+        if (states[index].used && (states[index].report_id == report_id)) {
+            return &states[index];
+        }
+    }
+    for (index = 0U; index < HID_REPORT_STATE_CAPACITY; ++index) {
+        if (!states[index].used) {
+            states[index].used = true;
+            states[index].report_id = report_id;
+            states[index].layout.report_id = report_id;
+            states[index].layout.has_report_id = report_id != 0U;
+            return &states[index];
+        }
+    }
+    return NULL;
+}
+
+static bool hid_layout_axis(
+    struct hid_mouse_report_state *state, uint32_t usage,
+    uint16_t bit_offset, uint32_t bit_size,
+    const struct hid_report_global_state *global) {
+    uint8_t *bits = NULL;
+    uint16_t *offset = NULL;
+    int32_t *minimum = NULL;
+    int32_t *maximum = NULL;
+    bool *found = NULL;
+
+    if ((state == NULL) || (global == NULL) ||
+        (bit_size == 0U) || (bit_size > 16U) ||
+        !global->logical_minimum_set || !global->logical_maximum_set ||
+        (global->logical_minimum >= 0) ||
+        (global->logical_maximum <= global->logical_minimum)) {
+        return false;
+    }
+    if (usage == HID_USAGE_X) {
+        bits = &state->layout.x_bits;
+        offset = &state->layout.x_bit_offset;
+        minimum = &state->layout.x_logical_minimum;
+        maximum = &state->layout.x_logical_maximum;
+        found = &state->x_found;
+    } else if (usage == HID_USAGE_Y) {
+        bits = &state->layout.y_bits;
+        offset = &state->layout.y_bit_offset;
+        minimum = &state->layout.y_logical_minimum;
+        maximum = &state->layout.y_logical_maximum;
+        found = &state->y_found;
+    } else if (usage == HID_USAGE_WHEEL) {
+        if (bit_size > 8U) { return false; }
+        bits = &state->layout.wheel_bits;
+        offset = &state->layout.wheel_bit_offset;
+        minimum = &state->layout.wheel_logical_minimum;
+        maximum = &state->layout.wheel_logical_maximum;
+        found = &state->layout.has_wheel;
+    } else {
+        return false;
+    }
+    if (*found) { return true; }
+    *bits = (uint8_t)bit_size;
+    *offset = bit_offset;
+    *minimum = global->logical_minimum;
+    *maximum = global->logical_maximum;
+    *found = true;
+    return true;
+}
+
+static enum usb_hid_report_parse_result hid_parse_input_item(
+    uint32_t flags, bool inside_mouse,
+    const struct hid_report_global_state *global,
+    const struct hid_report_local_state *local,
+    struct hid_mouse_report_state states[HID_REPORT_STATE_CAPACITY]) {
+    struct hid_mouse_report_state *state;
+    uint32_t item_bits;
+    uint32_t index;
+    const bool constant = (flags & 0x01U) != 0U;
+    const bool variable = (flags & 0x02U) != 0U;
+    const bool relative = (flags & 0x04U) != 0U;
+
+    if ((global == NULL) || (local == NULL) ||
+        !global->report_size_set || !global->report_count_set ||
+        (global->report_size == 0U) || (global->report_count == 0U) ||
+        (global->report_size > USB_HID_MOUSE_REPORT_MAX_BITS) ||
+        (global->report_count > USB_HID_MOUSE_REPORT_MAX_BITS) ||
+        (global->report_size >
+         USB_HID_MOUSE_REPORT_MAX_BITS / global->report_count)) {
+        return USB_HID_REPORT_PARSE_BIT_OVERFLOW;
+    }
+    item_bits = global->report_size * global->report_count;
+    state = hid_report_state(states, global->report_id);
+    if (state == NULL) { return USB_HID_REPORT_PARSE_VALID_UNSUPPORTED; }
+    if ((uint32_t)state->bits > USB_HID_MOUSE_REPORT_MAX_BITS - item_bits) {
+        return USB_HID_REPORT_PARSE_BIT_OVERFLOW;
+    }
+
+    if (inside_mouse && !constant && variable) {
+        uint32_t first_usage = 0U;
+        if (hid_local_usage_for_field(local, 0U, &first_usage) &&
+            (hid_usage_page(first_usage, global->usage_page) ==
+             HID_USAGE_PAGE_BUTTON) &&
+            (hid_usage_value(first_usage) == 1U) &&
+            (global->report_size == 1U) &&
+            (state->layout.button_count == 0U)) {
+            state->layout.buttons_bit_offset = state->bits;
+            state->layout.button_count =
+                (global->report_count > 8U)
+                    ? 8U : (uint8_t)global->report_count;
+        }
+        for (index = 0U; index < global->report_count; ++index) {
+            uint32_t usage;
+            const uint32_t bit_offset =
+                (uint32_t)state->bits + index * global->report_size;
+            if (!hid_local_usage_for_field(local, index, &usage) ||
+                (hid_usage_page(usage, global->usage_page) !=
+                 HID_USAGE_PAGE_GENERIC_DESKTOP)) {
+                continue;
+            }
+            if (relative &&
+                ((hid_usage_value(usage) == HID_USAGE_X) ||
+                 (hid_usage_value(usage) == HID_USAGE_Y) ||
+                 (hid_usage_value(usage) == HID_USAGE_WHEEL))) {
+                (void)hid_layout_axis(
+                    state, hid_usage_value(usage), (uint16_t)bit_offset,
+                    global->report_size, global);
+            }
+        }
+    }
+    state->bits = (uint16_t)((uint32_t)state->bits + item_bits);
+    return USB_HID_REPORT_PARSE_SUPPORTED;
+}
+
+enum usb_hid_report_parse_result usb_hid_parse_mouse_report_descriptor(
+    const uint8_t *bytes, size_t length,
+    struct usb_hid_mouse_layout *layout) {
+    struct hid_report_global_state global = {0};
+    struct hid_report_global_state
+        global_stack[HID_GLOBAL_STACK_CAPACITY];
+    struct hid_report_local_state local = {0};
+    struct hid_mouse_report_state states[HID_REPORT_STATE_CAPACITY] = {0};
+    bool mouse_collections[HID_COLLECTION_DEPTH_CAPACITY] = {false};
+    size_t offset = 0U;
+    uint8_t global_depth = 0U;
+    uint8_t collection_depth = 0U;
+    uint8_t index;
+
+    if ((bytes == NULL) || (layout == NULL) || (length == 0U) ||
+        (length > USB_HID_REPORT_DESCRIPTOR_MAX_BYTES)) {
+        return USB_HID_REPORT_PARSE_MALFORMED;
+    }
+    while (offset < length) {
+        const uint8_t prefix = bytes[offset++];
+        uint8_t size;
+        uint8_t type;
+        uint8_t tag;
+        uint32_t value;
+
+        if (prefix == 0xfeU) {
+            uint8_t long_size;
+            if (length - offset < 2U) {
+                return USB_HID_REPORT_PARSE_MALFORMED;
+            }
+            long_size = bytes[offset];
+            offset += 2U;
+            if ((size_t)long_size > length - offset) {
+                return USB_HID_REPORT_PARSE_MALFORMED;
+            }
+            offset += long_size;
+            continue;
+        }
+        size = (uint8_t)(prefix & 0x03U);
+        if (size == 3U) { size = 4U; }
+        type = (uint8_t)((prefix >> 2U) & 0x03U);
+        tag = (uint8_t)(prefix >> 4U);
+        if ((size_t)size > length - offset) {
+            return USB_HID_REPORT_PARSE_MALFORMED;
+        }
+        value = hid_item_unsigned(&bytes[offset], size);
+
+        if (type == 1U) {
+            switch (tag) {
+                case 0U:
+                    if ((size == 0U) || (value > 0xffffU)) {
+                        return USB_HID_REPORT_PARSE_VALID_UNSUPPORTED;
+                    }
+                    global.usage_page = value;
+                    break;
+                case 1U:
+                    if (size == 0U) {
+                        return USB_HID_REPORT_PARSE_MALFORMED;
+                    }
+                    global.logical_minimum =
+                        hid_item_signed(&bytes[offset], size);
+                    global.logical_minimum_set = true;
+                    break;
+                case 2U:
+                    if (size == 0U) {
+                        return USB_HID_REPORT_PARSE_MALFORMED;
+                    }
+                    global.logical_maximum =
+                        (global.logical_minimum_set &&
+                         (global.logical_minimum < 0))
+                            ? hid_item_signed(&bytes[offset], size)
+                            : (int32_t)value;
+                    global.logical_maximum_set = true;
+                    break;
+                case 7U:
+                    if (size == 0U) {
+                        return USB_HID_REPORT_PARSE_MALFORMED;
+                    }
+                    global.report_size = value;
+                    global.report_size_set = true;
+                    break;
+                case 8U:
+                    if ((size == 0U) || (value == 0U) || (value > 255U)) {
+                        return USB_HID_REPORT_PARSE_MALFORMED;
+                    }
+                    global.report_id = (uint8_t)value;
+                    break;
+                case 9U:
+                    if (size == 0U) {
+                        return USB_HID_REPORT_PARSE_MALFORMED;
+                    }
+                    global.report_count = value;
+                    global.report_count_set = true;
+                    break;
+                case 10U:
+                    if ((size != 0U) ||
+                        (global_depth == HID_GLOBAL_STACK_CAPACITY)) {
+                        return USB_HID_REPORT_PARSE_MALFORMED;
+                    }
+                    global_stack[global_depth++] = global;
+                    break;
+                case 11U:
+                    if ((size != 0U) || (global_depth == 0U)) {
+                        return USB_HID_REPORT_PARSE_MALFORMED;
+                    }
+                    global = global_stack[--global_depth];
+                    break;
+                default:
+                    break;
+            }
+        } else if (type == 2U) {
+            switch (tag) {
+                case 0U:
+                    if ((size == 0U) ||
+                        (local.usage_count == HID_LOCAL_USAGE_CAPACITY)) {
+                        return USB_HID_REPORT_PARSE_VALID_UNSUPPORTED;
+                    }
+                    local.usages[local.usage_count++] = value;
+                    break;
+                case 1U:
+                    if (size == 0U) {
+                        return USB_HID_REPORT_PARSE_MALFORMED;
+                    }
+                    local.usage_minimum = value;
+                    local.usage_minimum_set = true;
+                    break;
+                case 2U:
+                    if (size == 0U) {
+                        return USB_HID_REPORT_PARSE_MALFORMED;
+                    }
+                    local.usage_maximum = value;
+                    local.usage_maximum_set = true;
+                    break;
+                case 10U:
+                    return USB_HID_REPORT_PARSE_VALID_UNSUPPORTED;
+                default:
+                    break;
+            }
+        } else if (type == 0U) {
+            if (tag == 8U) {
+                enum usb_hid_report_parse_result result =
+                    hid_parse_input_item(
+                        value,
+                        (collection_depth != 0U) &&
+                        mouse_collections[collection_depth - 1U],
+                        &global, &local, states);
+                if (result != USB_HID_REPORT_PARSE_SUPPORTED) {
+                    return result;
+                }
+            } else if (tag == 10U) {
+                uint32_t usage = 0U;
+                const bool parent_mouse =
+                    (collection_depth != 0U) &&
+                    mouse_collections[collection_depth - 1U];
+                bool current_mouse = parent_mouse;
+                if ((size == 0U) ||
+                    (collection_depth == HID_COLLECTION_DEPTH_CAPACITY)) {
+                    return USB_HID_REPORT_PARSE_MALFORMED;
+                }
+                if (hid_local_usage_for_field(&local, 0U, &usage) &&
+                    (hid_usage_page(usage, global.usage_page) ==
+                     HID_USAGE_PAGE_GENERIC_DESKTOP) &&
+                    ((hid_usage_value(usage) == HID_USAGE_MOUSE) ||
+                     (parent_mouse &&
+                      (hid_usage_value(usage) == HID_USAGE_POINTER)))) {
+                    current_mouse = true;
+                }
+                mouse_collections[collection_depth++] = current_mouse;
+            } else if (tag == 12U) {
+                if ((size != 0U) || (collection_depth == 0U)) {
+                    return USB_HID_REPORT_PARSE_MALFORMED;
+                }
+                --collection_depth;
+            } else if ((tag != 9U) && (tag != 11U)) {
+                return USB_HID_REPORT_PARSE_VALID_UNSUPPORTED;
+            }
+            hid_local_reset(&local);
+        } else {
+            return USB_HID_REPORT_PARSE_VALID_UNSUPPORTED;
+        }
+        offset += size;
+    }
+    if ((collection_depth != 0U) || (global_depth != 0U)) {
+        return USB_HID_REPORT_PARSE_MALFORMED;
+    }
+    for (index = 0U; index < HID_REPORT_STATE_CAPACITY; ++index) {
+        if (!states[index].used) { continue; }
+        states[index].layout.report_bits = states[index].bits;
+        if (states[index].x_found && states[index].y_found &&
+            (states[index].bits != 0U)) {
+            *layout = states[index].layout;
+            return USB_HID_REPORT_PARSE_SUPPORTED;
+        }
+    }
+    return USB_HID_REPORT_PARSE_VALID_UNSUPPORTED;
+}
+
+static bool hid_extract_bits(const uint8_t *report, size_t length,
+                             uint16_t offset, uint8_t count,
+                             uint32_t *value) {
+    uint32_t extracted = 0U;
+    uint8_t index;
+    if ((report == NULL) || (value == NULL) || (count == 0U) ||
+        (count > 16U) ||
+        (length > SIZE_MAX / 8U) ||
+        ((size_t)offset + (size_t)count > length * 8U)) {
+        return false;
+    }
+    for (index = 0U; index < count; ++index) {
+        const size_t bit = (size_t)offset + index;
+        if ((report[bit / 8U] & (uint8_t)(1U << (bit % 8U))) != 0U) {
+            extracted |= 1U << index;
+        }
+    }
+    *value = extracted;
+    return true;
+}
+
+static int32_t hid_sign_extend(uint32_t value, uint8_t bits) {
+    const uint32_t sign = 1U << (bits - 1U);
+    return (int32_t)((value ^ sign) - sign);
+}
+
+bool usb_hid_mouse_layout_decode(
+    const struct usb_hid_mouse_layout *layout,
+    const uint8_t *report, size_t length,
+    struct usb_hid_mouse_report *decoded) {
+    const uint16_t prefix = layout != NULL && layout->has_report_id ? 8U : 0U;
+    uint32_t x;
+    uint32_t y;
+    uint32_t wheel = 0U;
+    uint8_t buttons = 0U;
+    uint8_t index;
+
+    if ((layout == NULL) || (report == NULL) || (decoded == NULL) ||
+        (length > SIZE_MAX / 8U) ||
+        (layout->report_bits == 0U) ||
+        (layout->report_bits > USB_HID_MOUSE_REPORT_MAX_BITS) ||
+        (layout->x_bits == 0U) || (layout->x_bits > 16U) ||
+        (layout->y_bits == 0U) || (layout->y_bits > 16U) ||
+        (layout->button_count > 8U) ||
+        (layout->has_wheel &&
+         ((layout->wheel_bits == 0U) || (layout->wheel_bits > 8U))) ||
+        (layout->has_report_id &&
+         ((length == 0U) || (report[0] != layout->report_id))) ||
+        ((size_t)layout->report_bits + prefix > length * 8U) ||
+        !hid_extract_bits(report, length,
+                          (uint16_t)(layout->x_bit_offset + prefix),
+                          layout->x_bits, &x) ||
+        !hid_extract_bits(report, length,
+                          (uint16_t)(layout->y_bit_offset + prefix),
+                          layout->y_bits, &y)) {
+        return false;
+    }
+    if (layout->has_wheel &&
+        !hid_extract_bits(report, length,
+                          (uint16_t)(layout->wheel_bit_offset + prefix),
+                          layout->wheel_bits, &wheel)) {
+        return false;
+    }
+    for (index = 0U; index < layout->button_count; ++index) {
+        uint32_t down;
+        if (!hid_extract_bits(
+                report, length,
+                (uint16_t)(layout->buttons_bit_offset + prefix + index),
+                1U, &down)) {
+            return false;
+        }
+        if (down != 0U) { buttons = (uint8_t)(buttons | (uint8_t)(1U << index)); }
+    }
+    decoded->buttons = buttons;
+    decoded->dx = (int16_t)hid_sign_extend(x, layout->x_bits);
+    decoded->dy = (int16_t)hid_sign_extend(y, layout->y_bits);
+    decoded->wheel = layout->has_wheel
+        ? (int8_t)hid_sign_extend(wheel, layout->wheel_bits) : 0;
+    return true;
+}
+
 static bool interrupt_pointer_owned(uint64_t pointer, uint64_t ring_physical) {
     const uint64_t end = ring_physical +
         ((uint64_t)XHCI_INTERRUPT_RING_USABLE * XHCI_TRB_SIZE);
@@ -327,7 +833,8 @@ static bool m52_submit_endpoint(const struct xhci_state *active,
     m52_mmio_write32(mmio, doorbell, (uint32_t)descriptor->endpoint_id);
 #ifdef BORING_M61_PHYSICAL_BREADCRUMBS
     if ((device->topology.depth != 0U) &&
-        (descriptor->report_format == XHCI_HID_REPORT_BOOT_MOUSE)) {
+        ((descriptor->report_format == XHCI_HID_REPORT_BOOT_MOUSE) ||
+         (descriptor->report_format == XHCI_HID_REPORT_GENERIC_MOUSE))) {
         boring_m66_physical_usb_mouse_witness(
             (uint8_t)M66_POST_DOWNSTREAM_INTERRUPT_ARMED);
     }
@@ -507,10 +1014,23 @@ static bool m52_decode_report(struct xhci_addressed_device *device,
                                 true);
             }
         }
-    } else if (descriptor->report_format == XHCI_HID_REPORT_BOOT_MOUSE) {
+    } else if ((descriptor->report_format == XHCI_HID_REPORT_BOOT_MOUSE) ||
+               (descriptor->report_format == XHCI_HID_REPORT_GENERIC_MOUSE)) {
         struct usb_hid_mouse_report decoded;
         const uint8_t previous_buttons = runtime->last_pointer_buttons;
-        if (!usb_hid_mouse_decode(report, (size_t)length, &decoded) ||
+        bool decoded_ok;
+        if ((descriptor->report_format == XHCI_HID_REPORT_GENERIC_MOUSE) &&
+            descriptor->mouse_layout.has_report_id &&
+            ((length == 0U) ||
+             (report[0] != descriptor->mouse_layout.report_id))) {
+            return true;
+        }
+        decoded_ok = descriptor->report_format == XHCI_HID_REPORT_BOOT_MOUSE
+            ? usb_hid_mouse_decode(report, (size_t)length, &decoded)
+            : usb_hid_mouse_layout_decode(
+                  &descriptor->mouse_layout, report, (size_t)length,
+                  &decoded);
+        if (!decoded_ok ||
             (runtime->pointer_reports == UINT32_MAX)) {
             return false;
         }

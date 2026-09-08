@@ -135,7 +135,7 @@ assert configuration.index("xhci_select_supported_hid_configuration(") < configu
 protocol=a[a.index("static bool ep0_submit_hid_set_protocol("):a.index("static bool configure_hid_boot_protocols(")]
 assert "xhci_build_hid_set_protocol_control_td(" in protocol
 assert protocol.index("device->control_outstanding = true;") < protocol.index("event_dispatch_wait(controller, XHCI_EXPECT_CONTROL_NODATA_STATUS") < protocol.index("++device->set_protocol_completions;")
-parser=x[x.index("bool xhci_parse_hid_configuration("):x.index("bool xhci_select_supported_hid_configuration(")]
+parser=x[x.index("bool xhci_parse_hid_configuration_ex("):x.index("bool xhci_parse_hid_configuration(")]
 selector=x[x.index("bool xhci_select_supported_hid_configuration("):x.index("static bool build_no_data_control_td(")]
 assert "current_subclass = bytes[offset + 6U];" in parser
 assert "endpoint.interface_subclass = current_subclass;" in parser

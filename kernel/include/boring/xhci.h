@@ -37,6 +37,8 @@
 #define XHCI_USB_DESCRIPTOR_CONFIGURATION 2U
 #define XHCI_USB_DESCRIPTOR_INTERFACE 4U
 #define XHCI_USB_DESCRIPTOR_ENDPOINT 5U
+#define XHCI_USB_DESCRIPTOR_HID 0x21U
+#define XHCI_USB_DESCRIPTOR_REPORT 0x22U
 #define XHCI_USB_CLASS_HID 3U
 #define XHCI_USB_ENDPOINT_TRANSFER_INTERRUPT 3U
 #define XHCI_USB_HID_SUBCLASS_BOOT 1U
@@ -47,7 +49,31 @@ enum xhci_hid_report_format {
     XHCI_HID_REPORT_UNSUPPORTED = 0,
     XHCI_HID_REPORT_BOOT_KEYBOARD,
     XHCI_HID_REPORT_BOOT_MOUSE,
-    XHCI_HID_REPORT_QEMU_ABSOLUTE_TABLET
+    XHCI_HID_REPORT_QEMU_ABSOLUTE_TABLET,
+    XHCI_HID_REPORT_GENERIC_MOUSE
+};
+
+enum xhci_hid_rejection_reason {
+    XHCI_HID_REJECT_NONE = 0,
+    XHCI_HID_REJECT_CONFIGURATION_HEADER,
+    XHCI_HID_REJECT_DESCRIPTOR_BOUNDS,
+    XHCI_HID_REJECT_INTERFACE_DESCRIPTOR,
+    XHCI_HID_REJECT_INTERFACE_ENDPOINT_COUNT,
+    XHCI_HID_REJECT_HID_DESCRIPTOR,
+    XHCI_HID_REJECT_ENDPOINT_DESCRIPTOR,
+    XHCI_HID_REJECT_ENDPOINT_ENCODING,
+    XHCI_HID_REJECT_DUPLICATE_ENDPOINT,
+    XHCI_HID_REJECT_ENDPOINT_CAPACITY,
+    XHCI_HID_REJECT_PACKET_SIZE,
+    XHCI_HID_REJECT_INTERVAL,
+    XHCI_HID_REJECT_HID_DESCRIPTOR_MISSING,
+    XHCI_HID_REJECT_REPORT_DESCRIPTOR_TOO_LARGE,
+    XHCI_HID_REJECT_REPORT_CONTROL_TRANSFER,
+    XHCI_HID_REJECT_REPORT_DESCRIPTOR_MALFORMED,
+    XHCI_HID_REJECT_REPORT_BIT_OVERFLOW,
+    XHCI_HID_REJECT_REPORT_LAYOUT_UNSUPPORTED,
+    XHCI_HID_REJECT_REPORT_PACKET_MISMATCH,
+    XHCI_HID_REJECT_RUNTIME_CONFIGURATION
 };
 
 enum xhci_controller_init_status {
@@ -85,6 +111,9 @@ struct xhci_usb_descriptor_facts {
 };
 
 struct xhci_hid_endpoint_descriptor {
+    struct usb_hid_mouse_layout mouse_layout;
+    uint16_t hid_version;
+    uint16_t report_descriptor_length;
     uint16_t max_packet;
     uint8_t interface_number;
     uint8_t alternate_setting;
@@ -95,12 +124,17 @@ struct xhci_hid_endpoint_descriptor {
     uint8_t endpoint_id;
     uint8_t interval;
     uint8_t xhci_interval;
+    uint8_t hid_country_code;
+    uint8_t hid_descriptor_count;
+    uint8_t report_descriptor_type;
+    bool hid_descriptor_present;
 };
 
 struct xhci_hid_configuration {
     struct xhci_hid_endpoint_descriptor endpoints[XHCI_MAX_HID_ENDPOINTS];
     uint8_t configuration_value;
     uint8_t endpoint_count;
+    uint8_t hid_interface_count;
 };
 
 struct xhci_hid_endpoint_runtime {
@@ -144,6 +178,7 @@ struct xhci_addressed_device {
     uint64_t ep0_ring_physical;
     uint64_t descriptor_buffer_physical;
     uint64_t hub_control_buffer_physical;
+    uint64_t hid_report_descriptor_physical;
     uint64_t hid_ring_physical[XHCI_MAX_HID_ENDPOINTS];
     uint64_t expected_data_trb_physical;
     uint64_t expected_status_trb_physical;
@@ -151,6 +186,7 @@ struct xhci_addressed_device {
     struct boring_usb_topology topology;
     struct boring_usb_hub_descriptor hub_descriptor;
     struct xhci_hid_configuration hid_configuration;
+    enum xhci_hid_rejection_reason hid_rejection_reason;
     struct xhci_hid_endpoint_runtime hid_runtime[XHCI_MAX_HID_ENDPOINTS];
     uint32_t transfer_events;
     uint32_t descriptor_bytes;
@@ -251,6 +287,11 @@ bool xhci_build_get_descriptor_control_td(struct xhci_control_td *td,
                                           uint8_t descriptor_type,
                                           uint8_t descriptor_index,
                                           uint16_t length);
+bool xhci_build_hid_get_report_descriptor_control_td(
+    struct xhci_control_td *td, uint64_t ep0_ring_physical,
+    uint16_t producer_index, bool producer_cycle,
+    uint64_t buffer_physical, uint8_t interface_number,
+    uint16_t length);
 bool xhci_build_hub_get_descriptor_control_td(
     struct xhci_control_td *td, uint64_t ep0_ring_physical,
     uint16_t producer_index, bool producer_cycle,
@@ -289,6 +330,12 @@ bool xhci_usb_endpoint_id(uint8_t endpoint_address, uint8_t *endpoint_id);
 bool xhci_parse_hid_configuration(
     const uint8_t *bytes, uint16_t received, uint8_t speed,
     struct xhci_hid_configuration *configuration);
+bool xhci_parse_hid_configuration_ex(
+    const uint8_t *bytes, uint16_t received, uint8_t speed,
+    struct xhci_hid_configuration *configuration,
+    enum xhci_hid_rejection_reason *reason);
+const char *xhci_hid_rejection_reason_name(
+    enum xhci_hid_rejection_reason reason);
 bool xhci_select_supported_hid_configuration(
     const struct xhci_hid_configuration *parsed,
     uint16_t vendor_id, uint16_t product_id,

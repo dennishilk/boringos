@@ -437,6 +437,21 @@ bool xhci_build_get_descriptor_control_td(struct xhci_control_td *td,
                                producer_cycle, buffer_physical, setup, length);
 }
 
+bool xhci_build_hid_get_report_descriptor_control_td(
+    struct xhci_control_td *td, uint64_t ep0_ring_physical,
+    uint16_t producer_index, bool producer_cycle,
+    uint64_t buffer_physical, uint8_t interface_number,
+    uint16_t length) {
+    const uint8_t setup[8] = {
+        0x81U, 0x06U, 0U, XHCI_USB_DESCRIPTOR_REPORT,
+        interface_number, 0U, (uint8_t)length, (uint8_t)(length >> 8U)
+    };
+    return (length != 0U) &&
+           (length <= USB_HID_REPORT_DESCRIPTOR_MAX_BYTES) &&
+           build_control_in_td(td, ep0_ring_physical, producer_index,
+                               producer_cycle, buffer_physical, setup, length);
+}
+
 bool xhci_build_hub_get_descriptor_control_td(
     struct xhci_control_td *td, uint64_t ep0_ring_physical,
     uint16_t producer_index, bool producer_cycle,
@@ -702,82 +717,239 @@ bool xhci_usb_endpoint_id(uint8_t endpoint_address, uint8_t *endpoint_id) {
     return true;
 }
 
-bool xhci_parse_hid_configuration(
+static bool hid_parse_reject(enum xhci_hid_rejection_reason *reason,
+                             enum xhci_hid_rejection_reason rejected) {
+    if (reason != NULL) { *reason = rejected; }
+    return false;
+}
+
+const char *xhci_hid_rejection_reason_name(
+    enum xhci_hid_rejection_reason reason) {
+    switch (reason) {
+        case XHCI_HID_REJECT_NONE: return "none";
+        case XHCI_HID_REJECT_CONFIGURATION_HEADER:
+            return "malformed configuration header";
+        case XHCI_HID_REJECT_DESCRIPTOR_BOUNDS:
+            return "malformed descriptor bounds";
+        case XHCI_HID_REJECT_INTERFACE_DESCRIPTOR:
+            return "malformed interface descriptor";
+        case XHCI_HID_REJECT_INTERFACE_ENDPOINT_COUNT:
+            return "unsupported HID interface shape";
+        case XHCI_HID_REJECT_HID_DESCRIPTOR:
+            return "malformed HID descriptor";
+        case XHCI_HID_REJECT_ENDPOINT_DESCRIPTOR:
+            return "malformed endpoint descriptor";
+        case XHCI_HID_REJECT_ENDPOINT_ENCODING:
+            return "impossible endpoint encoding";
+        case XHCI_HID_REJECT_DUPLICATE_ENDPOINT:
+            return "duplicate endpoint";
+        case XHCI_HID_REJECT_ENDPOINT_CAPACITY:
+            return "endpoint capacity exceeded";
+        case XHCI_HID_REJECT_PACKET_SIZE: return "invalid packet size";
+        case XHCI_HID_REJECT_INTERVAL: return "invalid interval";
+        case XHCI_HID_REJECT_HID_DESCRIPTOR_MISSING:
+            return "HID report descriptor missing";
+        case XHCI_HID_REJECT_REPORT_DESCRIPTOR_TOO_LARGE:
+            return "report descriptor length unsupported";
+        case XHCI_HID_REJECT_REPORT_CONTROL_TRANSFER:
+            return "report descriptor control transfer failed";
+        case XHCI_HID_REJECT_REPORT_DESCRIPTOR_MALFORMED:
+            return "malformed report descriptor";
+        case XHCI_HID_REJECT_REPORT_BIT_OVERFLOW:
+            return "report-bit overflow";
+        case XHCI_HID_REJECT_REPORT_LAYOUT_UNSUPPORTED:
+            return "valid report layout unsupported";
+        case XHCI_HID_REJECT_REPORT_PACKET_MISMATCH:
+            return "report exceeds interrupt packet";
+        case XHCI_HID_REJECT_RUNTIME_CONFIGURATION:
+            return "runtime HID configuration failure";
+        default: return "other exact reason";
+    }
+}
+
+bool xhci_parse_hid_configuration_ex(
     const uint8_t *bytes, uint16_t received, uint8_t speed,
-    struct xhci_hid_configuration *configuration) {
+    struct xhci_hid_configuration *configuration,
+    enum xhci_hid_rejection_reason *reason) {
     struct xhci_hid_configuration parsed = {0};
     uint16_t total;
     uint32_t offset = 0U;
     bool current_hid = false;
+    bool current_hid_descriptor = false;
     uint8_t current_interface = 0U;
     uint8_t current_alternate = 0U;
     uint8_t current_subclass = 0U;
     uint8_t current_protocol = 0U;
+    uint8_t current_declared_endpoints = 0U;
+    uint8_t current_seen_endpoints = 0U;
+    uint16_t current_hid_version = 0U;
+    uint16_t current_report_length = 0U;
+    uint8_t current_country = 0U;
+    uint8_t current_descriptor_count = 0U;
+    uint8_t current_report_type = 0U;
+    uint32_t endpoint_ids = 0U;
 
-    if ((bytes == NULL) || (configuration == NULL) || (received < 9U) ||
+    if (reason != NULL) { *reason = XHCI_HID_REJECT_NONE; }
+    if ((bytes == NULL) || (configuration == NULL) || (reason == NULL) ||
+        (received < 9U) ||
         (received > XHCI_DESCRIPTOR_BUFFER_BYTES) ||
         (bytes[0] < 9U) || (bytes[1] != XHCI_USB_DESCRIPTOR_CONFIGURATION)) {
-        return false;
+        return hid_parse_reject(reason, XHCI_HID_REJECT_CONFIGURATION_HEADER);
     }
     total = little16(&bytes[2]);
     if ((total < 9U) || (total > received) ||
         (total > XHCI_DESCRIPTOR_BUFFER_BYTES) || (bytes[5] == 0U)) {
-        return false;
+        return hid_parse_reject(reason, XHCI_HID_REJECT_CONFIGURATION_HEADER);
     }
     parsed.configuration_value = bytes[5];
     while (offset < total) {
         uint8_t descriptor_length;
         uint8_t descriptor_type;
-        if ((uint32_t)total - offset < 2U) { return false; }
+        if ((uint32_t)total - offset < 2U) {
+            return hid_parse_reject(reason, XHCI_HID_REJECT_DESCRIPTOR_BOUNDS);
+        }
         descriptor_length = bytes[offset];
         descriptor_type = bytes[offset + 1U];
         if ((descriptor_length < 2U) ||
             ((uint32_t)descriptor_length > (uint32_t)total - offset)) {
-            return false;
+            return hid_parse_reject(reason, XHCI_HID_REJECT_DESCRIPTOR_BOUNDS);
         }
         if (descriptor_type == XHCI_USB_DESCRIPTOR_INTERFACE) {
-            if (descriptor_length < 9U) { return false; }
+            if (current_hid &&
+                (current_seen_endpoints != current_declared_endpoints)) {
+                return hid_parse_reject(
+                    reason, XHCI_HID_REJECT_INTERFACE_ENDPOINT_COUNT);
+            }
+            if (descriptor_length < 9U) {
+                return hid_parse_reject(
+                    reason, XHCI_HID_REJECT_INTERFACE_DESCRIPTOR);
+            }
             current_interface = bytes[offset + 2U];
             current_alternate = bytes[offset + 3U];
+            current_declared_endpoints = bytes[offset + 4U];
+            current_seen_endpoints = 0U;
             current_subclass = bytes[offset + 6U];
             current_protocol = bytes[offset + 7U];
             current_hid = (current_alternate == 0U) &&
                           (bytes[offset + 5U] == XHCI_USB_CLASS_HID);
+            current_hid_descriptor = false;
+            current_hid_version = 0U;
+            current_report_length = 0U;
+            current_country = 0U;
+            current_descriptor_count = 0U;
+            current_report_type = 0U;
+            if (current_hid) {
+                if (parsed.hid_interface_count == UINT8_MAX) {
+                    return hid_parse_reject(
+                        reason, XHCI_HID_REJECT_INTERFACE_DESCRIPTOR);
+                }
+                ++parsed.hid_interface_count;
+            }
+        } else if ((descriptor_type == XHCI_USB_DESCRIPTOR_HID) &&
+                   current_hid) {
+            uint32_t required;
+            uint8_t subordinate;
+            if (current_hid_descriptor || (descriptor_length < 6U)) {
+                return hid_parse_reject(reason,
+                                        XHCI_HID_REJECT_HID_DESCRIPTOR);
+            }
+            current_descriptor_count = bytes[offset + 5U];
+            required = 6U + (uint32_t)current_descriptor_count * 3U;
+            if ((required > descriptor_length) ||
+                (current_descriptor_count == 0U)) {
+                return hid_parse_reject(reason,
+                                        XHCI_HID_REJECT_HID_DESCRIPTOR);
+            }
+            current_hid_descriptor = true;
+            current_hid_version = little16(&bytes[offset + 2U]);
+            current_country = bytes[offset + 4U];
+            for (subordinate = 0U;
+                 subordinate < current_descriptor_count; ++subordinate) {
+                const uint32_t entry = offset + 6U +
+                                       (uint32_t)subordinate * 3U;
+                const uint8_t type = bytes[entry];
+                const uint16_t length = little16(&bytes[entry + 1U]);
+                if ((type == XHCI_USB_DESCRIPTOR_REPORT) &&
+                    (current_report_type == 0U)) {
+                    current_report_type = type;
+                    current_report_length = length;
+                } else if ((type == XHCI_USB_DESCRIPTOR_REPORT) &&
+                           (current_report_type != 0U)) {
+                    return hid_parse_reject(
+                        reason, XHCI_HID_REJECT_HID_DESCRIPTOR);
+                }
+            }
         } else if ((descriptor_type == XHCI_USB_DESCRIPTOR_ENDPOINT) &&
                    current_hid) {
             struct xhci_hid_endpoint_descriptor endpoint = {0};
             uint16_t raw_packet;
             uint8_t endpoint_id;
-            uint8_t previous;
-            if ((descriptor_length < 7U) ||
-                (parsed.endpoint_count == XHCI_MAX_HID_ENDPOINTS)) {
-                return false;
+            uint32_t endpoint_bit;
+            bool high_bandwidth = false;
+            if (descriptor_length < 7U) {
+                return hid_parse_reject(
+                    reason, XHCI_HID_REJECT_ENDPOINT_DESCRIPTOR);
             }
+            if (current_seen_endpoints == UINT8_MAX) {
+                return hid_parse_reject(
+                    reason, XHCI_HID_REJECT_INTERFACE_ENDPOINT_COUNT);
+            }
+            ++current_seen_endpoints;
             endpoint.endpoint_address = bytes[offset + 2U];
-            if ((endpoint.endpoint_address & 0x80U) == 0U) { return false; }
+            if (!xhci_usb_endpoint_id(endpoint.endpoint_address, &endpoint_id)) {
+                return hid_parse_reject(
+                    reason, XHCI_HID_REJECT_ENDPOINT_ENCODING);
+            }
+            endpoint_bit = 1U << endpoint_id;
+            if ((endpoint_ids & endpoint_bit) != 0U) {
+                return hid_parse_reject(
+                    reason, XHCI_HID_REJECT_DUPLICATE_ENDPOINT);
+            }
+            endpoint_ids |= endpoint_bit;
             if ((bytes[offset + 3U] & 0x03U) !=
                 XHCI_USB_ENDPOINT_TRANSFER_INTERRUPT) {
-                return false;
-            }
-            if (!xhci_usb_endpoint_id(endpoint.endpoint_address, &endpoint_id)) {
-                return false;
-            }
-            for (previous = 0U; previous < parsed.endpoint_count; ++previous) {
-                if (parsed.endpoints[previous].endpoint_id == endpoint_id) {
-                    return false;
-                }
+                offset += descriptor_length;
+                continue;
             }
             raw_packet = little16(&bytes[offset + 4U]);
+            if ((speed == BORING_USB_SPEED_HIGH) &&
+                ((raw_packet & 0x1800U) != 0U)) {
+                if ((raw_packet & 0x1800U) == 0x1800U) {
+                    return hid_parse_reject(
+                        reason, XHCI_HID_REJECT_PACKET_SIZE);
+                }
+                high_bandwidth = true;
+                raw_packet = (uint16_t)(raw_packet & 0x07ffU);
+            }
             if (!hid_interrupt_packet_size(speed, raw_packet,
                                            &endpoint.max_packet) ||
-                !hid_interrupt_interval(speed, bytes[offset + 6U],
+                ((speed != BORING_USB_SPEED_HIGH) &&
+                 ((little16(&bytes[offset + 4U]) & 0xf800U) != 0U))) {
+                return hid_parse_reject(reason, XHCI_HID_REJECT_PACKET_SIZE);
+            }
+            if (!hid_interrupt_interval(speed, bytes[offset + 6U],
                                         &endpoint.xhci_interval)) {
-                return false;
+                return hid_parse_reject(reason, XHCI_HID_REJECT_INTERVAL);
+            }
+            if (((endpoint.endpoint_address & 0x80U) == 0U) ||
+                high_bandwidth) {
+                offset += descriptor_length;
+                continue;
+            }
+            if (parsed.endpoint_count == XHCI_MAX_HID_ENDPOINTS) {
+                return hid_parse_reject(
+                    reason, XHCI_HID_REJECT_ENDPOINT_CAPACITY);
             }
             endpoint.interface_number = current_interface;
             endpoint.alternate_setting = current_alternate;
             endpoint.interface_subclass = current_subclass;
             endpoint.protocol = current_protocol;
+            endpoint.hid_descriptor_present = current_hid_descriptor;
+            endpoint.hid_version = current_hid_version;
+            endpoint.hid_country_code = current_country;
+            endpoint.hid_descriptor_count = current_descriptor_count;
+            endpoint.report_descriptor_type = current_report_type;
+            endpoint.report_descriptor_length = current_report_length;
             if ((current_subclass == XHCI_USB_HID_SUBCLASS_BOOT) &&
                 (current_protocol == XHCI_USB_HID_PROTOCOL_KEYBOARD)) {
                 endpoint.report_format = XHCI_HID_REPORT_BOOT_KEYBOARD;
@@ -792,9 +964,25 @@ bool xhci_parse_hid_configuration(
         }
         offset += descriptor_length;
     }
-    if ((offset != total) || (parsed.endpoint_count == 0U)) { return false; }
+    if (current_hid &&
+        (current_seen_endpoints != current_declared_endpoints)) {
+        return hid_parse_reject(
+            reason, XHCI_HID_REJECT_INTERFACE_ENDPOINT_COUNT);
+    }
+    if (offset != total) {
+        return hid_parse_reject(reason, XHCI_HID_REJECT_DESCRIPTOR_BOUNDS);
+    }
     *configuration = parsed;
+    *reason = XHCI_HID_REJECT_NONE;
     return true;
+}
+
+bool xhci_parse_hid_configuration(
+    const uint8_t *bytes, uint16_t received, uint8_t speed,
+    struct xhci_hid_configuration *configuration) {
+    enum xhci_hid_rejection_reason reason = XHCI_HID_REJECT_NONE;
+    return xhci_parse_hid_configuration_ex(
+        bytes, received, speed, configuration, &reason);
 }
 
 bool xhci_select_supported_hid_configuration(
@@ -806,11 +994,11 @@ bool xhci_select_supported_hid_configuration(
 
     if ((parsed == NULL) || (supported == NULL) ||
         (parsed->configuration_value == 0U) ||
-        (parsed->endpoint_count == 0U) ||
         (parsed->endpoint_count > XHCI_MAX_HID_ENDPOINTS)) {
         return false;
     }
     selected.configuration_value = parsed->configuration_value;
+    selected.hid_interface_count = parsed->hid_interface_count;
     for (index = 0U; index < parsed->endpoint_count; ++index) {
         struct xhci_hid_endpoint_descriptor endpoint =
             parsed->endpoints[index];

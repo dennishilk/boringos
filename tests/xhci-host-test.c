@@ -541,14 +541,18 @@ static void m51_configuration_test(void) {
     check(!xhci_parse_hid_configuration(configuration, sizeof(configuration), 3U, &parsed) &&
           memcmp(&parsed, &good, sizeof(parsed)) == 0,
           "M51 descriptor overrun leaves state");
-    configuration[30] = 3U;
+    configuration[30] = 7U;
     configuration[32] = 0x01U;
-    check(!xhci_parse_hid_configuration(configuration, sizeof(configuration), 3U, &parsed),
-          "M51 HID OUT endpoint rejected");
+    check(xhci_parse_hid_configuration(
+              configuration, sizeof(configuration), 3U, &parsed) &&
+          (parsed.endpoint_count == 0U),
+          "M66 valid HID interrupt OUT endpoint skipped");
     configuration[32] = 0x81U;
     configuration[33] = 2U;
-    check(!xhci_parse_hid_configuration(configuration, sizeof(configuration), 3U, &parsed),
-          "M51 non-interrupt endpoint rejected");
+    check(xhci_parse_hid_configuration(
+              configuration, sizeof(configuration), 3U, &parsed) &&
+          (parsed.endpoint_count == 0U),
+          "M66 valid unsupported HID endpoint skipped");
     configuration[33] = 3U;
     configuration[34] = 0U;
     configuration[35] = 0U;
@@ -799,6 +803,170 @@ static void hub_xhci_model_test(void) {
           "hub port bounds");
 }
 
+static void set_report_bits(uint8_t *bytes, size_t length,
+                            uint16_t offset, uint8_t count,
+                            uint32_t value) {
+    uint8_t index;
+    for (index = 0U; index < count; ++index) {
+        const size_t bit = (size_t)offset + index;
+        if ((bit < length * 8U) && ((value & (1U << index)) != 0U)) {
+            bytes[bit / 8U] = (uint8_t)(bytes[bit / 8U] |
+                                      (uint8_t)(1U << (bit % 8U)));
+        }
+    }
+}
+
+static void m66_hid_report_descriptor_test(void) {
+    static const uint8_t report_id_mouse[] = {
+        0x05, 0x01, 0x09, 0x02, 0xa1, 0x01,
+        0x85, 0x05, 0x09, 0x01, 0xa1, 0x00,
+        0x05, 0x09, 0x19, 0x01, 0x29, 0x05,
+        0x15, 0x00, 0x25, 0x01, 0x95, 0x05,
+        0x75, 0x01, 0x81, 0x02, 0x95, 0x01,
+        0x75, 0x03, 0x81, 0x01, 0x05, 0x01,
+        0x09, 0x30, 0x09, 0x31, 0x09, 0x38,
+        0x15, 0x81, 0x25, 0x7f, 0x75, 0x08,
+        0x95, 0x03, 0x81, 0x06, 0xc0, 0xc0
+    };
+    static const uint8_t sixteen_bit_mouse[] = {
+        0x05, 0x01, 0x09, 0x02, 0xa1, 0x01,
+        0x09, 0x01, 0xa1, 0x00,
+        0x05, 0x09, 0x19, 0x01, 0x29, 0x03,
+        0x15, 0x00, 0x25, 0x01, 0x75, 0x01,
+        0x95, 0x03, 0x81, 0x02,
+        0x05, 0x01, 0x09, 0x30, 0x09, 0x31,
+        0x16, 0x00, 0x80, 0x26, 0xff, 0x7f,
+        0x75, 0x10, 0x95, 0x02, 0x81, 0x06,
+        0xc0, 0xc0
+    };
+    static const uint8_t unsupported_keyboard[] = {
+        0x05, 0x01, 0x09, 0x06, 0xa1, 0x01, 0xc0
+    };
+    static const uint8_t overflow[] = {
+        0x05, 0x01, 0x09, 0x02, 0xa1, 0x01,
+        0x75, 0x20, 0x96, 0x20, 0x00, 0x81, 0x01, 0xc0
+    };
+    static const uint8_t malformed_short[] = {0x75};
+    static const uint8_t malformed_long[] = {0xfe, 0x04, 0x01, 0xaa};
+    struct usb_hid_mouse_layout layout;
+    struct usb_hid_mouse_report decoded;
+    uint8_t report_id_bytes[5] = {0x05, 0x05, 0xfb, 0x07, 0xff};
+    uint8_t sixteen_bit_bytes[5] = {0U};
+
+    check(usb_hid_parse_mouse_report_descriptor(
+              report_id_mouse, sizeof(report_id_mouse), &layout) ==
+              USB_HID_REPORT_PARSE_SUPPORTED &&
+          layout.has_report_id && (layout.report_id == 5U) &&
+          (layout.report_bits == 32U) &&
+          (layout.button_count == 5U) &&
+          (layout.x_bit_offset == 8U) &&
+          (layout.y_bit_offset == 16U) && layout.has_wheel &&
+          (layout.wheel_bit_offset == 24U),
+          "M66 Report ID, buttons, padding and 8-bit relative layout");
+    check(usb_hid_mouse_layout_decode(
+              &layout, report_id_bytes, sizeof(report_id_bytes), &decoded) &&
+          (decoded.buttons == 5U) && (decoded.dx == -5) &&
+          (decoded.dy == 7) && (decoded.wheel == -1),
+          "M66 signed Report-ID mouse decode");
+    report_id_bytes[0] = 6U;
+    check(!usb_hid_mouse_layout_decode(
+              &layout, report_id_bytes, sizeof(report_id_bytes), &decoded),
+          "M66 unrelated Report ID rejected by selected layout");
+
+    check(usb_hid_parse_mouse_report_descriptor(
+              sixteen_bit_mouse, sizeof(sixteen_bit_mouse), &layout) ==
+              USB_HID_REPORT_PARSE_SUPPORTED &&
+          !layout.has_report_id && (layout.report_bits == 35U) &&
+          (layout.button_count == 3U) &&
+          (layout.x_bit_offset == 3U) && (layout.x_bits == 16U) &&
+          (layout.y_bit_offset == 19U) && (layout.y_bits == 16U),
+          "M66 non-byte-aligned 16-bit relative layout");
+    set_report_bits(sixteen_bit_bytes, sizeof(sixteen_bit_bytes), 0U, 3U, 5U);
+    set_report_bits(sixteen_bit_bytes, sizeof(sixteen_bit_bytes),
+                    layout.x_bit_offset, layout.x_bits, 0xfffeU);
+    set_report_bits(sixteen_bit_bytes, sizeof(sixteen_bit_bytes),
+                    layout.y_bit_offset, layout.y_bits, 300U);
+    check(usb_hid_mouse_layout_decode(
+              &layout, sixteen_bit_bytes, sizeof(sixteen_bit_bytes),
+              &decoded) &&
+          (decoded.buttons == 5U) && (decoded.dx == -2) &&
+          (decoded.dy == 300) && (decoded.wheel == 0),
+          "M66 signed non-byte-aligned 16-bit decode");
+
+    check(usb_hid_parse_mouse_report_descriptor(
+              unsupported_keyboard, sizeof(unsupported_keyboard), &layout) ==
+              USB_HID_REPORT_PARSE_VALID_UNSUPPORTED,
+          "M66 valid unsupported report descriptor stays non-malformed");
+    check(usb_hid_parse_mouse_report_descriptor(
+              malformed_short, sizeof(malformed_short), &layout) ==
+              USB_HID_REPORT_PARSE_MALFORMED &&
+          usb_hid_parse_mouse_report_descriptor(
+              malformed_long, sizeof(malformed_long), &layout) ==
+              USB_HID_REPORT_PARSE_MALFORMED,
+          "M66 malformed short and long items rejected");
+    check(usb_hid_parse_mouse_report_descriptor(
+              overflow, sizeof(overflow), &layout) ==
+              USB_HID_REPORT_PARSE_BIT_OVERFLOW,
+          "M66 report-bit overflow rejected");
+}
+
+static void m66_hid_configuration_test(void) {
+    static const uint8_t generic_with_out_and_vendor[] = {
+        9, 2, 57, 0, 2, 1, 0, 0x80, 50,
+        9, 4, 0, 0, 2, 3, 0, 0, 0,
+        9, 0x21, 0x11, 0x01, 0, 1, 0x22, 52, 0,
+        7, 5, 0x81, 3, 16, 0, 1,
+        7, 5, 0x01, 3, 16, 0, 1,
+        9, 4, 1, 0, 1, 0xff, 0, 0, 0,
+        7, 5, 0x82, 2, 64, 0, 0
+    };
+    static const uint8_t multiple_hid[] = {
+        9, 2, 59, 0, 2, 1, 0, 0x80, 50,
+        9, 4, 0, 0, 1, 3, 1, 2, 0,
+        9, 0x21, 0x11, 0x01, 0, 1, 0x22, 52, 0,
+        7, 5, 0x81, 3, 8, 0, 10,
+        9, 4, 1, 0, 1, 3, 0, 0, 0,
+        9, 0x21, 0x11, 0x01, 0, 1, 0x22, 16, 0,
+        7, 5, 0x82, 3, 8, 0, 10
+    };
+    struct xhci_hid_configuration parsed;
+    struct xhci_hid_configuration selected;
+    struct xhci_control_td td;
+    enum xhci_hid_rejection_reason reason = XHCI_HID_REJECT_NONE;
+
+    check(xhci_parse_hid_configuration_ex(
+              generic_with_out_and_vendor,
+              (uint16_t)sizeof(generic_with_out_and_vendor), 3U,
+              &parsed, &reason) &&
+          (reason == XHCI_HID_REJECT_NONE) &&
+          (parsed.hid_interface_count == 1U) &&
+          (parsed.endpoint_count == 1U) &&
+          parsed.endpoints[0].hid_descriptor_present &&
+          (parsed.endpoints[0].report_descriptor_type == 0x22U) &&
+          (parsed.endpoints[0].report_descriptor_length == 52U) &&
+          (parsed.endpoints[0].report_format ==
+           XHCI_HID_REPORT_UNSUPPORTED),
+          "M66 generic IN plus valid OUT and vendor interface parse");
+    check(xhci_parse_hid_configuration(
+              multiple_hid, (uint16_t)sizeof(multiple_hid), 3U, &parsed) &&
+          (parsed.hid_interface_count == 2U) &&
+          (parsed.endpoint_count == 2U) &&
+          xhci_select_supported_hid_configuration(
+              &parsed, 0x1234U, 0x5678U, &selected) &&
+          (selected.endpoint_count == 1U) &&
+          (selected.endpoints[0].report_format ==
+           XHCI_HID_REPORT_BOOT_MOUSE),
+          "M66 multiple HID interfaces select only supported mouse");
+
+    check(xhci_build_hid_get_report_descriptor_control_td(
+              &td, 0x20000ULL, 12U, true, 0x30000ULL, 3U, 52U) &&
+          (td.setup.parameter == 0x0034000322000681ULL) &&
+          (((td.setup.control >> 16U) & 3U) == 3U) &&
+          (td.data.parameter == 0x30000ULL) &&
+          ((td.data.control & (1U << 16U)) != 0U),
+          "M66 HID REPORT GET_DESCRIPTOR request is 81/06/2200/interface");
+}
+
 int main(void) {
     multi_controller_discovery_test();
     capabilities_test();
@@ -812,6 +980,8 @@ int main(void) {
     packet_size_test();
     descriptor_validation_test();
     m51_configuration_test();
+    m66_hid_configuration_test();
+    m66_hid_report_descriptor_test();
     if (failures != 0U) { return 1; }
     puts("xhci-host-test: PASS");
     return 0;

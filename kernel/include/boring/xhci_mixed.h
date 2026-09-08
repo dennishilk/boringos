@@ -8,6 +8,7 @@
 
 enum xhci_hid_classification {
     XHCI_HID_CLASS_SUPPORTED = 0,
+    XHCI_HID_CLASS_VALID_UNSUPPORTED,
     XHCI_HID_CLASS_NOT_HID,
     XHCI_HID_CLASS_INVALID
 };
@@ -16,6 +17,10 @@ enum xhci_hid_classification {
 enum xhci_hid_classification xhci_classify_hid_configuration(
     const uint8_t *bytes, uint16_t received, uint8_t speed,
     uint16_t vendor_id, uint16_t product_id);
+enum xhci_hid_classification xhci_classify_hid_configuration_ex(
+    const uint8_t *bytes, uint16_t received, uint8_t speed,
+    uint16_t vendor_id, uint16_t product_id,
+    enum xhci_hid_rejection_reason *reason);
 
 /*
  * M60 mixed-class dispatch seam. Valid non-HID devices are skipped while the
