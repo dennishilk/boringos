@@ -1,0 +1,93 @@
+name: M67 physical pre-M68 bisector
+
+on:
+  push:
+    branches: [agent/m67-m69-input-display-polish]
+    paths:
+      - .github/workflows/m67-physical-pre-m68-bisector.yml
+
+permissions:
+  contents: read
+
+jobs:
+  physical-pre-m68:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 1d4387cbd775a4a7e51307fac2b73446c4a850a2
+          fetch-depth: 0
+
+      - name: Verify exact M67-only source boundary
+        run: |
+          test "$(git rev-parse HEAD)" = "1d4387cbd775a4a7e51307fac2b73446c4a850a2"
+          test "$(git rev-parse 'HEAD^{tree}')" = "abbc942d24f31734b2a8766dc2a9641477b7a0e0"
+          grep -Fqx '    resolution: 800x600x32' limine-m61-usb.conf
+          git diff --check
+          printf 'M67_PHYSICAL_SOURCE_HEAD=%s\n' "$(git rev-parse HEAD)"
+          printf 'M67_PHYSICAL_SOURCE_TREE=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+
+      - name: Install focused physical-bisect dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 ovmf gdisk dosfstools mtools xz-utils xorriso
+
+      - name: M67 typematic host and USB desktop acceptance
+        run: |
+          make input-host-test
+          M67_TYPEMATIC=1 python3 tests/m54-usb-only-desktop-qemu.py
+
+      - name: M66 hub mouse Ring3 desktop regression
+        run: python3 tests/m66-usb-hub-desktop-qemu.py
+
+      - name: Build exact M61 physical runtime at M67-only boundary
+        run: |
+          sh tests/m61-build.sh
+          sh tests/m61-physical-handoff-bisector.sh
+          env -u GITHUB_SHA sh tests/m61-build-usb-image.sh
+          test "$(stat -c %s build/boringos-m61-usb.img)" = "100663296"
+          (cd build && sha256sum -c boringos-m61-usb.img.sha256)
+          grep -Fqx 'limine_timeout_seconds=5' build/m61-usb-image.txt
+          grep -Fqx 'physical_breadcrumbs=enabled' build/m61-usb-image.txt
+          grep -Fqx '    resolution: 800x600x32' limine-m61-usb.conf
+
+      - name: Prepare one M67-only physical Cthulhu artifact
+        id: physical
+        run: |
+          source_head="$(git rev-parse HEAD)"
+          source_tree="$(git rev-parse 'HEAD^{tree}')"
+          raw_sha="$(awk '{print $1}' build/boringos-m61-usb.img.sha256)"
+          raw_bytes="$(stat -c %s build/boringos-m61-usb.img)"
+          test "$source_head" = "1d4387cbd775a4a7e51307fac2b73446c4a850a2"
+          test "$source_tree" = "abbc942d24f31734b2a8766dc2a9641477b7a0e0"
+          test "$raw_bytes" = "100663296"
+          compressed_raw_sha="$(xz -dc build/boringos-m61-usb.img.xz | sha256sum | awk '{print $1}')"
+          test "$compressed_raw_sha" = "$raw_sha"
+          artifact_name="m67-physical-pre-m68-$source_head-$raw_sha"
+          {
+            echo "SOURCE_HEAD=$source_head"
+            echo "SOURCE_TREE=$source_tree"
+            echo "PHYSICAL_BASE_M66=8ccd618dfc4e8163821de552a3c912bab4e6f36a"
+            echo "M68_INCLUDED=NO"
+            echo "LIMINE_MODE=800x600x32"
+            echo "RAW_BYTES=$raw_bytes"
+            echo "RAW_SHA256=$raw_sha"
+            echo "ARTIFACT_NAME=$artifact_name"
+            echo "PHYSICAL_ACCEPTANCE_PENDING=YES"
+          } > build/m67-physical-pre-m68-identity.txt
+          cat build/m67-physical-pre-m68-identity.txt
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+
+      - name: Publish exactly one M67-only physical artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.physical.outputs.artifact_name }}
+          path: |
+            build/boringos-m61-usb.img.xz
+            build/boringos-m61-usb.img.sha256
+            build/m61-usb-image.txt
+            build/m61-qemu-twin-proof.txt
+            build/m67-physical-pre-m68-identity.txt
+          if-no-files-found: error
+          retention-days: 14
