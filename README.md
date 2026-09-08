@@ -13,15 +13,16 @@ It is **not Linux**, **not BSD**, and does not use another operating-system kern
 
 ~~~text
 BoringKernel 0.0.62-dev
-Milestone 66 · physical multi-xHCI + USB hub + mouse baseline
+Milestone 66 · physical multi-xHCI + USB hub + HID recovery baseline
 ~~~
 
-On **2026-09-06**, BoringOS reached a new physical USB baseline on the real **Cthulhu** machine:
+On **2026-09-08**, after revalidating the M66 physical artifacts on the real **Cthulhu** machine, BoringOS established a corrected physical USB baseline:
 
 - the native BoringWM desktop still boots from the writable USB image;
 - BoringOS owns the relevant xHCI controllers independently instead of assuming one global controller;
 - the real Genesys Logic USB hub is enumerated through bounded hub-class power, status and reset handling;
 - the real ROCCAT mouse behind that hub reaches BoringOS through the native xHCI/HID path;
+- valid composite/generic HID configurations are no longer collapsed into a fatal invalid classification merely because they contain legitimate sibling endpoints; BoringOS keeps the usable interrupt-IN candidate, parses the bounded mouse report descriptor and then arms the native input path;
 - physical mouse movement drives the existing software cursor and changes BoringWM focus between two live windows as the pointer crosses them;
 - the real USB keyboard remains functional through the same boot;
 - the previously frozen M63 persistent BoringFS, reboot and ACPI S5 lifecycle remains the storage/power baseline.
@@ -29,19 +30,20 @@ On **2026-09-06**, BoringOS reached a new physical USB baseline on the real **Ct
 The physically accepted runtime is frozen at:
 
 ~~~text
-freeze/m66-usb-hub-mouse-physical-2026-09-06
-8ccd618dfc4e8163821de552a3c912bab4e6f36a
+freeze/m66-physical-hid-recovery-2026-09-08
+bd3f181d24547189b004328aea54c54fd194fc96
+TREE: 96f5b177a5afa8ea24c9f94168117ce09c1c8507
 ~~~
 
 Authoritative physical image:
 
 ~~~text
 100663296 bytes
-SHA256: 84dfb521c2359364ba2f3f78718b686638d81f3d07f35050f32e5a2f91bd0c61
-Artifact: 9987432260
+SHA256: 83e22073a408fa45474b409804c4b29932b4451ce68ec87c8d21681d948858f8
+Artifact: 10055706794
 ~~~
 
-QEMU remains the automated regression platform, but multi-controller xHCI ownership, real hub enumeration and the hub-connected physical mouse path are now also proven on Cthulhu. M63 remains the accepted physical durability/reboot/shutdown baseline.
+QEMU remains the automated regression platform, but multi-controller xHCI ownership, real hub enumeration and the hub-connected physical mouse path are now also proven on Cthulhu. The earlier `freeze/m66-usb-hub-mouse-physical-2026-09-06` / `8ccd618d...` association is retained only as historical evidence: physical retesting reproduced a black screen with final POST `D8`, so it is not an authoritative physical-good baseline. The 2026-09-08 recovery freeze above is the authoritative M66 physical anchor. M63 remains the accepted physical durability/reboot/shutdown baseline.
 
 ## What runs today
 
@@ -247,7 +249,7 @@ The repository keeps a small number of immutable-by-policy physical freeze branc
 - `freeze/m61-physical-desktop-2026-09-04`
 - `freeze/m62-dynamic-capacity-physical-2026-09-05`
 - `freeze/m63-system-power-lifecycle-physical-2026-09-05`
-- `freeze/m66-usb-hub-mouse-physical-2026-09-06`
+- `freeze/m66-physical-hid-recovery-2026-09-08`
 
 Normal development continues from `main`; freeze branches are reference points and must not move.
 
