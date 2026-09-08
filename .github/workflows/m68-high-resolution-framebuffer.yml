@@ -26,7 +26,8 @@ jobs:
       - name: Static M68 policy audit
         run: |
           git diff --check
-          grep -Fqx '    resolution: 3440x1440x32' limine-m61-usb.conf
+          grep -Fqx '    resolution: 800x600x32' limine-m61-usb.conf
+          grep -Fqx '    resolution: 1920x1080x32' limine-m68-framebuffer.conf
           grep -Fqx '#define BORING_DISPLAY_MAX_WIDTH 3840U' kernel/include/boring/display_abi.h
           grep -Fqx '#define BORING_DISPLAY_MAX_HEIGHT 2160U' kernel/include/boring/display_abi.h
           grep -Fqx '#define BORING_DISPLAY_MAX_SCANOUT_BYTES (32ULL * 1024ULL * 1024ULL)' kernel/include/boring/display_abi.h
