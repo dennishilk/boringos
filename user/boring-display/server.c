@@ -12,7 +12,8 @@ static struct display_managed managed;
 static uint32_t peers[DISPLAY_PEERS];
 static uint32_t composition;
 static uint8_t *pixels;
-static bool input_pending, manager_seen;
+static struct boring_display_cursor_damage cursor_damage;
+static bool input_pending, manager_seen, focus_present_pending;
 #if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
 static bool m61_post37_present_return_probed;
 static bool m61_post37_loop_reentry_pending;
@@ -37,8 +38,63 @@ static void m61_post37_loop_reentry_probe(uint32_t listener) {
 #endif
 
 static void present(void) {
-    if (!display_managed_compose(&managed, &core, pixels, (size_t)core.byte_size) ||
+    if (!display_managed_compose_scene(
+            &managed, &core, pixels, (size_t)core.byte_size) ||
+        !boring_display_cursor_damage_reset(
+            &cursor_damage, &core, pixels, (size_t)core.byte_size) ||
         (boring_framebuffer_present(composition) != 0L)) { desktop_fail("display present"); }
+}
+
+static void present_focus_borders(void) {
+    struct boring_display_region regions[BORING_DISPLAY_FOCUS_REGION_MAX];
+    size_t count = 0U;
+    size_t index;
+    uint64_t pixel_count = 0ULL;
+
+    if (!boring_display_cursor_damage_restore(
+            &cursor_damage, &core, pixels, (size_t)core.byte_size)) {
+        desktop_fail("display focus cursor restore");
+    }
+    if (!display_managed_compose_focus_borders(
+            &managed, &core, pixels, (size_t)core.byte_size,
+            regions, BORING_DISPLAY_FOCUS_REGION_MAX, &count, &pixel_count)) {
+        present();
+        return;
+    }
+    if (!boring_display_cursor_damage_reset(
+            &cursor_damage, &core, pixels, (size_t)core.byte_size)) {
+        desktop_fail("display focus cursor reset");
+    }
+    for (index = 0U; index < count; ++index) {
+        const struct boring_display_region *region = &regions[index];
+        if (boring_framebuffer_present_region(
+                composition, region->x, region->y,
+                region->width, region->height) != 0L) {
+            desktop_fail("display focus border present");
+        }
+    }
+}
+
+static void present_cursor_move(int32_t dx, int32_t dy) {
+    struct boring_display_region old_region;
+    struct boring_display_region new_region;
+
+    if (!boring_display_cursor_damage_move(
+            &cursor_damage, &core, pixels, (size_t)core.byte_size,
+            dx, dy, &old_region, &new_region)) {
+        desktop_fail("display cursor damage");
+    }
+    if ((old_region.width == 0U) || (old_region.height == 0U)) {
+        return;
+    }
+    if ((boring_framebuffer_present_region(
+             composition, old_region.x, old_region.y,
+             old_region.width, old_region.height) != 0L) ||
+        (boring_framebuffer_present_region(
+             composition, new_region.x, new_region.y,
+             new_region.width, new_region.height) != 0L)) {
+        desktop_fail("display cursor damage present");
+    }
 }
 
 static void forget_peer(uint32_t endpoint) {
@@ -58,6 +114,7 @@ static void forget_peer(uint32_t endpoint) {
     if (managed.manager_endpoint == endpoint) {
         managed.manager_endpoint = 0U;
         input_pending = false;
+        focus_present_pending = false;
         desktop_say("display: manager disconnected; display survives\n");
     }
     for (index = 0U; index < DISPLAY_PEERS; ++index) {
@@ -144,10 +201,19 @@ static void control(uint32_t endpoint, const struct display_control *r) {
             status = BORING_DISPLAY_STATUS_ACCESS;
         } else {
             status = display_managed_control(&managed, &core, endpoint, (uint64_t)peer, r);
-            if ((status == BORING_DISPLAY_STATUS_OK) && (r->type == DISPLAY_PRESENT)) {
-                present();
+            if ((status == BORING_DISPLAY_STATUS_OK) &&
+                ((r->type == DISPLAY_PRESENT) ||
+                 (r->type == DISPLAY_PRESENT_FOCUS))) {
+                if (r->type == DISPLAY_PRESENT_FOCUS) {
+                    focus_present_pending = true;
+                } else {
+                    focus_present_pending = false;
+                    present();
+                }
 #if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
-                m61_post37_present_completed = true;
+                if (r->type == DISPLAY_PRESENT) {
+                    m61_post37_present_completed = true;
+                }
 #endif
             }
         }
@@ -215,7 +281,7 @@ static void input(void) {
     }
 #endif
     if (event.type == BORING_INPUT_EVENT_MOUSE_MOVE) {
-        boring_display_cursor_move(&core, event.value1, event.value2); present();
+        present_cursor_move(event.value1, event.value2);
     }
     if (managed.manager_endpoint == 0U) { return; }
     message.version = BORING_DISPLAY_CONTROL_VERSION; message.type = DISPLAY_INPUT;
@@ -231,6 +297,7 @@ int boring_main(void) {
         desktop_fail("display claim/init");
     }
     display_managed_init(&managed);
+    boring_display_cursor_damage_init(&cursor_damage);
     buffer = boring_buffer_create((size_t)info.byte_size);
     if (buffer <= 0L) { desktop_fail("display composition buffer"); }
     composition = (uint32_t)buffer; pixels = boring_buffer_map(composition);
@@ -265,7 +332,23 @@ int boring_main(void) {
             m61_post37_loop_reentry_pending = false;
         }
 #endif
-        if (boring_event_wait(watches, count, 0U) <= 0L) { desktop_fail("display event wait"); }
+        {
+            const bool can_present_focus =
+                focus_present_pending && !input_pending;
+            const uint32_t flags = can_present_focus ?
+                BORING_EVENT_QUERY : 0U;
+            const long ready = boring_event_wait(watches, count, flags);
+            if (ready < 0L) { desktop_fail("display event wait"); }
+            if (ready == 0L) {
+                if (!can_present_focus) {
+                    desktop_fail("display event wait");
+                }
+                present_focus_borders();
+                focus_present_pending = false;
+                desktop_say("display: focus frame ready\n");
+                continue;
+            }
+        }
         for (index = 0U; index < count; ++index) {
             if (watches[index].events == 0U) { continue; }
             if (watches[index].kind == BORING_EVENT_INPUT) { input(); }

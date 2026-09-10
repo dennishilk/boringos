@@ -67,6 +67,16 @@ static bool pixel_is(const uint8_t *pixels, uint32_t stride,
            (pixels[offset + 3U] == 0U);
 }
 
+static bool pixel_equal(const uint8_t *first,
+                        const uint8_t *second,
+                        uint32_t stride,
+                        uint32_t x,
+                        uint32_t y) {
+    const size_t offset = (size_t)y * (size_t)stride + (size_t)x * 4U;
+
+    return memcmp(first + offset, second + offset, 4U) == 0;
+}
+
 static void validation_tests(void) {
     struct boring_display_core core;
     struct boring_display_scanout_info info = scanout(320U, 240U);
@@ -264,6 +274,90 @@ static void composition_tests(void) {
           "composition size rejection");
 }
 
+static void cursor_damage_tests(void) {
+    struct boring_display_core core;
+    struct boring_display_cursor_damage damage;
+    struct boring_display_region old_region;
+    struct boring_display_region new_region;
+    struct boring_display_scanout_info info = scanout(32U, 24U);
+    uint8_t scene[32U * 24U * 4U];
+    uint8_t output[32U * 24U * 4U];
+    uint32_t y;
+
+    for (y = 0U; y < info.height; ++y) {
+        uint32_t x;
+        for (x = 0U; x < info.width; ++x) {
+            const size_t offset = (size_t)y * (size_t)info.stride +
+                                  (size_t)x * 4U;
+            scene[offset] = (uint8_t)(x + 1U);
+            scene[offset + 1U] = (uint8_t)(y + 2U);
+            scene[offset + 2U] = (uint8_t)(x + y + 3U);
+            scene[offset + 3U] = 0U;
+        }
+    }
+    (void)memcpy(output, scene, sizeof(output));
+    check(boring_display_core_init(&core, &info), "cursor damage init core");
+    boring_display_cursor_damage_init(&damage);
+    check(boring_display_cursor_damage_reset(
+              &damage, &core, output, sizeof(output)),
+          "cursor damage capture initial underlay");
+    check((damage.saved_region.x == 16U) &&
+          (damage.saved_region.y == 12U) &&
+          (damage.saved_region.width == 6U) &&
+          (damage.saved_region.height == 12U),
+          "cursor damage initial rectangle");
+
+    check(boring_display_cursor_damage_move(
+              &damage, &core, output, sizeof(output), -5, -5,
+              &old_region, &new_region),
+          "cursor damage overlapping move");
+    check((old_region.x == 16U) && (old_region.y == 12U) &&
+          (new_region.x == 11U) && (new_region.y == 7U),
+          "cursor damage old/new rectangles");
+    for (y = 0U; y < info.height; ++y) {
+        uint32_t x;
+        for (x = 0U; x < info.width; ++x) {
+            const bool cursor_pixel =
+                (x >= core.cursor_x) && (y >= core.cursor_y) &&
+                (y - core.cursor_y < BORING_DISPLAY_CURSOR_HEIGHT) &&
+                (x - core.cursor_x <= (y - core.cursor_y) / 2U);
+            if (cursor_pixel) {
+                check(pixel_is(output, info.stride, x, y,
+                               (x == core.cursor_x) ? 255U : 48U,
+                               238U, 245U),
+                      "cursor damage new cursor pixels");
+            } else {
+                check(pixel_equal(output, scene, info.stride, x, y),
+                      "cursor damage restores all non-cursor pixels");
+            }
+        }
+    }
+
+    check(boring_display_cursor_damage_move(
+              &damage, &core, output, sizeof(output), INT32_MIN, INT32_MIN,
+              &old_region, &new_region) &&
+          (core.cursor_x == 0U) && (core.cursor_y == 0U) &&
+          (new_region.width == BORING_DISPLAY_CURSOR_WIDTH) &&
+          (new_region.height == BORING_DISPLAY_CURSOR_HEIGHT),
+          "cursor damage top-left clipping");
+    check(boring_display_cursor_damage_move(
+              &damage, &core, output, sizeof(output), INT32_MAX, INT32_MAX,
+              &old_region, &new_region) &&
+          (core.cursor_x == 31U) && (core.cursor_y == 23U) &&
+          (new_region.width == 1U) && (new_region.height == 1U),
+          "cursor damage bottom-right clipping");
+    check(boring_display_cursor_damage_move(
+              &damage, &core, output, sizeof(output), INT32_MAX, INT32_MAX,
+              &old_region, &new_region) &&
+          (old_region.width == 0U) && (old_region.height == 0U) &&
+          (new_region.width == 0U) && (new_region.height == 0U) &&
+          (damage.moves == 3ULL),
+          "cursor damage clipped no-op avoids present");
+    check((damage.restored_pixels == 216ULL) &&
+          (damage.saved_pixels == 217ULL),
+          "cursor damage bounded pixel counters");
+}
+
 int main(void) {
     check(BORING_DISPLAY_CLIENT_MAX == 8U, "bounded client constant");
     check(BORING_DISPLAY_SURFACE_MAX == 16U, "bounded surface constant");
@@ -271,6 +365,7 @@ int main(void) {
     authority_and_generation_tests();
     capacity_tests();
     composition_tests();
+    cursor_damage_tests();
 
     if (failures != 0) {
         (void)fprintf(stderr, "display-host-test: %d failure(s)\n", failures);

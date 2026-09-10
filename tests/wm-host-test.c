@@ -150,6 +150,7 @@ static void display_authority(void) {
     struct boring_display_scanout_info info = {BORING_DISPLAY_SCANOUT_VERSION, 20U, 20U, 80U, 1600ULL};
     struct boring_display_request create = {BORING_DISPLAY_PROTOCOL_VERSION, BORING_DISPLAY_REQUEST_CREATE, 0U, 20U, 20U, 80U, BORING_DISPLAY_PIXEL_FORMAT_XRGB8888, 0U, 1600ULL};
     struct display_control r = {0};
+    struct display_control focus = {0};
     uint8_t source[1600], output[1608]; uint32_t token, handle; uint8_t *map;
     memset(source, 0x55, sizeof(source)); memset(output, 0xaa, sizeof(output));
     check(boring_display_core_init(&core, &info), "display init"); display_managed_init(&state); state.manager_endpoint = 99U;
@@ -172,6 +173,26 @@ static void display_authority(void) {
     check(output[0] == 0xaa && output[3] == 0xaa && output[1604] == 0xaa && output[1607] == 0xaa, "render output guards");
     check(output[4U + 2U * 80U + 2U * 4U] == 0xb2U, "focused border pixel");
     check(output[4U + 6U * 80U + 6U * 4U] == 0x55U, "client buffer pixel");
+    focus.version = BORING_DISPLAY_CONTROL_VERSION;
+    focus.type = DISPLAY_PRESENT_FOCUS;
+    focus.window = 257U;
+    focus.color = BORING_WM_FOCUSED;
+    focus.background = BORING_WM_UNFOCUSED;
+    check(display_managed_control(&state, &core, 98U, 2ULL, &focus) ==
+          BORING_DISPLAY_STATUS_ACCESS, "focus present requires manager");
+    check(display_managed_control(&state, &core, 99U, 2ULL, &focus) ==
+          BORING_DISPLAY_STATUS_OK, "manager focus present");
+    focus.x = 1U;
+    check(display_managed_control(&state, &core, 99U, 2ULL, &focus) ==
+          BORING_DISPLAY_STATUS_INVALID, "focus present rejects geometry");
+    focus.x = 0U;
+    focus.window = 513U;
+    check(display_managed_control(&state, &core, 99U, 2ULL, &focus) ==
+          BORING_DISPLAY_STATUS_INVALID, "focus present rejects unknown window");
+    focus.window = 257U;
+    focus.color = 0xff000000U;
+    check(display_managed_control(&state, &core, 99U, 2ULL, &focus) ==
+          BORING_DISPLAY_STATUS_INVALID, "focus present rejects alpha bits");
     r.x = UINT32_MAX; check(display_managed_control(&state, &core, 99U, 2ULL, &r) == BORING_DISPLAY_STATUS_INVALID, "x overflow rejected"); r.x = 2U;
     r.width = UINT32_MAX; check(display_managed_control(&state, &core, 99U, 2ULL, &r) == BORING_DISPLAY_STATUS_INVALID, "extent overflow rejected"); r.width = 16U;
     r.border = UINT32_MAX; check(display_managed_control(&state, &core, 99U, 2ULL, &r) == BORING_DISPLAY_STATUS_INVALID, "border overflow rejected"); r.border = 3U;
@@ -212,8 +233,124 @@ static void display_wallpaper(void) {
     free(output);
 }
 
+static void focus_border_damage(void) {
+    struct boring_display_core core;
+    struct boring_display_core expected_core;
+    struct boring_display_cursor_damage cursor;
+    struct display_managed state;
+    const struct boring_display_scanout_info info = {
+        BORING_DISPLAY_SCANOUT_VERSION, 64U, 48U, 256U, 12288ULL
+    };
+    struct boring_display_request first_request = {
+        BORING_DISPLAY_PROTOCOL_VERSION, BORING_DISPLAY_REQUEST_CREATE,
+        0U, 24U, 38U, 96U, BORING_DISPLAY_PIXEL_FORMAT_XRGB8888,
+        0U, 3648ULL
+    };
+    struct boring_display_request second_request = {
+        BORING_DISPLAY_PROTOCOL_VERSION, BORING_DISPLAY_REQUEST_CREATE,
+        0U, 20U, 38U, 80U, BORING_DISPLAY_PIXEL_FORMAT_XRGB8888,
+        0U, 3040ULL
+    };
+    struct boring_display_region regions[BORING_DISPLAY_FOCUS_REGION_MAX];
+    struct boring_display_region old_cursor;
+    struct boring_display_region new_cursor;
+    struct display_control focus = {0};
+    uint8_t first[3648U];
+    uint8_t second[3040U];
+    uint8_t actual[12288U];
+    uint8_t expected[12288U];
+    uint32_t first_token = 0U;
+    uint32_t second_token = 0U;
+    size_t region_count = 0U;
+    uint64_t pixel_count = 0ULL;
+
+    memset(first, 0x33, sizeof(first));
+    memset(second, 0x77, sizeof(second));
+    check(boring_display_core_init(&core, &info), "focus damage core init");
+    check(boring_display_surface_add(&core, 10U, &first_request, 1U,
+                                     first, &first_token) ==
+          BORING_DISPLAY_STATUS_OK, "focus damage first surface");
+    check(boring_display_surface_add(&core, 11U, &second_request, 2U,
+                                     second, &second_token) ==
+          BORING_DISPLAY_STATUS_OK, "focus damage second surface");
+    display_managed_init(&state);
+    state.placements[0] = (struct display_placement){
+        first_token, 257U, 2U, 2U, 30U, 44U, 3U,
+        BORING_WM_FOCUSED, 0U, 10ULL, true, true
+    };
+    state.placements[1] = (struct display_placement){
+        second_token, 258U, 36U, 2U, 26U, 44U, 3U,
+        BORING_WM_UNFOCUSED, 1U, 11ULL, true, true
+    };
+    state.manager_endpoint = 99U;
+    core.cursor_x = 36U;
+    core.cursor_y = 20U;
+    check(display_managed_compose_scene(
+              &state, &core, actual, sizeof(actual)),
+          "focus damage initial scene");
+    boring_display_cursor_damage_init(&cursor);
+    check(boring_display_cursor_damage_reset(
+              &cursor, &core, actual, sizeof(actual)),
+          "focus damage initial cursor");
+
+    focus.version = BORING_DISPLAY_CONTROL_VERSION;
+    focus.type = DISPLAY_PRESENT_FOCUS;
+    focus.window = 258U;
+    focus.color = BORING_WM_FOCUSED;
+    focus.background = BORING_WM_UNFOCUSED;
+    check(display_managed_control(&state, &core, 99U, 2ULL, &focus) ==
+          BORING_DISPLAY_STATUS_OK,
+          "focus damage atomic focus color transition");
+    check((state.placements[0].color == BORING_WM_UNFOCUSED) &&
+          (state.placements[1].color == BORING_WM_FOCUSED),
+          "focus damage updates only focus colors without geometry RPCs");
+    check(display_managed_compose(&state, &core, expected, sizeof(expected)),
+          "focus damage reference frame");
+    check(boring_display_cursor_damage_restore(
+              &cursor, &core, actual, sizeof(actual)),
+          "focus damage cursor restore");
+    check(display_managed_compose_focus_borders(
+              &state, &core, actual, sizeof(actual), regions,
+              BORING_DISPLAY_FOCUS_REGION_MAX, &region_count, &pixel_count),
+          "focus damage bounded border compose");
+    check((region_count == 8U) && (pixel_count == 792ULL),
+          "focus damage exact regions and pixels");
+    check(boring_display_cursor_damage_reset(
+              &cursor, &core, actual, sizeof(actual)),
+          "focus damage cursor redraw");
+    check(memcmp(actual, expected, sizeof(actual)) == 0,
+          "focus damage equals full composition with cursor overlap");
+
+    expected_core = core;
+    boring_display_cursor_move(&expected_core, 1, 0);
+    check(display_managed_compose(
+              &state, &expected_core, expected, sizeof(expected)),
+          "focus damage post-move reference");
+    check(boring_display_cursor_damage_move(
+              &cursor, &core, actual, sizeof(actual), 1, 0,
+              &old_cursor, &new_cursor),
+          "focus damage post-focus cursor move");
+    check(memcmp(actual, expected, sizeof(actual)) == 0,
+          "focus damage preserves cursor underlay without trails");
+
+    region_count = 99U;
+    pixel_count = 99ULL;
+    state.placements[1].x = 20U;
+    check(!display_managed_compose_focus_borders(
+              &state, &core, actual, sizeof(actual), regions,
+              BORING_DISPLAY_FOCUS_REGION_MAX, &region_count, &pixel_count) &&
+          (region_count == 0U) && (pixel_count == 0ULL),
+          "focus damage overlap requires full-compose fallback");
+    check(!display_managed_compose_focus_borders(
+              &state, &core, actual, sizeof(actual), regions,
+              BORING_DISPLAY_FOCUS_REGION_MAX - 1U,
+              &region_count, &pixel_count),
+          "focus damage region capacity remains bounded");
+}
+
 int main(void) {
     layouts(); policy(); protocol(); display_authority(); display_wallpaper();
+    focus_border_damage();
     (void)printf("M35 WM policy/protocol/layout/authority tests passed (%lu checks).\n", checks);
     return 0;
 }

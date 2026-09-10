@@ -380,6 +380,220 @@ void boring_display_compose_cursor(const struct boring_display_core *core, uint8
     }
 }
 
+static struct boring_display_region cursor_region(
+    const struct boring_display_core *core) {
+    struct boring_display_region region = {0U, 0U, 0U, 0U};
+
+    if ((core == NULL) || (core->cursor_x >= core->width) ||
+        (core->cursor_y >= core->height)) {
+        return region;
+    }
+    region.x = core->cursor_x;
+    region.y = core->cursor_y;
+    region.width = core->width - region.x;
+    if (region.width > BORING_DISPLAY_CURSOR_WIDTH) {
+        region.width = BORING_DISPLAY_CURSOR_WIDTH;
+    }
+    region.height = core->height - region.y;
+    if (region.height > BORING_DISPLAY_CURSOR_HEIGHT) {
+        region.height = BORING_DISPLAY_CURSOR_HEIGHT;
+    }
+    return region;
+}
+
+static bool cursor_damage_arguments_valid(
+    const struct boring_display_cursor_damage *damage,
+    const struct boring_display_core *core,
+    const uint8_t *output,
+    size_t output_size) {
+    return (damage != NULL) && (core != NULL) && (output != NULL) &&
+           (core->byte_size <= (uint64_t)SIZE_MAX) &&
+           (output_size == (size_t)core->byte_size) &&
+           (core->width != 0U) && (core->height != 0U) &&
+           ((uint64_t)core->stride ==
+            (uint64_t)core->width * BORING_DISPLAY_BYTES_PER_PIXEL) &&
+           (core->byte_size ==
+            (uint64_t)core->stride * (uint64_t)core->height);
+}
+
+static void cursor_underlay_copy(
+    struct boring_display_cursor_damage *damage,
+    const struct boring_display_core *core,
+    uint8_t *output,
+    const struct boring_display_region *region,
+    bool restore) {
+    uint32_t row;
+
+    for (row = 0U; row < region->height; ++row) {
+        uint32_t column;
+        for (column = 0U; column < region->width; ++column) {
+            const size_t frame_offset =
+                (size_t)(region->y + row) * (size_t)core->stride +
+                (size_t)(region->x + column) *
+                    (size_t)BORING_DISPLAY_BYTES_PER_PIXEL;
+            const size_t saved_offset =
+                ((size_t)row * (size_t)BORING_DISPLAY_CURSOR_WIDTH +
+                 (size_t)column) *
+                (size_t)BORING_DISPLAY_BYTES_PER_PIXEL;
+            size_t byte;
+
+            for (byte = 0U;
+                 byte < (size_t)BORING_DISPLAY_BYTES_PER_PIXEL;
+                 ++byte) {
+                if (restore) {
+                    output[frame_offset + byte] =
+                        damage->saved[saved_offset + byte];
+                } else {
+                    damage->saved[saved_offset + byte] =
+                        output[frame_offset + byte];
+                }
+            }
+        }
+    }
+}
+
+static uint64_t region_pixels(const struct boring_display_region *region) {
+    return (uint64_t)region->width * (uint64_t)region->height;
+}
+
+static void counter_add(uint64_t *counter, uint64_t value) {
+    if (value > UINT64_MAX - *counter) {
+        *counter = UINT64_MAX;
+    } else {
+        *counter += value;
+    }
+}
+
+static uint64_t cursor_drawn_pixels(
+    const struct boring_display_core *core) {
+    uint64_t count = 0ULL;
+    uint32_t row;
+
+    for (row = 0U; row < BORING_DISPLAY_CURSOR_HEIGHT; ++row) {
+        uint32_t column;
+        for (column = 0U; column <= row / 2U; ++column) {
+            if ((core->cursor_x + column < core->width) &&
+                (core->cursor_y + row < core->height)) {
+                ++count;
+            }
+        }
+    }
+    return count;
+}
+
+void boring_display_cursor_damage_init(
+    struct boring_display_cursor_damage *damage) {
+    size_t index;
+
+    if (damage == NULL) {
+        return;
+    }
+    for (index = 0U; index < sizeof(damage->saved); ++index) {
+        damage->saved[index] = 0U;
+    }
+    damage->saved_region = (struct boring_display_region){0U, 0U, 0U, 0U};
+    damage->moves = 0ULL;
+    damage->restored_pixels = 0ULL;
+    damage->saved_pixels = 0ULL;
+    damage->drawn_pixels = 0ULL;
+    damage->ready = false;
+}
+
+bool boring_display_cursor_damage_reset(
+    struct boring_display_cursor_damage *damage,
+    const struct boring_display_core *core,
+    uint8_t *output,
+    size_t output_size) {
+    struct boring_display_region region;
+
+    if (!cursor_damage_arguments_valid(damage, core, output, output_size)) {
+        return false;
+    }
+    region = cursor_region(core);
+    if ((region.width == 0U) || (region.height == 0U)) {
+        return false;
+    }
+    cursor_underlay_copy(damage, core, output, &region, false);
+    damage->saved_region = region;
+    counter_add(&damage->saved_pixels, region_pixels(&region));
+    counter_add(&damage->drawn_pixels, cursor_drawn_pixels(core));
+    damage->ready = true;
+    boring_display_compose_cursor(core, output);
+    return true;
+}
+
+bool boring_display_cursor_damage_restore(
+    struct boring_display_cursor_damage *damage,
+    const struct boring_display_core *core,
+    uint8_t *output,
+    size_t output_size) {
+    struct boring_display_region expected;
+
+    if (!cursor_damage_arguments_valid(damage, core, output, output_size) ||
+        !damage->ready) {
+        return false;
+    }
+    expected = cursor_region(core);
+    if ((damage->saved_region.x != expected.x) ||
+        (damage->saved_region.y != expected.y) ||
+        (damage->saved_region.width != expected.width) ||
+        (damage->saved_region.height != expected.height)) {
+        return false;
+    }
+    cursor_underlay_copy(damage, core, output, &expected, true);
+    counter_add(&damage->restored_pixels, region_pixels(&expected));
+    damage->ready = false;
+    return true;
+}
+
+bool boring_display_cursor_damage_move(
+    struct boring_display_cursor_damage *damage,
+    struct boring_display_core *core,
+    uint8_t *output,
+    size_t output_size,
+    int32_t dx,
+    int32_t dy,
+    struct boring_display_region *old_region,
+    struct boring_display_region *new_region) {
+    struct boring_display_region expected;
+    const uint32_t old_x = (core != NULL) ? core->cursor_x : 0U;
+    const uint32_t old_y = (core != NULL) ? core->cursor_y : 0U;
+
+    if ((old_region == NULL) || (new_region == NULL)) {
+        return false;
+    }
+    *old_region = (struct boring_display_region){0U, 0U, 0U, 0U};
+    *new_region = (struct boring_display_region){0U, 0U, 0U, 0U};
+    if (!cursor_damage_arguments_valid(damage, core, output, output_size) ||
+        !damage->ready) {
+        return false;
+    }
+    expected = cursor_region(core);
+    if ((damage->saved_region.x != expected.x) ||
+        (damage->saved_region.y != expected.y) ||
+        (damage->saved_region.width != expected.width) ||
+        (damage->saved_region.height != expected.height)) {
+        return false;
+    }
+    boring_display_cursor_move(core, dx, dy);
+    if ((core->cursor_x == old_x) && (core->cursor_y == old_y)) {
+        return true;
+    }
+
+    *old_region = damage->saved_region;
+    cursor_underlay_copy(damage, core, output, old_region, true);
+    counter_add(&damage->restored_pixels, region_pixels(old_region));
+
+    *new_region = cursor_region(core);
+    cursor_underlay_copy(damage, core, output, new_region, false);
+    damage->saved_region = *new_region;
+    counter_add(&damage->saved_pixels, region_pixels(new_region));
+    counter_add(&damage->drawn_pixels, cursor_drawn_pixels(core));
+    counter_add(&damage->moves, 1ULL);
+    boring_display_compose_cursor(core, output);
+    return true;
+}
+
 bool boring_display_compose(const struct boring_display_core *core,
                             uint8_t *output,
                             size_t output_size) {

@@ -13,6 +13,7 @@ struct display_managed {
     bool wallpaper;
     struct display_placement placements[BORING_DISPLAY_SURFACE_MAX];
 };
+#define BORING_DISPLAY_FOCUS_REGION_MAX (BORING_DISPLAY_SURFACE_MAX * 4U)
 void display_managed_init(struct display_managed *state);
 uint32_t display_control_validate(const struct display_control *request, size_t size);
 uint32_t display_managed_control(struct display_managed *state,
@@ -23,4 +24,16 @@ void display_managed_forget(struct display_managed *state, uint32_t surface);
 bool display_managed_compose(const struct display_managed *state,
                              const struct boring_display_core *core,
                              uint8_t *output, size_t size);
+bool display_managed_compose_scene(const struct display_managed *state,
+                                   const struct boring_display_core *core,
+                                   uint8_t *output, size_t size);
+bool display_managed_compose_focus_borders(
+    const struct display_managed *state,
+    const struct boring_display_core *core,
+    uint8_t *output,
+    size_t size,
+    struct boring_display_region *regions,
+    size_t region_capacity,
+    size_t *region_count,
+    uint64_t *pixel_count);
 #endif

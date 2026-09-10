@@ -5,6 +5,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      publish_physical:
+        description: Publish the final physical M61 image
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -184,7 +190,7 @@ jobs:
           echo "raw_sha256=$raw_sha256" >> "$GITHUB_OUTPUT"
           printf 'physical raw size=%s sha256=%s\n' "$raw_size" "$raw_sha256"
       - name: Publish final physical M61 image and acceptance evidence
-        if: ${{ github.event_name != 'pull_request' }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_physical) }}
         uses: actions/upload-artifact@v4
         with:
           name: m61-bootable-persistent-usb-${{ github.event.pull_request.head.sha || github.sha }}-${{ steps.physical.outputs.raw_size }}-${{ steps.physical.outputs.raw_sha256 }}

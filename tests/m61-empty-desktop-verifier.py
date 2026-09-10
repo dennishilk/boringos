@@ -113,6 +113,8 @@ event_loop = wm_main.find("for (;;)", init)
 if not (0 <= manager < init < empty_present < event_loop):
     fail("initial empty sync_layout is not immediately after successful WM readiness")
 sync = function_body(WM, "static void sync_layout(void)")
+if "sync_frame(false);" in sync:
+    sync = function_body(WM, "static void sync_frame(bool focus_only)")
 for token in (
     "present.version = BORING_DISPLAY_CONTROL_VERSION; present.type = DISPLAY_PRESENT;",
     "present.background = BORING_WM_BACKGROUND;",

@@ -53,6 +53,8 @@ non-goals.
 41 EVENT_WAIT
 42 PTY_CREATE
 43 SPAWN
+44 SYSTEM_CONTROL
+45 FRAMEBUFFER_PRESENT_REGION
 ```
 
 All pointer-bearing calls retain the established complete-range validation

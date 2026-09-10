@@ -26,11 +26,12 @@ M34 reserves the next free syscall slots without changing 0..36:
 38 FRAMEBUFFER_CLAIM
 39 FRAMEBUFFER_PRESENT
 40 FRAMEBUFFER_RELEASE
+45 FRAMEBUFFER_PRESENT_REGION
 ```
 
 `BUFFER_INFO` is a generic read-only M32 extension that returns the authoritative byte size for one caller-owned shared-buffer capability. It exists so a receiver can validate metadata against the actual granted object rather than trusting a peer-declared size.
 
-`FRAMEBUFFER_CLAIM` is exclusive and process-local. It returns bounded scanout information to the caller. `FRAMEBUFFER_PRESENT` accepts a canonical userspace XRGB8888 frame and copies/converts it into the already validated kernel-owned physical framebuffer. Userspace never receives the physical framebuffer address or an HHDM alias. `FRAMEBUFFER_RELEASE` relinquishes ownership. Process teardown releases a forgotten claim.
+`FRAMEBUFFER_CLAIM` is exclusive and process-local. It returns bounded scanout information to the caller. `FRAMEBUFFER_PRESENT` accepts a canonical userspace XRGB8888 frame and copies/converts it into the already validated kernel-owned physical framebuffer. The later narrow `FRAMEBUFFER_PRESENT_REGION` extension applies the same owner, buffer-size, pixel-format and conversion rules to one non-empty, scanout-contained rectangle so a software cursor move does not rewrite an unchanged frame. Userspace never receives the physical framebuffer address or an HHDM alias. `FRAMEBUFFER_RELEASE` relinquishes ownership. Process teardown releases a forgotten claim.
 
 The exported source layout is deliberately simple and fixed for M34: one full-screen XRGB8888 image, 4 bytes per pixel, stride `width * 4`. All width/height/stride/byte calculations are overflow checked before copying.
 
@@ -76,6 +77,18 @@ The permanent bundle gate uses the real built ELF sizes rather than assuming a m
 2. composite live client surfaces in deterministic creation order, oldest at the bottom;
 3. draw the software mouse cursor last;
 4. call the kernel framebuffer-present primitive.
+
+The later mouse-responsiveness path preserves this full composition for scene,
+surface, geometry, stacking and background changes. Cursor motion presents only
+the clipped old/new cursor rectangles. A pure BoringWM focus action uses the
+explicit `DISPLAY_PRESENT_FOCUS` control and redraws only the non-overlapping
+window-border bands through `FRAMEBUFFER_PRESENT_REGION`; an unsafe or
+overlapping placement set falls back to the full path. This is a focus-frame
+special case, not a general compositor damage framework. The focus request
+atomically selects the focused window and its two border colors; it does not
+re-send unchanged placement geometry. Its bounded scanout is deferred until no
+input or IPC event is ready, so the WM input acknowledgement and subsequent
+cursor movement do not wait for the focus frame.
 
 Creation order is only a deterministic presentation primitive for M34 acceptance; it is not BoringWM placement/focus/tiling policy.
 

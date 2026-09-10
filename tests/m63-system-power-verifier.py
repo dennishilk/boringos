@@ -40,6 +40,7 @@ reset = read("kernel/arch/x86_64/platform_reset.c")
 block = read("kernel/core/block_device.c")
 usb = read("kernel/core/usb_mass_storage_impl.inc")
 ahci = read("kernel/drivers/ahci_block.c")
+framebuffer_user = read("kernel/core/framebuffer_user.c")
 
 if '"reboot"' not in shell or '"shutdown"' not in shell:
     fail("native shell power commands missing")
@@ -90,6 +91,23 @@ if "enum block_device_result block_device_flush_all" not in block or \
    ".flush = ahci_backend_flush" not in ahci:
     fail("device durability seam incomplete")
 
+region_bounds = body(framebuffer_user, "static bool region_valid")
+region_row = body(framebuffer_user, "static bool present_region_row")
+region_present = body(
+    framebuffer_user,
+    "enum boring_framebuffer_user_result boring_framebuffer_user_present_region",
+)
+if ("width <= info->width - x" not in region_bounds or
+        "height <= info->height - y" not in region_bounds or
+        "framebuffer_owner_pid != process->pid" not in region_present or
+        "buffer_size != info.byte_size" not in region_present or
+        "for (row = 0U; row < height; ++row)" not in region_present or
+        "PRESENT_CHUNK_BYTES / BORING_DISPLAY_BYTES_PER_PIXEL" not in region_row or
+        "user_buffer_copy_out" not in region_row or
+        "while (completed < width)" not in region_row or
+        "kmalloc" in region_row or "kmalloc" in region_present):
+    fail("bounded framebuffer region-present contract incomplete")
+
 for token in ("process_registry_head", "process_registry_append",
               "kmalloc(sizeof(*process))", "kfree(object)"):
     if token not in process:
@@ -107,7 +125,7 @@ if "KERNEL_PROCESS_POLICY_LIMIT 64U" not in read("kernel/include/boring/process.
 
 unchanged = [
     "kernel/core/task.c", "kernel/core/m36_syscall.c", "kernel/core/ipc.c",
-    "user/runtime/include/boring/wm.h", "user/boringwm/main.c",
+    "user/runtime/include/boring/wm.h",
 ]
 if subprocess.run(["git", "diff", "--quiet", M62, "HEAD", "--", *unchanged],
                   cwd=ROOT).returncode != 0:
@@ -116,17 +134,55 @@ if subprocess.run(["git", "diff", "--quiet", M62, "HEAD", "--", *unchanged],
 changed = set(subprocess.check_output(
     ["git", "diff", "--name-only", M62, "HEAD"], cwd=ROOT, text=True
 ).splitlines())
-# M64-M66 deliberately extend xHCI/HID and add a Ring3 mouse witness.
-# Keep the non-USB physical subsystems frozen while the explicit M63
-# durability and power-path checks above remain authoritative.
+# M64-M66 deliberately extend xHCI/HID and add a Ring3 mouse witness. The
+# mouse-latency fix deliberately extends framebuffer_user.c with the bounded
+# region contract checked above. Keep every other non-USB physical subsystem
+# frozen while the explicit M63 durability and power-path checks remain
+# authoritative.
 frozen_prefixes = (
     "kernel/core/framebuffer.c",
-    "kernel/core/framebuffer_user.c", "kernel/arch/x86_64/vmm.c",
+    "kernel/arch/x86_64/vmm.c",
     "kernel/core/pmm.c",
 )
 bad = sorted(path for path in changed if path in frozen_prefixes)
 if bad:
     fail("frozen physical subsystem changed: " + repr(bad))
+
+# The physically isolated pointer-focus hitch permits only a bounded focus
+# border present in BoringWM. Process/task limits, storage and the full layout
+# path remain unchanged and are checked above.
+wm = read("user/boringwm/main.c")
+display = read("user/boring-display/server.c")
+managed = read("user/boring-display/managed.c")
+control = read("user/runtime/include/boring/display_control.h")
+focus_contract = (
+    "#define DISPLAY_PRESENT_FOCUS 20U" in control and
+    "focus.type = DISPLAY_PRESENT_FOCUS;" in wm and
+    "focus.window = wm.focus;" in wm and
+    "if (action == WM_FOCUS) { sync_focus(); } else { sync_layout(); }" in wm and
+    "present_focus_borders();" in display and
+    "display_managed_compose_focus_borders" in managed and
+    "BORING_DISPLAY_FOCUS_REGION_MAX" in managed and
+    "placements_overlap" in managed
+)
+if not focus_contract:
+    fail("bounded focus-border present contract missing")
+
+focus_sync = body(wm, "static void sync_focus(void)")
+input_handler = body(wm, "static void handle_input")
+display_control = body(display, "static void control(uint32_t endpoint")
+display_main = body(display, "int boring_main(void) {")
+early_ack = input_handler.find("acknowledge_input();")
+focus_sync_call = input_handler.find("sync_focus();")
+if ("DISPLAY_PLACE" in focus_sync or "BORING_WM_CONFIGURE" in focus_sync or
+        "focus.background = BORING_WM_UNFOCUSED;" not in focus_sync or
+        min(early_ack, focus_sync_call) < 0 or early_ack >= focus_sync_call or
+        "focus_present_pending = true;" not in display_control or
+        "focus_present_pending && !input_pending" not in display_main or
+        "BORING_EVENT_QUERY" not in display_main or
+        "if (ready == 0L)" not in display_main or
+        "present_focus_borders();" not in display_main):
+    fail("pointer focus still blocks on synchronous placement/present work")
 
 markers = (
     "REBOOT_COMMAND_PRESENT=YES",
@@ -142,6 +198,9 @@ markers = (
     "GENERAL_AML_INTERPRETER_ADDED=NO",
     "M62_PROCESS_ARCHITECTURE_UNCHANGED=YES",
     "M62_TASK_ARCHITECTURE_UNCHANGED=YES",
+    "FRAMEBUFFER_REGION_PRESENT_BOUNDED=YES",
+    "FOCUS_BORDER_PRESENT_BOUNDED=YES",
+    "FOCUS_PRESENT_INPUT_DEFERRED=YES",
 )
 proof = "\n".join(markers) + "\n"
 out = ROOT / "build/m63-system-power-verifier.txt"

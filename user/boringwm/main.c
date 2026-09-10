@@ -69,6 +69,15 @@ static void snapshot(void) {
     desktop_say("wm: frame ready\n");
 }
 
+static void focus_snapshot(void) {
+    char line[64] = "wm: focus-frame=";
+    size_t n = 16U;
+    n = desktop_number(line, n, ++frame_number);
+    boring_memcpy(line + n, " focus=", 7U); n += 7U;
+    n = desktop_number(line, n, wm.focus);
+    line[n++] = '\n'; line[n] = '\0'; desktop_say(line);
+}
+
 static void sync_layout(void) {
     uint32_t index = 0U;
     while (index < wm.count) {
@@ -82,13 +91,17 @@ static void sync_layout(void) {
         place.height = c->rect.height; place.border = c->rect.border; place.order = index;
         place.color = wm.focus == c->token ? BORING_WM_FOCUSED : BORING_WM_UNFOCUSED;
         reply = display_rpc(&place);
-        if (reply.status != BORING_DISPLAY_STATUS_OK) { drop(c->endpoint); index = 0U; continue; }
+        if (reply.status != BORING_DISPLAY_STATUS_OK) {
+            drop(c->endpoint); index = 0U; continue;
+        }
         configure.version = BORING_WM_VERSION; configure.type = BORING_WM_CONFIGURE;
         configure.token = c->token; configure.surface = c->surface;
         configure.x = place.x; configure.y = place.y; configure.width = place.width;
         configure.height = place.height; configure.border = place.border;
         configure.focused = wm.focus == c->token ? 1U : 0U;
-        if (!app_send(c->endpoint, &configure)) { index = 0U; continue; }
+        if (!app_send(c->endpoint, &configure)) {
+            index = 0U; continue;
+        }
         ++index;
     }
     {
@@ -98,6 +111,31 @@ static void sync_layout(void) {
         if (display_rpc(&present).status != BORING_DISPLAY_STATUS_OK) { desktop_fail("WM present"); }
     }
     snapshot();
+}
+
+static void sync_focus(void) {
+    {
+        struct display_control focus = {0};
+        focus.version = BORING_DISPLAY_CONTROL_VERSION;
+        focus.type = DISPLAY_PRESENT_FOCUS;
+        focus.window = wm.focus;
+        focus.color = BORING_WM_FOCUSED;
+        focus.background = BORING_WM_UNFOCUSED;
+        if (display_rpc(&focus).status != BORING_DISPLAY_STATUS_OK) {
+            sync_layout();
+            return;
+        }
+    }
+    focus_snapshot();
+}
+
+static void acknowledge_input(void) {
+    struct display_control ack = {0};
+    ack.version = BORING_DISPLAY_CONTROL_VERSION;
+    ack.type = DISPLAY_INPUT_ACK;
+    if (boring_ipc_send(display, &ack, sizeof(ack), 0U) != 0L) {
+        desktop_fail("WM input ACK");
+    }
 }
 
 static void request(uint32_t endpoint) {
@@ -162,6 +200,7 @@ static long launch_application(uint32_t key) {
 
 static void handle_input(const struct display_event *message) {
     enum wm_action action;
+    bool acknowledged = false;
 #ifdef BORING_M38_WM_DEATH_ACCEPTANCE
     if ((message != NULL) &&
         (message->input.type == BORING_INPUT_EVENT_KEY) &&
@@ -175,7 +214,13 @@ static void handle_input(const struct display_event *message) {
     if ((message->input.type == BORING_INPUT_EVENT_MOUSE_MOVE) &&
         wm_pointer(&wm, message->cursor_x, message->cursor_y)) { action = WM_FOCUS; }
     if ((action == WM_FOCUS) || (action == WM_REORDER)) {
-        desktop_say(action == WM_FOCUS ? "wm: action focus\n" : "wm: action reorder\n"); sync_layout();
+        if ((action == WM_FOCUS) &&
+            (message->input.type == BORING_INPUT_EVENT_MOUSE_MOVE)) {
+            acknowledge_input();
+            acknowledged = true;
+        }
+        desktop_say(action == WM_FOCUS ? "wm: action focus\n" : "wm: action reorder\n");
+        if (action == WM_FOCUS) { sync_focus(); } else { sync_layout(); }
     } else if (action == WM_CLOSE) {
         const struct wm_client *client = wm_lookup(&wm, wm.focus);
         struct boring_wm_message close = {0};
@@ -214,10 +259,7 @@ static void handle_input(const struct display_event *message) {
             if (!app_send(client->endpoint, &key)) { sync_layout(); }
         }
     }
-    {
-        struct display_control ack = {0}; ack.version = BORING_DISPLAY_CONTROL_VERSION; ack.type = DISPLAY_INPUT_ACK;
-        if (boring_ipc_send(display, &ack, sizeof(ack), 0U) != 0L) { desktop_fail("WM input ACK"); }
-    }
+    if (!acknowledged) { acknowledge_input(); }
 }
 
 static long connect_display_service(void) {

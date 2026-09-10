@@ -2,7 +2,7 @@ name: M64 USB topology mouse
 
 on:
   push:
-    branches: [agent/m64-usb-topology-mouse]
+    branches: [agent/m64-usb-topology-mouse, feature/mouse-present-latency]
   workflow_dispatch:
 
 permissions:

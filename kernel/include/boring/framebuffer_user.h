@@ -20,6 +20,9 @@ enum boring_framebuffer_user_result {
 struct boring_framebuffer_user_stats {
     uint64_t owner_pid;
     uint64_t presents;
+    uint64_t full_presents;
+    uint64_t region_presents;
+    uint64_t pixels_presented;
     bool claimed;
 };
 
@@ -29,6 +32,13 @@ enum boring_framebuffer_user_result boring_framebuffer_user_claim(
 enum boring_framebuffer_user_result boring_framebuffer_user_present(
     struct process *process,
     uint32_t buffer_handle);
+enum boring_framebuffer_user_result boring_framebuffer_user_present_region(
+    struct process *process,
+    uint32_t buffer_handle,
+    uint32_t x,
+    uint32_t y,
+    uint32_t width,
+    uint32_t height);
 enum boring_framebuffer_user_result boring_framebuffer_user_release(uint64_t pid);
 bool boring_framebuffer_user_process_teardown(uint64_t pid, bool *released_out);
 bool boring_framebuffer_user_get_stats(struct boring_framebuffer_user_stats *stats);

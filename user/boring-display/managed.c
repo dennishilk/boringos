@@ -11,26 +11,36 @@ uint32_t display_control_validate(const struct display_control *r, size_t size) 
     if ((r == NULL) || (size != sizeof(*r)) ||
         (r->version != BORING_DISPLAY_CONTROL_VERSION)) { return BORING_DISPLAY_STATUS_INVALID; }
     geometry = (r->x != 0U) || (r->y != 0U) || (r->width != 0U) ||
-        (r->height != 0U) || (r->border != 0U) || (r->color != 0U) || (r->order != 0U);
+        (r->height != 0U) || (r->border != 0U) || (r->order != 0U);
     switch (r->type) {
         case DISPLAY_INFO:
         case DISPLAY_MANAGER:
         case DISPLAY_PRESENT:
         case DISPLAY_INPUT_ACK:
             if ((r->surface != 0U) || (r->window != 0U) || geometry ||
+                (r->color != 0U) ||
                 (r->owner_pid != 0ULL) || ((r->type != DISPLAY_PRESENT) &&
                 (r->background != 0U))) { return BORING_DISPLAY_STATUS_INVALID; }
             break;
+        case DISPLAY_PRESENT_FOCUS:
+            if ((r->surface != 0U) || (r->window == 0U) || geometry ||
+                (r->owner_pid != 0ULL) ||
+                ((r->color & 0xff000000U) != 0U) ||
+                ((r->background & 0xff000000U) != 0U)) {
+                return BORING_DISPLAY_STATUS_INVALID;
+            }
+            break;
         case DISPLAY_DELEGATE:
             if ((r->surface == 0U) || (r->window != 0U) || geometry ||
-                (r->background != 0U) || (r->owner_pid != 0ULL)) {
+                (r->color != 0U) || (r->background != 0U) ||
+                (r->owner_pid != 0ULL)) {
                 return BORING_DISPLAY_STATUS_INVALID;
             }
             break;
         case DISPLAY_BIND:
         case DISPLAY_UNBIND:
             if ((r->surface == 0U) || (r->window == 0U) || geometry ||
-                (r->background != 0U) ||
+                (r->color != 0U) || (r->background != 0U) ||
                 ((r->type == DISPLAY_BIND) != (r->owner_pid != 0ULL))) {
                 return BORING_DISPLAY_STATUS_INVALID;
             }
@@ -72,6 +82,27 @@ uint32_t display_managed_control(struct display_managed *state,
         if ((r->background & 0xff000000U) != 0U) { return BORING_DISPLAY_STATUS_INVALID; }
         state->background = r->background;
         state->wallpaper = true;
+        return BORING_DISPLAY_STATUS_OK;
+    }
+    if (r->type == DISPLAY_PRESENT_FOCUS) {
+        bool found = false;
+        for (index = 0U; index < BORING_DISPLAY_SURFACE_MAX; ++index) {
+            const struct display_placement *placement =
+                &state->placements[index];
+            if (placement->visible && (placement->window == r->window)) {
+                found = true;
+            }
+        }
+        if (!found) {
+            return BORING_DISPLAY_STATUS_INVALID;
+        }
+        for (index = 0U; index < BORING_DISPLAY_SURFACE_MAX; ++index) {
+            struct display_placement *placement = &state->placements[index];
+            if (placement->visible) {
+                placement->color = (placement->window == r->window) ?
+                    r->color : r->background;
+            }
+        }
         return BORING_DISPLAY_STATUS_OK;
     }
     for (index = 0U; index < BORING_DISPLAY_SURFACE_MAX; ++index) {
@@ -129,9 +160,9 @@ static void put(uint8_t *output, size_t offset, uint32_t color) {
     output[offset + 3U] = 0U;
 }
 
-bool display_managed_compose(const struct display_managed *state,
-                             const struct boring_display_core *core,
-                             uint8_t *output, size_t size) {
+bool display_managed_compose_scene(const struct display_managed *state,
+                                   const struct boring_display_core *core,
+                                   uint8_t *output, size_t size) {
     size_t offset;
     uint32_t order, index, row;
     if ((state == NULL) || (core == NULL) || (output == NULL) ||
@@ -161,6 +192,151 @@ bool display_managed_compose(const struct display_managed *state,
                 }
             }
         }
+    }
+    return true;
+}
+
+static bool placement_ready(const struct display_placement *placement,
+                            const struct boring_display_surface_state *surface,
+                            const struct boring_display_core *core) {
+    return placement->visible && surface->active &&
+        (placement->surface == surface->token) && (surface->pixels != NULL) &&
+        (placement->width != 0U) && (placement->height != 0U) &&
+        (placement->x <= core->width) && (placement->y <= core->height) &&
+        (placement->width <= core->width - placement->x) &&
+        (placement->height <= core->height - placement->y) &&
+        (placement->border <= placement->width / 2U) &&
+        (placement->border <= placement->height / 2U);
+}
+
+static bool placements_overlap(const struct display_placement *first,
+                               const struct display_placement *second) {
+    return (first->x < second->x + second->width) &&
+        (second->x < first->x + first->width) &&
+        (first->y < second->y + second->height) &&
+        (second->y < first->y + first->height);
+}
+
+static bool focus_region(struct boring_display_region *regions,
+                         size_t region_capacity,
+                         size_t *region_count,
+                         uint64_t *pixel_count,
+                         const struct boring_display_region *region,
+                         const struct boring_display_core *core,
+                         uint8_t *output,
+                         uint32_t color) {
+    uint32_t row;
+
+    if ((region->width == 0U) || (region->height == 0U)) {
+        return true;
+    }
+    if (*region_count >= region_capacity) {
+        return false;
+    }
+    for (row = 0U; row < region->height; ++row) {
+        uint32_t column;
+        for (column = 0U; column < region->width; ++column) {
+            const size_t offset =
+                (size_t)(region->y + row) * (size_t)core->stride +
+                (size_t)(region->x + column) * 4U;
+            put(output, offset, color);
+        }
+    }
+    regions[*region_count] = *region;
+    ++*region_count;
+    *pixel_count += (uint64_t)region->width * (uint64_t)region->height;
+    return true;
+}
+
+bool display_managed_compose_focus_borders(
+    const struct display_managed *state,
+    const struct boring_display_core *core,
+    uint8_t *output,
+    size_t size,
+    struct boring_display_region *regions,
+    size_t region_capacity,
+    size_t *region_count,
+    uint64_t *pixel_count) {
+    uint32_t first;
+
+    if ((state == NULL) || (core == NULL) || (output == NULL) ||
+        (regions == NULL) || (region_count == NULL) || (pixel_count == NULL) ||
+        (size != core->byte_size) ||
+        (region_capacity < BORING_DISPLAY_FOCUS_REGION_MAX)) {
+        return false;
+    }
+    *region_count = 0U;
+    *pixel_count = 0ULL;
+    for (first = 0U; first < BORING_DISPLAY_SURFACE_MAX; ++first) {
+        const struct display_placement *a = &state->placements[first];
+        const struct boring_display_surface_state *surface =
+            &core->surfaces[first];
+
+        if (!a->visible) {
+            continue;
+        }
+        if (!placement_ready(a, surface, core)) {
+            return false;
+        }
+    }
+    for (first = 0U; first < BORING_DISPLAY_SURFACE_MAX; ++first) {
+        const struct display_placement *a = &state->placements[first];
+        uint32_t second;
+
+        if (!a->visible) {
+            continue;
+        }
+        for (second = first + 1U;
+             second < BORING_DISPLAY_SURFACE_MAX;
+             ++second) {
+            const struct display_placement *b = &state->placements[second];
+            if (b->visible && placements_overlap(a, b)) {
+                return false;
+            }
+        }
+    }
+    for (first = 0U; first < BORING_DISPLAY_SURFACE_MAX; ++first) {
+        const struct display_placement *p = &state->placements[first];
+        struct boring_display_region region;
+        uint32_t middle_height;
+
+        if (!p->visible || (p->border == 0U)) {
+            continue;
+        }
+        middle_height = p->height - 2U * p->border;
+        region = (struct boring_display_region){
+            p->x, p->y, p->width, p->border
+        };
+        if (!focus_region(regions, region_capacity, region_count, pixel_count,
+                          &region, core, output, p->color)) {
+            return false;
+        }
+        region.y = p->y + p->height - p->border;
+        if (!focus_region(regions, region_capacity, region_count, pixel_count,
+                          &region, core, output, p->color)) {
+            return false;
+        }
+        region = (struct boring_display_region){
+            p->x, p->y + p->border, p->border, middle_height
+        };
+        if (!focus_region(regions, region_capacity, region_count, pixel_count,
+                          &region, core, output, p->color)) {
+            return false;
+        }
+        region.x = p->x + p->width - p->border;
+        if (!focus_region(regions, region_capacity, region_count, pixel_count,
+                          &region, core, output, p->color)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool display_managed_compose(const struct display_managed *state,
+                             const struct boring_display_core *core,
+                             uint8_t *output, size_t size) {
+    if (!display_managed_compose_scene(state, core, output, size)) {
+        return false;
     }
     boring_display_compose_cursor(core, output);
     return true;
