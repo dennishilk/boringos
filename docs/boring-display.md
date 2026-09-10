@@ -78,6 +78,14 @@ The permanent bundle gate uses the real built ELF sizes rather than assuming a m
 3. draw the software mouse cursor last;
 4. call the kernel framebuffer-present primitive.
 
+The later mouse-responsiveness path preserves this full composition for scene,
+surface, geometry, stacking and background changes. Cursor motion presents only
+the clipped old/new cursor rectangles. A pure BoringWM focus action uses the
+explicit `DISPLAY_PRESENT_FOCUS` control and redraws only the non-overlapping
+window-border bands through `FRAMEBUFFER_PRESENT_REGION`; an unsafe or
+overlapping placement set falls back to the full path. This is a focus-frame
+special case, not a general compositor damage framework.
+
 Creation order is only a deterministic presentation primitive for M34 acceptance; it is not BoringWM placement/focus/tiling policy.
 
 A client surface is shared memory. After initial creation the client may modify pixels through its original M32 mapping and send only `COMMIT`; the service must observe those same backing bytes through its granted alias. No second copy/grant is required.

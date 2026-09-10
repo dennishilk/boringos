@@ -56,3 +56,32 @@ The M66 QEMU harness injects 17 real USB mouse moves in total, including a 16-re
 - no heap allocation, unbounded trace or busy wait.
 
 Host coverage verifies overlapping old/new cursor regions, unique underlying pixels, absence of trails, top-left and bottom-right clipping, clipped no-op movement, physical-pitch padding, a region wider than the 4096-byte kernel scratch buffer, authority checks and exact full/region/pixel counters.
+
+## Physical result and remaining focus boundary
+
+The exact-head candidate `497d90917a37f8f6511e42cb14ddc18e2b425144`
+was physically successful on Cthulhu: ordinary cursor motion is as responsive as
+Linux on the same machine. The remaining observation is a roughly 250 ms pause
+only when pointer focus crosses between windows. Motion immediately returns to
+full speed after the focus change.
+
+The focus path explains that isolated pause. `wm_pointer()` changes the token,
+then the historical `sync_layout()` sends unchanged placements and performs a
+complete wallpaper, window and framebuffer presentation. At 800x600 this
+rewrites 480,000 pixels even though only two 3-pixel focus borders changed.
+
+The narrow follow-up keeps the existing layouts, client configuration messages,
+focus policy and full-present path. A focus action now requests a bounded focus
+border presentation. For the normal two-window 800x600 layout it redraws eight
+non-overlapping border bands totaling 11,736 pixels, a 40.9x reduction in
+framebuffer writes, and skips wallpaper and window-interior composition. One
+hundred modeled transitions therefore change 1,173,600 pixels instead of
+48,000,000. If a placement is missing, invalid or overlapping, the display
+service falls back to the existing full composition rather than applying an
+unsafe partial update.
+
+The cursor underlay is restored before the border bands are painted and captured
+again before the cursor is redrawn. Host coverage compares the partial result
+byte-for-byte with a full composition while the cursor overlaps a border, then
+moves the cursor and verifies that the new border underlay is restored without
+trails.

@@ -69,8 +69,9 @@ static void snapshot(void) {
     desktop_say("wm: frame ready\n");
 }
 
-static void sync_layout(void) {
+static void sync_frame(bool focus_only) {
     uint32_t index = 0U;
+    bool full_required = !focus_only;
     while (index < wm.count) {
         const struct wm_client *c = &wm.clients[wm.order[index]];
         struct display_control place = {0};
@@ -82,23 +83,35 @@ static void sync_layout(void) {
         place.height = c->rect.height; place.border = c->rect.border; place.order = index;
         place.color = wm.focus == c->token ? BORING_WM_FOCUSED : BORING_WM_UNFOCUSED;
         reply = display_rpc(&place);
-        if (reply.status != BORING_DISPLAY_STATUS_OK) { drop(c->endpoint); index = 0U; continue; }
+        if (reply.status != BORING_DISPLAY_STATUS_OK) {
+            full_required = true; drop(c->endpoint); index = 0U; continue;
+        }
         configure.version = BORING_WM_VERSION; configure.type = BORING_WM_CONFIGURE;
         configure.token = c->token; configure.surface = c->surface;
         configure.x = place.x; configure.y = place.y; configure.width = place.width;
         configure.height = place.height; configure.border = place.border;
         configure.focused = wm.focus == c->token ? 1U : 0U;
-        if (!app_send(c->endpoint, &configure)) { index = 0U; continue; }
+        if (!app_send(c->endpoint, &configure)) {
+            full_required = true; index = 0U; continue;
+        }
         ++index;
     }
     {
         struct display_control present = {0};
-        present.version = BORING_DISPLAY_CONTROL_VERSION; present.type = DISPLAY_PRESENT;
-        present.background = BORING_WM_BACKGROUND;
+        if (full_required) {
+            present.version = BORING_DISPLAY_CONTROL_VERSION; present.type = DISPLAY_PRESENT;
+            present.background = BORING_WM_BACKGROUND;
+        } else {
+            present.version = BORING_DISPLAY_CONTROL_VERSION;
+            present.type = DISPLAY_PRESENT_FOCUS;
+        }
         if (display_rpc(&present).status != BORING_DISPLAY_STATUS_OK) { desktop_fail("WM present"); }
     }
     snapshot();
 }
+
+static void sync_layout(void) { sync_frame(false); }
+static void sync_focus(void) { sync_frame(true); }
 
 static void request(uint32_t endpoint) {
     union { uint8_t bytes[BORING_IPC_INLINE_PAYLOAD_MAX]; struct boring_wm_message m; } data = {0};
@@ -175,7 +188,8 @@ static void handle_input(const struct display_event *message) {
     if ((message->input.type == BORING_INPUT_EVENT_MOUSE_MOVE) &&
         wm_pointer(&wm, message->cursor_x, message->cursor_y)) { action = WM_FOCUS; }
     if ((action == WM_FOCUS) || (action == WM_REORDER)) {
-        desktop_say(action == WM_FOCUS ? "wm: action focus\n" : "wm: action reorder\n"); sync_layout();
+        desktop_say(action == WM_FOCUS ? "wm: action focus\n" : "wm: action reorder\n");
+        if (action == WM_FOCUS) { sync_focus(); } else { sync_layout(); }
     } else if (action == WM_CLOSE) {
         const struct wm_client *client = wm_lookup(&wm, wm.focus);
         struct boring_wm_message close = {0};

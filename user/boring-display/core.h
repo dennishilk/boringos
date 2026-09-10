@@ -95,6 +95,11 @@ bool boring_display_cursor_damage_reset(
     const struct boring_display_core *core,
     uint8_t *output,
     size_t output_size);
+bool boring_display_cursor_damage_restore(
+    struct boring_display_cursor_damage *damage,
+    const struct boring_display_core *core,
+    uint8_t *output,
+    size_t output_size);
 bool boring_display_cursor_damage_move(
     struct boring_display_cursor_damage *damage,
     struct boring_display_core *core,

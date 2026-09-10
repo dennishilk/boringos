@@ -15,6 +15,7 @@
 #define DISPLAY_INPUT 17U
 #define DISPLAY_REPLY 18U
 #define DISPLAY_INPUT_ACK 19U
+#define DISPLAY_PRESENT_FOCUS 20U
 
 struct display_control {
     uint32_t version, type, surface, window;

@@ -522,6 +522,30 @@ bool boring_display_cursor_damage_reset(
     return true;
 }
 
+bool boring_display_cursor_damage_restore(
+    struct boring_display_cursor_damage *damage,
+    const struct boring_display_core *core,
+    uint8_t *output,
+    size_t output_size) {
+    struct boring_display_region expected;
+
+    if (!cursor_damage_arguments_valid(damage, core, output, output_size) ||
+        !damage->ready) {
+        return false;
+    }
+    expected = cursor_region(core);
+    if ((damage->saved_region.x != expected.x) ||
+        (damage->saved_region.y != expected.y) ||
+        (damage->saved_region.width != expected.width) ||
+        (damage->saved_region.height != expected.height)) {
+        return false;
+    }
+    cursor_underlay_copy(damage, core, output, &expected, true);
+    counter_add(&damage->restored_pixels, region_pixels(&expected));
+    damage->ready = false;
+    return true;
+}
+
 bool boring_display_cursor_damage_move(
     struct boring_display_cursor_damage *damage,
     struct boring_display_core *core,

@@ -125,7 +125,7 @@ if "KERNEL_PROCESS_POLICY_LIMIT 64U" not in read("kernel/include/boring/process.
 
 unchanged = [
     "kernel/core/task.c", "kernel/core/m36_syscall.c", "kernel/core/ipc.c",
-    "user/runtime/include/boring/wm.h", "user/boringwm/main.c",
+    "user/runtime/include/boring/wm.h",
 ]
 if subprocess.run(["git", "diff", "--quiet", M62, "HEAD", "--", *unchanged],
                   cwd=ROOT).returncode != 0:
@@ -148,6 +148,25 @@ bad = sorted(path for path in changed if path in frozen_prefixes)
 if bad:
     fail("frozen physical subsystem changed: " + repr(bad))
 
+# The physically isolated pointer-focus hitch permits only a bounded focus
+# border present in BoringWM. Process/task limits, storage and the full layout
+# path remain unchanged and are checked above.
+wm = read("user/boringwm/main.c")
+display = read("user/boring-display/server.c")
+managed = read("user/boring-display/managed.c")
+control = read("user/runtime/include/boring/display_control.h")
+focus_contract = (
+    "#define DISPLAY_PRESENT_FOCUS 20U" in control and
+    "present.type = DISPLAY_PRESENT_FOCUS;" in wm and
+    "if (action == WM_FOCUS) { sync_focus(); } else { sync_layout(); }" in wm and
+    "present_focus_borders();" in display and
+    "display_managed_compose_focus_borders" in managed and
+    "BORING_DISPLAY_FOCUS_REGION_MAX" in managed and
+    "placements_overlap" in managed
+)
+if not focus_contract:
+    fail("bounded focus-border present contract missing")
+
 markers = (
     "REBOOT_COMMAND_PRESENT=YES",
     "SHUTDOWN_COMMAND_PRESENT=YES",
@@ -163,6 +182,7 @@ markers = (
     "M62_PROCESS_ARCHITECTURE_UNCHANGED=YES",
     "M62_TASK_ARCHITECTURE_UNCHANGED=YES",
     "FRAMEBUFFER_REGION_PRESENT_BOUNDED=YES",
+    "FOCUS_BORDER_PRESENT_BOUNDED=YES",
 )
 proof = "\n".join(markers) + "\n"
 out = ROOT / "build/m63-system-power-verifier.txt"

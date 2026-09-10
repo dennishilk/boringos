@@ -345,6 +345,9 @@ def run():
                 "elapsed_seconds_observational": elapsed,
                 "expected_region_presents": 32,
                 "expected_region_pixels": 2304,
+                "expected_focus_border_transitions": 3,
+                "expected_total_region_presents": 58,
+                "expected_total_region_pixels": 37656,
                 "pointer_focus_changed": True,
             }, indent=2) + "\n")
             key("j", super_key=True)
@@ -379,9 +382,10 @@ def run():
                 r"m66-desktop: framebuffer full/region/pixels=(\d+)/(\d+)/(\d+)",
                 text())
             if (stats is None or int(stats.group(1)) < 1 or
-                    int(stats.group(2)) != 34 or
-                    int(stats.group(3)) - int(stats.group(1)) * 800 * 600 != 2448):
-                raise RuntimeError("missing exact M66 cursor region-present accounting")
+                    int(stats.group(2)) != 58 or
+                    int(stats.group(3)) - int(stats.group(1)) * 800 * 600 != 37656):
+                raise RuntimeError(
+                    "missing exact M66 cursor/focus region-present accounting")
             witness("M66 USB-hub mouse Ring3 desktop acceptance passed.")
         witness("M37 native desktop session startup acceptance passed.")
         label = ("M66 USB-hub mouse Ring3 desktop SUCCESS"

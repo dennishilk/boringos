@@ -45,6 +45,36 @@ static void present(void) {
         (boring_framebuffer_present(composition) != 0L)) { desktop_fail("display present"); }
 }
 
+static void present_focus_borders(void) {
+    struct boring_display_region regions[BORING_DISPLAY_FOCUS_REGION_MAX];
+    size_t count = 0U;
+    size_t index;
+    uint64_t pixel_count = 0ULL;
+
+    if (!boring_display_cursor_damage_restore(
+            &cursor_damage, &core, pixels, (size_t)core.byte_size)) {
+        desktop_fail("display focus cursor restore");
+    }
+    if (!display_managed_compose_focus_borders(
+            &managed, &core, pixels, (size_t)core.byte_size,
+            regions, BORING_DISPLAY_FOCUS_REGION_MAX, &count, &pixel_count)) {
+        present();
+        return;
+    }
+    if (!boring_display_cursor_damage_reset(
+            &cursor_damage, &core, pixels, (size_t)core.byte_size)) {
+        desktop_fail("display focus cursor reset");
+    }
+    for (index = 0U; index < count; ++index) {
+        const struct boring_display_region *region = &regions[index];
+        if (boring_framebuffer_present_region(
+                composition, region->x, region->y,
+                region->width, region->height) != 0L) {
+            desktop_fail("display focus border present");
+        }
+    }
+}
+
 static void present_cursor_move(int32_t dx, int32_t dy) {
     struct boring_display_region old_region;
     struct boring_display_region new_region;
@@ -170,10 +200,18 @@ static void control(uint32_t endpoint, const struct display_control *r) {
             status = BORING_DISPLAY_STATUS_ACCESS;
         } else {
             status = display_managed_control(&managed, &core, endpoint, (uint64_t)peer, r);
-            if ((status == BORING_DISPLAY_STATUS_OK) && (r->type == DISPLAY_PRESENT)) {
-                present();
+            if ((status == BORING_DISPLAY_STATUS_OK) &&
+                ((r->type == DISPLAY_PRESENT) ||
+                 (r->type == DISPLAY_PRESENT_FOCUS))) {
+                if (r->type == DISPLAY_PRESENT_FOCUS) {
+                    present_focus_borders();
+                } else {
+                    present();
+                }
 #if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
-                m61_post37_present_completed = true;
+                if (r->type == DISPLAY_PRESENT) {
+                    m61_post37_present_completed = true;
+                }
 #endif
             }
         }

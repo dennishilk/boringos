@@ -511,12 +511,12 @@ void m37_desktop_test_finish_from_pid1(void) {
 #if defined(BORING_M66_USB_HUB_MOUSE)
     if ((framebuffer.full_presents == 0ULL) ||
         (framebuffer.full_presents > UINT64_MAX / 480000ULL) ||
-        (framebuffer.region_presents != 34ULL) ||
+        (framebuffer.region_presents != 58ULL) ||
         (framebuffer.pixels_presented <
          framebuffer.full_presents * 480000ULL) ||
         (framebuffer.pixels_presented -
-         framebuffer.full_presents * 480000ULL != 2448ULL)) {
-        fail("M66 bounded cursor region-present accounting");
+         framebuffer.full_presents * 480000ULL != 37656ULL)) {
+        fail("M66 bounded cursor/focus region-present accounting");
     }
     serial_write_string("m66-desktop: framebuffer full/region/pixels=");
     serial_write_u64(framebuffer.full_presents);
@@ -527,6 +527,8 @@ void m37_desktop_test_finish_from_pid1(void) {
     serial_write_string("\n");
     serial_write_string(
         "m66-desktop: 17 moves baseline/damage pixels=8160000/2448\n");
+    serial_write_string(
+        "m66-desktop: 3 focus frames baseline/damage pixels=1440000/35208\n");
 #endif
     serial_write_string(
         "m37-desktop: IPC/input/framebuffer/M32/PTY desktop resources drained\n");
