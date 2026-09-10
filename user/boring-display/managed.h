@@ -23,4 +23,7 @@ void display_managed_forget(struct display_managed *state, uint32_t surface);
 bool display_managed_compose(const struct display_managed *state,
                              const struct boring_display_core *core,
                              uint8_t *output, size_t size);
+bool display_managed_compose_scene(const struct display_managed *state,
+                                   const struct boring_display_core *core,
+                                   uint8_t *output, size_t size);
 #endif

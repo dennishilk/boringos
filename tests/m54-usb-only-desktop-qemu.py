@@ -325,6 +325,31 @@ def run():
 
         type_text("terminalb")
         settled_capture("dual-focused-b", dual, "dual-b")
+        if HUB_MOUSE:
+            movement = "display: M66 USB hub mouse movement reached Ring3 desktop"
+            movement_before = text().count(movement)
+            focus_before = text().count("wm: action focus")
+            started = time.monotonic()
+            for index in range(16):
+                usb_inject([usb_rel("x", 1 if index % 2 == 0 else -1)])
+                witness(movement, movement_before + index + 1)
+            elapsed = time.monotonic() - started
+            witness("wm: action focus", focus_before + 1)
+            pointer_focus = latest(2, dual["frame"])
+            if pointer_focus["focus"] == dual["focus"]:
+                raise RuntimeError("real USB mouse movement did not change pointer focus")
+            (OUT / "mouse-latency.json").write_text(json.dumps({
+                "injected_reports": 16,
+                "observed_ring3_moves": 16,
+                "elapsed_seconds_observational": elapsed,
+                "expected_region_presents": 32,
+                "expected_region_pixels": 2304,
+                "pointer_focus_changed": True,
+            }, indent=2) + "\n")
+            key("j", super_key=True)
+            restored = latest(2, pointer_focus["frame"])
+            if restored["focus"] != dual["focus"]:
+                raise RuntimeError("keyboard focus restore after pointer burst failed")
         key("j", super_key=True)
         switched = latest(2, dual["frame"])
         type_text("terminala")
@@ -348,6 +373,13 @@ def run():
         witness("m37-desktop: all spawned desktop tasks/processes reaped; PID 1 remains")
         witness("M54 USB-only graphical desktop acceptance passed.")
         if HUB_MOUSE:
+            stats = re.search(
+                r"m66-desktop: framebuffer full/region/pixels=(\d+)/(\d+)/(\d+)",
+                text())
+            if (stats is None or int(stats.group(1)) < 1 or
+                    int(stats.group(2)) != 34 or
+                    int(stats.group(3)) - int(stats.group(1)) * 800 * 600 != 2448):
+                raise RuntimeError("missing exact M66 cursor region-present accounting")
             witness("M66 USB-hub mouse Ring3 desktop acceptance passed.")
         witness("M37 native desktop session startup acceptance passed.")
         label = ("M66 USB-hub mouse Ring3 desktop SUCCESS"

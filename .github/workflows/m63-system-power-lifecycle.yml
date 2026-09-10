@@ -127,7 +127,7 @@ jobs:
           echo "raw_sha=$raw_sha" >> "$GITHUB_OUTPUT"
           echo "raw_bytes=100663296" >> "$GITHUB_OUTPUT"
       - name: Gate M66 artifact on all other exact-head workflows
-        if: ${{ github.ref_name == 'agent/m64-usb-topology-mouse' }}
+        if: ${{ github.ref_name == 'agent/m64-usb-topology-mouse' || github.ref_name == 'feature/mouse-present-latency' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -304,6 +304,73 @@ jobs:
             build/boringos-m66-usb.img.sha256
             build/m66-physical-identity.txt
             build/m66-exact-head-gate.txt
+            build/m61-usb-image.txt
+            build/m61-qemu-twin-proof.txt
+            build/m63-system-power-lifecycle/proof.txt
+            build/m63-system-power-verifier.txt
+          if-no-files-found: error
+          retention-days: 14
+      - name: Prepare exact-head mouse-present-latency physical image
+        if: ${{ github.ref_name == 'feature/mouse-present-latency' }}
+        id: mouse_latency_physical
+        run: |
+          test -f build/m66-exact-head-gate.txt
+          grep -Fqx "EXACT_HEAD=$GITHUB_SHA" build/m66-exact-head-gate.txt
+          grep -Fqx 'REQUIRED_OTHER_SUCCESS=28' build/m66-exact-head-gate.txt
+          grep -Fqx 'REQUIRED_OTHER_FAILURE=0' build/m66-exact-head-gate.txt
+          grep -Fqx 'REQUIRED_OTHER_CANCELLED=0' build/m66-exact-head-gate.txt
+
+          test ! -e build/boringos-m61-usb-qemu.img
+          test ! -e build/boringos-m61-usb-qemu.img.sha256
+          grep -Fqx 'limine_timeout_seconds=5' build/m61-usb-image.txt
+          grep -Fqx 'physical_breadcrumbs=enabled' build/m61-usb-image.txt
+          test "$(stat -c %s build/boringos-m61-usb.img)" = "100663296"
+          (cd build && sha256sum -c boringos-m61-usb.img.sha256)
+
+          cp build/boringos-m61-usb.img build/boringos-mouse-present-latency.img
+          sha256sum build/boringos-mouse-present-latency.img \
+            > build/boringos-mouse-present-latency.img.sha256
+          test "$(stat -c %s build/boringos-mouse-present-latency.img)" = "100663296"
+          raw_sha=$(awk '{print $1}' build/boringos-mouse-present-latency.img.sha256)
+          test "$raw_sha" = "$(awk '{print $1}' build/boringos-m61-usb.img.sha256)"
+
+          xz -T0 -6 -c build/boringos-mouse-present-latency.img \
+            > build/boringos-mouse-present-latency.img.xz
+          compressed_bytes=$(stat -c %s build/boringos-mouse-present-latency.img.xz)
+          compressed_sha=$(sha256sum build/boringos-mouse-present-latency.img.xz | awk '{print $1}')
+          tree=$(git rev-parse 'HEAD^{tree}')
+          artifact_name="mouse-present-latency-$GITHUB_SHA-$raw_sha"
+          cp build/m66-exact-head-gate.txt \
+            build/mouse-present-latency-exact-head-gate.txt
+
+          {
+            echo "FINAL_HEAD=$GITHUB_SHA"
+            echo "FINAL_TREE=$tree"
+            echo 'RAW_BYTES=100663296'
+            echo "RAW_SHA256=$raw_sha"
+            echo "COMPRESSED_BYTES=$compressed_bytes"
+            echo "COMPRESSED_SHA256=$compressed_sha"
+            echo 'QEMU_TWIN_PUBLISHED=NO'
+            echo 'EXACT_HEAD_CI_GATE=GREEN'
+            echo "ARTIFACT_NAME=$artifact_name"
+          } > build/mouse-present-latency-physical-identity.txt
+          cat build/mouse-present-latency-physical-identity.txt
+
+          echo "raw_sha=$raw_sha" >> "$GITHUB_OUTPUT"
+          echo "raw_bytes=100663296" >> "$GITHUB_OUTPUT"
+          echo "compressed_bytes=$compressed_bytes" >> "$GITHUB_OUTPUT"
+          echo "compressed_sha=$compressed_sha" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+      - name: Publish exactly one mouse-present-latency physical USB artifact
+        if: ${{ github.ref_name == 'feature/mouse-present-latency' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.mouse_latency_physical.outputs.artifact_name }}
+          path: |
+            build/boringos-mouse-present-latency.img.xz
+            build/boringos-mouse-present-latency.img.sha256
+            build/mouse-present-latency-physical-identity.txt
+            build/mouse-present-latency-exact-head-gate.txt
             build/m61-usb-image.txt
             build/m61-qemu-twin-proof.txt
             build/m63-system-power-lifecycle/proof.txt

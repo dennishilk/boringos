@@ -85,6 +85,13 @@ MEMORY_HOST_TEST := $(BUILD_DIR)/memory-host-test
 RUNTIME_HEAP_HOST_TEST := $(BUILD_DIR)/runtime-heap-host-test
 IPC_HOST_TEST := $(BUILD_DIR)/ipc-host-test
 DISPLAY_HOST_TEST := $(BUILD_DIR)/display-host-test
+MOUSE_LATENCY_HOST_TEST := $(BUILD_DIR)/mouse-latency-host-test
+FRAMEBUFFER_PRESENT_REGION_HOST_TEST := \
+	$(BUILD_DIR)/framebuffer-present-region-host-test
+MOUSE_LATENCY_HOST_TEST_SANITIZED := \
+	$(BUILD_DIR)/mouse-latency-host-test-sanitized
+FRAMEBUFFER_PRESENT_REGION_HOST_TEST_SANITIZED := \
+	$(BUILD_DIR)/framebuffer-present-region-host-test-sanitized
 PMM_READINESS_HOST_TEST := $(BUILD_DIR)/pmm-readiness-host-test
 XHCI_HOST_TEST := $(BUILD_DIR)/xhci-host-test
 MKBORINGFS_VERIFY := $(BUILD_DIR)/mkboringfs-test/mkboringfs-verify
@@ -390,7 +397,7 @@ KERNEL_ASM_OBJECTS := $(patsubst %.S,$(KERNEL_BUILD_DIR)/%.o,$(KERNEL_ASM_SOURCE
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 MODE_STAMP := $(BUILD_DIR)/.test-mode
 
-.PHONY: all kernel user-elf user-runtime user-console user-init user-shell user-boringfetch user-cat user-input-test user-memory-test user-ipc-test user-m36-spawn user-boring-display user-display-clients elf-audit runtime-audit console-audit init-audit shell-audit boringfetch-audit cat-audit input-test-audit memory-test-audit ipc-test-audit display-audit shell-host-test fd-host-test pty-host-test framebuffer-host-test vmm-framebuffer-host-test boot-console-host-test input-host-test memory-host-test ipc-host-test display-host-test boringfs-host-test boringfs-vfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test boringfs-fixture qemu-bundle run run-headless test clean distclean
+.PHONY: all kernel user-elf user-runtime user-console user-init user-shell user-boringfetch user-cat user-input-test user-memory-test user-ipc-test user-m36-spawn user-boring-display user-display-clients elf-audit runtime-audit console-audit init-audit shell-audit boringfetch-audit cat-audit input-test-audit memory-test-audit ipc-test-audit display-audit shell-host-test fd-host-test pty-host-test framebuffer-host-test vmm-framebuffer-host-test boot-console-host-test input-host-test memory-host-test ipc-host-test display-host-test mouse-latency-host-test framebuffer-present-region-host-test mouse-latency-host-test-sanitized framebuffer-present-region-host-test-sanitized boringfs-host-test boringfs-vfs-host-test mkboringfs mkboringfs-test boringfsck boringfsck-test boringfs-fixture qemu-bundle run run-headless test clean distclean
 
 all: $(ISO)
 
@@ -489,6 +496,19 @@ ipc-host-test: $(IPC_HOST_TEST)
 
 display-host-test: $(DISPLAY_HOST_TEST)
 	$(DISPLAY_HOST_TEST)
+
+mouse-latency-host-test: $(MOUSE_LATENCY_HOST_TEST)
+	$(MOUSE_LATENCY_HOST_TEST)
+
+framebuffer-present-region-host-test: $(FRAMEBUFFER_PRESENT_REGION_HOST_TEST)
+	$(FRAMEBUFFER_PRESENT_REGION_HOST_TEST)
+
+mouse-latency-host-test-sanitized: $(MOUSE_LATENCY_HOST_TEST_SANITIZED)
+	ASAN_OPTIONS=detect_leaks=0 $(MOUSE_LATENCY_HOST_TEST_SANITIZED)
+
+framebuffer-present-region-host-test-sanitized: \
+		$(FRAMEBUFFER_PRESENT_REGION_HOST_TEST_SANITIZED)
+	ASAN_OPTIONS=detect_leaks=0 $(FRAMEBUFFER_PRESENT_REGION_HOST_TEST_SANITIZED)
 
 .PHONY: pmm-readiness-host-test
 pmm-readiness-host-test: $(PMM_READINESS_HOST_TEST)
@@ -647,6 +667,44 @@ $(DISPLAY_HOST_TEST): tests/display-host-test.c user/boring-display/core.c \
 	@mkdir -p $(dir $@)
 	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) \
 		tests/display-host-test.c user/boring-display/core.c -o $@
+
+$(MOUSE_LATENCY_HOST_TEST): tests/mouse-latency-benchmark.c \
+		user/boring-display/core.c user/boring-display/core.h \
+		user/boring-display/managed.c user/boring-display/managed.h \
+		user/boring-display/wallpaper.c user/boring-display/wallpaper.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(RUNTIME_USER_CPPFLAGS) $(HOST_CFLAGS) \
+		tests/mouse-latency-benchmark.c user/boring-display/core.c \
+		user/boring-display/managed.c user/boring-display/wallpaper.c -o $@
+
+$(FRAMEBUFFER_PRESENT_REGION_HOST_TEST): \
+		tests/framebuffer-present-region-host-test.c \
+		kernel/core/framebuffer_user.c \
+		kernel/include/boring/framebuffer_user.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) \
+		tests/framebuffer-present-region-host-test.c \
+		kernel/core/framebuffer_user.c -o $@
+
+$(MOUSE_LATENCY_HOST_TEST_SANITIZED): tests/mouse-latency-benchmark.c \
+		user/boring-display/core.c user/boring-display/core.h \
+		user/boring-display/managed.c user/boring-display/managed.h \
+		user/boring-display/wallpaper.c user/boring-display/wallpaper.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(RUNTIME_USER_CPPFLAGS) $(HOST_CFLAGS) \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		tests/mouse-latency-benchmark.c user/boring-display/core.c \
+		user/boring-display/managed.c user/boring-display/wallpaper.c -o $@
+
+$(FRAMEBUFFER_PRESENT_REGION_HOST_TEST_SANITIZED): \
+		tests/framebuffer-present-region-host-test.c \
+		kernel/core/framebuffer_user.c \
+		kernel/include/boring/framebuffer_user.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		tests/framebuffer-present-region-host-test.c \
+		kernel/core/framebuffer_user.c -o $@
 
 $(PMM_READINESS_HOST_TEST): tests/pmm-readiness-host-test.c \
 		kernel/core/pmm.c kernel/include/boring/pmm.h \
@@ -946,6 +1004,10 @@ test:
 	$(MAKE) memory-host-test
 	$(MAKE) ipc-host-test
 	$(MAKE) display-host-test
+	$(MAKE) mouse-latency-host-test
+	$(MAKE) framebuffer-present-region-host-test
+	$(MAKE) mouse-latency-host-test-sanitized
+	$(MAKE) framebuffer-present-region-host-test-sanitized
 	sh ./tests/shell-qemu.sh
 	sh ./tests/shell-editing-qemu.sh
 	sh ./tests/shell-lifecycle-qemu.sh

@@ -129,9 +129,9 @@ static void put(uint8_t *output, size_t offset, uint32_t color) {
     output[offset + 3U] = 0U;
 }
 
-bool display_managed_compose(const struct display_managed *state,
-                             const struct boring_display_core *core,
-                             uint8_t *output, size_t size) {
+bool display_managed_compose_scene(const struct display_managed *state,
+                                   const struct boring_display_core *core,
+                                   uint8_t *output, size_t size) {
     size_t offset;
     uint32_t order, index, row;
     if ((state == NULL) || (core == NULL) || (output == NULL) ||
@@ -161,6 +161,15 @@ bool display_managed_compose(const struct display_managed *state,
                 }
             }
         }
+    }
+    return true;
+}
+
+bool display_managed_compose(const struct display_managed *state,
+                             const struct boring_display_core *core,
+                             uint8_t *output, size_t size) {
+    if (!display_managed_compose_scene(state, core, output, size)) {
+        return false;
     }
     boring_display_compose_cursor(core, output);
     return true;

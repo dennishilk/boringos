@@ -129,6 +129,11 @@ jobs:
       - name: M34 bounded display protocol and compositor host tests
         run: make display-host-test
 
+      - name: Bounded cursor damage and framebuffer region-present tests
+        run: |
+          make mouse-latency-host-test framebuffer-present-region-host-test
+          make mouse-latency-host-test-sanitized framebuffer-present-region-host-test-sanitized
+
       - name: Build boring-shell test mode
         run: make TEST_MODE=shell
 

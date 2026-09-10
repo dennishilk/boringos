@@ -26,11 +26,12 @@ M34 reserves the next free syscall slots without changing 0..36:
 38 FRAMEBUFFER_CLAIM
 39 FRAMEBUFFER_PRESENT
 40 FRAMEBUFFER_RELEASE
+45 FRAMEBUFFER_PRESENT_REGION
 ```
 
 `BUFFER_INFO` is a generic read-only M32 extension that returns the authoritative byte size for one caller-owned shared-buffer capability. It exists so a receiver can validate metadata against the actual granted object rather than trusting a peer-declared size.
 
-`FRAMEBUFFER_CLAIM` is exclusive and process-local. It returns bounded scanout information to the caller. `FRAMEBUFFER_PRESENT` accepts a canonical userspace XRGB8888 frame and copies/converts it into the already validated kernel-owned physical framebuffer. Userspace never receives the physical framebuffer address or an HHDM alias. `FRAMEBUFFER_RELEASE` relinquishes ownership. Process teardown releases a forgotten claim.
+`FRAMEBUFFER_CLAIM` is exclusive and process-local. It returns bounded scanout information to the caller. `FRAMEBUFFER_PRESENT` accepts a canonical userspace XRGB8888 frame and copies/converts it into the already validated kernel-owned physical framebuffer. The later narrow `FRAMEBUFFER_PRESENT_REGION` extension applies the same owner, buffer-size, pixel-format and conversion rules to one non-empty, scanout-contained rectangle so a software cursor move does not rewrite an unchanged frame. Userspace never receives the physical framebuffer address or an HHDM alias. `FRAMEBUFFER_RELEASE` relinquishes ownership. Process teardown releases a forgotten claim.
 
 The exported source layout is deliberately simple and fixed for M34: one full-screen XRGB8888 image, 4 bytes per pixel, stride `width * 4`. All width/height/stride/byte calculations are overflow checked before copying.
 

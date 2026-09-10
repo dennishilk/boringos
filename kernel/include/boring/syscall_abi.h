@@ -52,6 +52,7 @@
 #define BORING_SYS_PTY_CREATE 42
 #define BORING_SYS_SPAWN 43
 #define BORING_SYS_SYSTEM_CONTROL 44
+#define BORING_SYS_FRAMEBUFFER_PRESENT_REGION 45
 
 #define BORING_SYSTEM_REBOOT 1U
 #define BORING_SYSTEM_POWEROFF 2U
@@ -336,6 +337,10 @@ _Static_assert(BORING_SYS_PTY_CREATE == 42,
                "PTY_CREATE syscall number contract changed");
 _Static_assert(BORING_SYS_SPAWN == 43,
                "SPAWN syscall number contract changed");
+_Static_assert(BORING_SYS_SYSTEM_CONTROL == 44,
+               "SYSTEM_CONTROL syscall number contract changed");
+_Static_assert(BORING_SYS_FRAMEBUFFER_PRESENT_REGION == 45,
+               "FRAMEBUFFER_PRESENT_REGION syscall number contract changed");
 _Static_assert(sizeof(struct boring_pty_create_result) == 8U,
                "M36 PTY create ABI size must remain fixed");
 _Static_assert(sizeof(struct boring_spawn_stdio) == 16U,

@@ -14,6 +14,9 @@
 static uint8_t present_scratch[PRESENT_CHUNK_BYTES];
 static uint64_t framebuffer_owner_pid;
 static uint64_t framebuffer_present_count;
+static uint64_t framebuffer_full_present_count;
+static uint64_t framebuffer_region_present_count;
+static uint64_t framebuffer_pixels_presented;
 static bool framebuffer_claimed;
 
 static bool scanout_info(struct boring_display_scanout_info *info) {
@@ -94,6 +97,24 @@ static bool present_chunk(const struct boring_framebuffer *surface,
     return true;
 }
 
+static void present_account(uint64_t pixels, bool region) {
+    if (framebuffer_present_count != UINT64_MAX) {
+        ++framebuffer_present_count;
+    }
+    if (region) {
+        if (framebuffer_region_present_count != UINT64_MAX) {
+            ++framebuffer_region_present_count;
+        }
+    } else if (framebuffer_full_present_count != UINT64_MAX) {
+        ++framebuffer_full_present_count;
+    }
+    if (pixels > UINT64_MAX - framebuffer_pixels_presented) {
+        framebuffer_pixels_presented = UINT64_MAX;
+    } else {
+        framebuffer_pixels_presented += pixels;
+    }
+}
+
 enum boring_framebuffer_user_result boring_framebuffer_user_present(
     struct process *process,
     uint32_t buffer_handle) {
@@ -127,7 +148,103 @@ enum boring_framebuffer_user_result boring_framebuffer_user_present(
         }
         offset += (uint64_t)chunk;
     }
-    ++framebuffer_present_count;
+    present_account((uint64_t)info.width * (uint64_t)info.height, false);
+    return BORING_FRAMEBUFFER_USER_OK;
+}
+
+static bool region_valid(const struct boring_display_scanout_info *info,
+                         uint32_t x,
+                         uint32_t y,
+                         uint32_t width,
+                         uint32_t height) {
+    return (info != NULL) && (width != 0U) && (height != 0U) &&
+           (x < info->width) && (y < info->height) &&
+           (width <= info->width - x) &&
+           (height <= info->height - y);
+}
+
+static bool present_region_row(struct process *process,
+                               uint32_t buffer_handle,
+                               const struct boring_display_scanout_info *info,
+                               const struct boring_framebuffer *surface,
+                               uint32_t x,
+                               uint32_t y,
+                               uint32_t width) {
+    uint32_t completed = 0U;
+
+    while (completed < width) {
+        const uint32_t remaining = width - completed;
+        const uint32_t scratch_pixels =
+            PRESENT_CHUNK_BYTES / BORING_DISPLAY_BYTES_PER_PIXEL;
+        const uint32_t chunk_pixels =
+            (remaining > scratch_pixels) ? scratch_pixels : remaining;
+        const size_t chunk_bytes =
+            (size_t)chunk_pixels *
+            (size_t)BORING_DISPLAY_BYTES_PER_PIXEL;
+        const uint64_t offset =
+            (uint64_t)y * (uint64_t)info->stride +
+            (uint64_t)(x + completed) *
+                (uint64_t)BORING_DISPLAY_BYTES_PER_PIXEL;
+        uint32_t pixel;
+
+        if ((chunk_pixels == 0U) ||
+            (user_buffer_copy_out(process, buffer_handle, offset,
+                                  present_scratch, chunk_bytes) !=
+             USER_MEMORY_RESULT_OK)) {
+            return false;
+        }
+        for (pixel = 0U; pixel < chunk_pixels; ++pixel) {
+            const size_t source =
+                (size_t)pixel *
+                (size_t)BORING_DISPLAY_BYTES_PER_PIXEL;
+            const uint32_t packed = boring_color_pack(
+                surface,
+                present_scratch[source + 2U],
+                present_scratch[source + 1U],
+                present_scratch[source]);
+
+            if (!boring_graphics_put_pixel(surface,
+                                           (uint64_t)x + completed + pixel,
+                                           y, packed)) {
+                return false;
+            }
+        }
+        completed += chunk_pixels;
+    }
+    return true;
+}
+
+enum boring_framebuffer_user_result boring_framebuffer_user_present_region(
+    struct process *process,
+    uint32_t buffer_handle,
+    uint32_t x,
+    uint32_t y,
+    uint32_t width,
+    uint32_t height) {
+    struct boring_display_scanout_info info;
+    const struct boring_framebuffer *surface = boring_framebuffer_get();
+    uint64_t buffer_size = 0ULL;
+    uint32_t row;
+
+    if ((process == NULL) || !process_is_alive(process) ||
+        !framebuffer_claimed || (framebuffer_owner_pid != process->pid)) {
+        return BORING_FRAMEBUFFER_USER_ACCESS;
+    }
+    if (!scanout_info(&info) || !boring_framebuffer_surface_valid(surface)) {
+        return BORING_FRAMEBUFFER_USER_UNAVAILABLE;
+    }
+    if (!region_valid(&info, x, y, width, height) ||
+        (user_buffer_size(process, buffer_handle, &buffer_size) !=
+         USER_MEMORY_RESULT_OK) || (buffer_size != info.byte_size)) {
+        return BORING_FRAMEBUFFER_USER_INVALID;
+    }
+    for (row = 0U; row < height; ++row) {
+        if (!present_region_row(process, buffer_handle, &info, surface,
+                                x, y + row, width)) {
+            return BORING_FRAMEBUFFER_USER_INTERNAL;
+        }
+    }
+    present_account((uint64_t)width * (uint64_t)height, true);
     return BORING_FRAMEBUFFER_USER_OK;
 }
 
@@ -164,6 +281,9 @@ bool boring_framebuffer_user_get_stats(struct boring_framebuffer_user_stats *sta
     }
     stats->owner_pid = framebuffer_owner_pid;
     stats->presents = framebuffer_present_count;
+    stats->full_presents = framebuffer_full_present_count;
+    stats->region_presents = framebuffer_region_present_count;
+    stats->pixels_presented = framebuffer_pixels_presented;
     stats->claimed = framebuffer_claimed;
     return true;
 }

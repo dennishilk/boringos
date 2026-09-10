@@ -202,6 +202,29 @@ static uint64_t framebuffer_present(uint64_t raw_handle) {
         display_error(framebuffer_result_errno(result));
 }
 
+static uint64_t framebuffer_present_region(uint64_t raw_handle,
+                                           uint64_t raw_x,
+                                           uint64_t raw_y,
+                                           uint64_t raw_width,
+                                           uint64_t raw_height) {
+    struct process *const process = process_current();
+    enum boring_framebuffer_user_result result;
+
+    if ((raw_handle > (uint64_t)UINT32_MAX) ||
+        (raw_x > (uint64_t)UINT32_MAX) ||
+        (raw_y > (uint64_t)UINT32_MAX) ||
+        (raw_width > (uint64_t)UINT32_MAX) ||
+        (raw_height > (uint64_t)UINT32_MAX) ||
+        (process == NULL) || !process_is_alive(process)) {
+        return display_error(BORING_SYSCALL_EINVAL);
+    }
+    result = boring_framebuffer_user_present_region(
+        process, (uint32_t)raw_handle, (uint32_t)raw_x, (uint32_t)raw_y,
+        (uint32_t)raw_width, (uint32_t)raw_height);
+    return (result == BORING_FRAMEBUFFER_USER_OK) ? 0ULL :
+        display_error(framebuffer_result_errno(result));
+}
+
 static uint64_t framebuffer_release(void) {
     struct process *const process = process_current();
     enum boring_framebuffer_user_result result;
@@ -215,8 +238,9 @@ static uint64_t framebuffer_release(void) {
 }
 
 static bool is_m34_syscall(uint64_t number) {
-    return (number >= (uint64_t)BORING_SYS_BUFFER_INFO) &&
-           (number <= (uint64_t)BORING_SYS_FRAMEBUFFER_RELEASE);
+    return ((number >= (uint64_t)BORING_SYS_BUFFER_INFO) &&
+            (number <= (uint64_t)BORING_SYS_FRAMEBUFFER_RELEASE)) ||
+           (number == (uint64_t)BORING_SYS_FRAMEBUFFER_PRESENT_REGION);
 }
 
 static bool display_test_exit(struct x86_64_syscall_frame *frame) {
@@ -296,9 +320,10 @@ void x86_64_syscall_dispatch_m34(struct x86_64_syscall_frame *frame) {
     }
 
     /*
-     * M33 delegates 37..40 to the established base dispatcher, which keeps
-     * the trusted-stack accounting and SYSRET validation unchanged and
-     * returns ENOSYS. M34 replaces only the result for its four new slots.
+     * M33 delegates these display calls to the established base dispatcher,
+     * which keeps the trusted-stack accounting and SYSRET validation
+     * unchanged and returns ENOSYS. M34 replaces only the result for the
+     * original four slots and the later bounded region-present slot.
      */
     x86_64_syscall_dispatch_m33(frame);
 
@@ -314,6 +339,10 @@ void x86_64_syscall_dispatch_m34(struct x86_64_syscall_frame *frame) {
             break;
         case BORING_SYS_FRAMEBUFFER_RELEASE:
             result = framebuffer_release();
+            break;
+        case BORING_SYS_FRAMEBUFFER_PRESENT_REGION:
+            result = framebuffer_present_region(
+                frame->rdi, frame->rsi, frame->rdx, frame->r10, frame->r8);
             break;
         default:
             result = display_error(BORING_SYSCALL_ENOSYS);

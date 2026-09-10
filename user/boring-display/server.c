@@ -12,6 +12,7 @@ static struct display_managed managed;
 static uint32_t peers[DISPLAY_PEERS];
 static uint32_t composition;
 static uint8_t *pixels;
+static struct boring_display_cursor_damage cursor_damage;
 static bool input_pending, manager_seen;
 #if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
 static bool m61_post37_present_return_probed;
@@ -37,8 +38,33 @@ static void m61_post37_loop_reentry_probe(uint32_t listener) {
 #endif
 
 static void present(void) {
-    if (!display_managed_compose(&managed, &core, pixels, (size_t)core.byte_size) ||
+    if (!display_managed_compose_scene(
+            &managed, &core, pixels, (size_t)core.byte_size) ||
+        !boring_display_cursor_damage_reset(
+            &cursor_damage, &core, pixels, (size_t)core.byte_size) ||
         (boring_framebuffer_present(composition) != 0L)) { desktop_fail("display present"); }
+}
+
+static void present_cursor_move(int32_t dx, int32_t dy) {
+    struct boring_display_region old_region;
+    struct boring_display_region new_region;
+
+    if (!boring_display_cursor_damage_move(
+            &cursor_damage, &core, pixels, (size_t)core.byte_size,
+            dx, dy, &old_region, &new_region)) {
+        desktop_fail("display cursor damage");
+    }
+    if ((old_region.width == 0U) || (old_region.height == 0U)) {
+        return;
+    }
+    if ((boring_framebuffer_present_region(
+             composition, old_region.x, old_region.y,
+             old_region.width, old_region.height) != 0L) ||
+        (boring_framebuffer_present_region(
+             composition, new_region.x, new_region.y,
+             new_region.width, new_region.height) != 0L)) {
+        desktop_fail("display cursor damage present");
+    }
 }
 
 static void forget_peer(uint32_t endpoint) {
@@ -215,7 +241,7 @@ static void input(void) {
     }
 #endif
     if (event.type == BORING_INPUT_EVENT_MOUSE_MOVE) {
-        boring_display_cursor_move(&core, event.value1, event.value2); present();
+        present_cursor_move(event.value1, event.value2);
     }
     if (managed.manager_endpoint == 0U) { return; }
     message.version = BORING_DISPLAY_CONTROL_VERSION; message.type = DISPLAY_INPUT;
@@ -231,6 +257,7 @@ int boring_main(void) {
         desktop_fail("display claim/init");
     }
     display_managed_init(&managed);
+    boring_display_cursor_damage_init(&cursor_damage);
     buffer = boring_buffer_create((size_t)info.byte_size);
     if (buffer <= 0L) { desktop_fail("display composition buffer"); }
     composition = (uint32_t)buffer; pixels = boring_buffer_map(composition);
