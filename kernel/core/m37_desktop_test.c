@@ -23,6 +23,7 @@
 #include <boring/serial.h>
 #include <boring/syscall.h>
 #include <boring/task.h>
+#include <boring/timer.h>
 #include <boring/user_memory.h>
 #include <boring/vfs.h>
 #include <boring/virtio_blk.h>
