@@ -2,7 +2,7 @@ name: M62 dynamic process task capacity
 
 on:
   push:
-    branches: [agent/m62-dynamic-process-task-capacity, agent/m64-usb-topology-mouse]
+    branches: [agent/m62-dynamic-process-task-capacity, agent/m64-usb-topology-mouse, feature/mouse-present-latency]
   workflow_dispatch:
     inputs:
       publish_physical:

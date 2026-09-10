@@ -40,6 +40,7 @@ reset = read("kernel/arch/x86_64/platform_reset.c")
 block = read("kernel/core/block_device.c")
 usb = read("kernel/core/usb_mass_storage_impl.inc")
 ahci = read("kernel/drivers/ahci_block.c")
+framebuffer_user = read("kernel/core/framebuffer_user.c")
 
 if '"reboot"' not in shell or '"shutdown"' not in shell:
     fail("native shell power commands missing")
@@ -90,6 +91,23 @@ if "enum block_device_result block_device_flush_all" not in block or \
    ".flush = ahci_backend_flush" not in ahci:
     fail("device durability seam incomplete")
 
+region_bounds = body(framebuffer_user, "static bool region_valid")
+region_row = body(framebuffer_user, "static bool present_region_row")
+region_present = body(
+    framebuffer_user,
+    "enum boring_framebuffer_user_result boring_framebuffer_user_present_region",
+)
+if ("width <= info->width - x" not in region_bounds or
+        "height <= info->height - y" not in region_bounds or
+        "framebuffer_owner_pid != process->pid" not in region_present or
+        "buffer_size != info.byte_size" not in region_present or
+        "for (row = 0U; row < height; ++row)" not in region_present or
+        "PRESENT_CHUNK_BYTES / BORING_DISPLAY_BYTES_PER_PIXEL" not in region_row or
+        "user_buffer_copy_out" not in region_row or
+        "while (completed < width)" not in region_row or
+        "kmalloc" in region_row or "kmalloc" in region_present):
+    fail("bounded framebuffer region-present contract incomplete")
+
 for token in ("process_registry_head", "process_registry_append",
               "kmalloc(sizeof(*process))", "kfree(object)"):
     if token not in process:
@@ -116,12 +134,14 @@ if subprocess.run(["git", "diff", "--quiet", M62, "HEAD", "--", *unchanged],
 changed = set(subprocess.check_output(
     ["git", "diff", "--name-only", M62, "HEAD"], cwd=ROOT, text=True
 ).splitlines())
-# M64-M66 deliberately extend xHCI/HID and add a Ring3 mouse witness.
-# Keep the non-USB physical subsystems frozen while the explicit M63
-# durability and power-path checks above remain authoritative.
+# M64-M66 deliberately extend xHCI/HID and add a Ring3 mouse witness. The
+# mouse-latency fix deliberately extends framebuffer_user.c with the bounded
+# region contract checked above. Keep every other non-USB physical subsystem
+# frozen while the explicit M63 durability and power-path checks remain
+# authoritative.
 frozen_prefixes = (
     "kernel/core/framebuffer.c",
-    "kernel/core/framebuffer_user.c", "kernel/arch/x86_64/vmm.c",
+    "kernel/arch/x86_64/vmm.c",
     "kernel/core/pmm.c",
 )
 bad = sorted(path for path in changed if path in frozen_prefixes)
@@ -142,6 +162,7 @@ markers = (
     "GENERAL_AML_INTERPRETER_ADDED=NO",
     "M62_PROCESS_ARCHITECTURE_UNCHANGED=YES",
     "M62_TASK_ARCHITECTURE_UNCHANGED=YES",
+    "FRAMEBUFFER_REGION_PRESENT_BOUNDED=YES",
 )
 proof = "\n".join(markers) + "\n"
 out = ROOT / "build/m63-system-power-verifier.txt"

@@ -32,7 +32,7 @@ jobs:
       - name: OVMF boot the exact image as read-only xHCI USB storage
         run: python3 tests/m59-usb-image-ovmf.py
       - name: Publish M59 physical-test candidate
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_physical }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.head_ref != 'feature/mouse-present-latency') || (github.event_name == 'workflow_dispatch' && inputs.publish_physical) }}
         uses: actions/upload-artifact@v4
         with:
           name: m59-cthulhu-physical-smoke-${{ github.event.pull_request.head.sha || github.sha }}

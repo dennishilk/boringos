@@ -2,7 +2,7 @@ name: M63 system power lifecycle
 
 on:
   push:
-    branches: [agent/m63-system-power-lifecycle, agent/m64-usb-topology-mouse]
+    branches: [agent/m63-system-power-lifecycle, agent/m64-usb-topology-mouse, feature/mouse-present-latency]
   workflow_dispatch:
     inputs:
       publish_physical:
