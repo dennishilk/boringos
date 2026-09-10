@@ -157,7 +157,8 @@ managed = read("user/boring-display/managed.c")
 control = read("user/runtime/include/boring/display_control.h")
 focus_contract = (
     "#define DISPLAY_PRESENT_FOCUS 20U" in control and
-    "present.type = DISPLAY_PRESENT_FOCUS;" in wm and
+    "focus.type = DISPLAY_PRESENT_FOCUS;" in wm and
+    "focus.window = wm.focus;" in wm and
     "if (action == WM_FOCUS) { sync_focus(); } else { sync_layout(); }" in wm and
     "present_focus_borders();" in display and
     "display_managed_compose_focus_borders" in managed and
@@ -166,6 +167,22 @@ focus_contract = (
 )
 if not focus_contract:
     fail("bounded focus-border present contract missing")
+
+focus_sync = body(wm, "static void sync_focus(void)")
+input_handler = body(wm, "static void handle_input")
+display_control = body(display, "static void control(uint32_t endpoint")
+display_main = body(display, "int boring_main(void) {")
+early_ack = input_handler.find("acknowledge_input();")
+focus_sync_call = input_handler.find("sync_focus();")
+if ("DISPLAY_PLACE" in focus_sync or "BORING_WM_CONFIGURE" in focus_sync or
+        "focus.background = BORING_WM_UNFOCUSED;" not in focus_sync or
+        min(early_ack, focus_sync_call) < 0 or early_ack >= focus_sync_call or
+        "focus_present_pending = true;" not in display_control or
+        "focus_present_pending && !input_pending" not in display_main or
+        "BORING_EVENT_QUERY" not in display_main or
+        "if (ready == 0L)" not in display_main or
+        "present_focus_borders();" not in display_main):
+    fail("pointer focus still blocks on synchronous placement/present work")
 
 markers = (
     "REBOOT_COMMAND_PRESENT=YES",
@@ -183,6 +200,7 @@ markers = (
     "M62_TASK_ARCHITECTURE_UNCHANGED=YES",
     "FRAMEBUFFER_REGION_PRESENT_BOUNDED=YES",
     "FOCUS_BORDER_PRESENT_BOUNDED=YES",
+    "FOCUS_PRESENT_INPUT_DEFERRED=YES",
 )
 proof = "\n".join(markers) + "\n"
 out = ROOT / "build/m63-system-power-verifier.txt"

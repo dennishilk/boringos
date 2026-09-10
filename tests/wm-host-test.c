@@ -175,6 +175,9 @@ static void display_authority(void) {
     check(output[4U + 6U * 80U + 6U * 4U] == 0x55U, "client buffer pixel");
     focus.version = BORING_DISPLAY_CONTROL_VERSION;
     focus.type = DISPLAY_PRESENT_FOCUS;
+    focus.window = 257U;
+    focus.color = BORING_WM_FOCUSED;
+    focus.background = BORING_WM_UNFOCUSED;
     check(display_managed_control(&state, &core, 98U, 2ULL, &focus) ==
           BORING_DISPLAY_STATUS_ACCESS, "focus present requires manager");
     check(display_managed_control(&state, &core, 99U, 2ULL, &focus) ==
@@ -182,6 +185,14 @@ static void display_authority(void) {
     focus.x = 1U;
     check(display_managed_control(&state, &core, 99U, 2ULL, &focus) ==
           BORING_DISPLAY_STATUS_INVALID, "focus present rejects geometry");
+    focus.x = 0U;
+    focus.window = 513U;
+    check(display_managed_control(&state, &core, 99U, 2ULL, &focus) ==
+          BORING_DISPLAY_STATUS_INVALID, "focus present rejects unknown window");
+    focus.window = 257U;
+    focus.color = 0xff000000U;
+    check(display_managed_control(&state, &core, 99U, 2ULL, &focus) ==
+          BORING_DISPLAY_STATUS_INVALID, "focus present rejects alpha bits");
     r.x = UINT32_MAX; check(display_managed_control(&state, &core, 99U, 2ULL, &r) == BORING_DISPLAY_STATUS_INVALID, "x overflow rejected"); r.x = 2U;
     r.width = UINT32_MAX; check(display_managed_control(&state, &core, 99U, 2ULL, &r) == BORING_DISPLAY_STATUS_INVALID, "extent overflow rejected"); r.width = 16U;
     r.border = UINT32_MAX; check(display_managed_control(&state, &core, 99U, 2ULL, &r) == BORING_DISPLAY_STATUS_INVALID, "border overflow rejected"); r.border = 3U;
@@ -243,6 +254,7 @@ static void focus_border_damage(void) {
     struct boring_display_region regions[BORING_DISPLAY_FOCUS_REGION_MAX];
     struct boring_display_region old_cursor;
     struct boring_display_region new_cursor;
+    struct display_control focus = {0};
     uint8_t first[3648U];
     uint8_t second[3040U];
     uint8_t actual[12288U];
@@ -270,6 +282,7 @@ static void focus_border_damage(void) {
         second_token, 258U, 36U, 2U, 26U, 44U, 3U,
         BORING_WM_UNFOCUSED, 1U, 11ULL, true, true
     };
+    state.manager_endpoint = 99U;
     core.cursor_x = 36U;
     core.cursor_y = 20U;
     check(display_managed_compose_scene(
@@ -280,8 +293,17 @@ static void focus_border_damage(void) {
               &cursor, &core, actual, sizeof(actual)),
           "focus damage initial cursor");
 
-    state.placements[0].color = BORING_WM_UNFOCUSED;
-    state.placements[1].color = BORING_WM_FOCUSED;
+    focus.version = BORING_DISPLAY_CONTROL_VERSION;
+    focus.type = DISPLAY_PRESENT_FOCUS;
+    focus.window = 258U;
+    focus.color = BORING_WM_FOCUSED;
+    focus.background = BORING_WM_UNFOCUSED;
+    check(display_managed_control(&state, &core, 99U, 2ULL, &focus) ==
+          BORING_DISPLAY_STATUS_OK,
+          "focus damage atomic focus color transition");
+    check((state.placements[0].color == BORING_WM_UNFOCUSED) &&
+          (state.placements[1].color == BORING_WM_FOCUSED),
+          "focus damage updates only focus colors without geometry RPCs");
     check(display_managed_compose(&state, &core, expected, sizeof(expected)),
           "focus damage reference frame");
     check(boring_display_cursor_damage_restore(

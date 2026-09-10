@@ -16,6 +16,7 @@ int main(void) {
     struct boring_display_core core;
     struct boring_display_cursor_damage damage;
     struct display_managed managed;
+    struct display_control focus = {0};
     const struct boring_display_scanout_info info = {
         BORING_DISPLAY_SCANOUT_VERSION,
         WIDTH,
@@ -89,17 +90,22 @@ int main(void) {
         2U, 258U, 482U, 4U, 314U, 592U, 3U,
         BORING_WM_UNFOCUSED, 1U, 2ULL, true, true
     };
+    managed.manager_endpoint = 99U;
+    focus.version = BORING_DISPLAY_CONTROL_VERSION;
+    focus.type = DISPLAY_PRESENT_FOCUS;
+    focus.color = BORING_WM_FOCUSED;
+    focus.background = BORING_WM_UNFOCUSED;
     focus_start = clock();
     for (index = 0U; index < ITERATIONS; ++index) {
         struct boring_display_region regions[BORING_DISPLAY_FOCUS_REGION_MAX];
         size_t region_count = 0U;
         uint64_t pixel_count = 0ULL;
 
-        managed.placements[0].color = (index & 1U) != 0U ?
-            BORING_WM_FOCUSED : BORING_WM_UNFOCUSED;
-        managed.placements[1].color = (index & 1U) != 0U ?
-            BORING_WM_UNFOCUSED : BORING_WM_FOCUSED;
-        if (!display_managed_compose_focus_borders(
+        focus.window = (index & 1U) != 0U ? 257U : 258U;
+        if ((display_managed_control(
+                 &managed, &core, 99U, 1ULL, &focus) !=
+             BORING_DISPLAY_STATUS_OK) ||
+            !display_managed_compose_focus_borders(
                 &managed, &core, frame, sizeof(frame), regions,
                 BORING_DISPLAY_FOCUS_REGION_MAX, &region_count,
                 &pixel_count) ||
@@ -140,6 +146,8 @@ int main(void) {
                  (unsigned long long)focus_present_regions);
     (void)printf("FIX_FOCUS_BORDER_PIXELS=%llu\n",
                  (unsigned long long)focus_present_pixels);
+    (void)printf("FIX_FOCUS_INPUT_CRITICAL_PRESENTS=0\n");
+    (void)printf("FIX_FOCUS_DEFERRED_PRESENTS=%u\n", ITERATIONS);
     (void)printf("FIX_HOST_FOCUS_BORDER_CLOCK_TICKS=%llu\n",
                  (unsigned long long)(focus_finish - focus_start));
     return 0;

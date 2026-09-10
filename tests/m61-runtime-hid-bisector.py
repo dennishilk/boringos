@@ -96,7 +96,7 @@ assert loop_probe.count("BORING_EVENT_IPC") == 2 and "boring_event_wait(watches,
 control_flow=d[d.index("static void control("):d.index("static void receive(")]
 assert control_flow.index("present();") < control_flow.index("control_reply(endpoint, status, r->surface);") < control_flow.index("m61_post37_present_return_probe(endpoint);")
 main_flow=d[d.index("int boring_main(void) {"):]
-assert main_flow.index("m61_post37_loop_reentry_probe((uint32_t)listener);") < main_flow.index("boring_event_wait(watches, count, 0U)")
+assert main_flow.index("m61_post37_loop_reentry_probe((uint32_t)listener);") < main_flow.index("boring_event_wait(watches, count, flags)")
 
 submit=u[u.index("static bool m52_submit_endpoint("):u.index("static uint32_t m53_usage_keycode")]
 assert submit.index("runtime->expected_trb_physical = trb_physical;") < submit.index("runtime->transfer_outstanding = true;") < submit.rindex("return true;")

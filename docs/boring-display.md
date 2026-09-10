@@ -84,7 +84,11 @@ the clipped old/new cursor rectangles. A pure BoringWM focus action uses the
 explicit `DISPLAY_PRESENT_FOCUS` control and redraws only the non-overlapping
 window-border bands through `FRAMEBUFFER_PRESENT_REGION`; an unsafe or
 overlapping placement set falls back to the full path. This is a focus-frame
-special case, not a general compositor damage framework.
+special case, not a general compositor damage framework. The focus request
+atomically selects the focused window and its two border colors; it does not
+re-send unchanged placement geometry. Its bounded scanout is deferred until no
+input or IPC event is ready, so the WM input acknowledgement and subsequent
+cursor movement do not wait for the focus frame.
 
 Creation order is only a deterministic presentation primitive for M34 acceptance; it is not BoringWM placement/focus/tiling policy.
 

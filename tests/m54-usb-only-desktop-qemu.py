@@ -330,12 +330,15 @@ def run():
             movement = "display: M66 USB hub mouse movement reached Ring3 desktop"
             movement_before = text().count(movement)
             focus_before = text().count("wm: action focus")
+            focus_ready = "display: focus frame ready"
+            focus_ready_before = text().count(focus_ready)
             started = time.monotonic()
             for index in range(16):
                 usb_inject([usb_rel("x", 1 if index % 2 == 0 else -1)])
                 witness(movement, movement_before + index + 1)
             elapsed = time.monotonic() - started
             witness("wm: action focus", focus_before + 1)
+            witness(focus_ready, focus_ready_before + 1)
             pointer_focus = latest(2, dual["frame"])
             if pointer_focus["focus"] == dual["focus"]:
                 raise RuntimeError("real USB mouse movement did not change pointer focus")
@@ -350,12 +353,17 @@ def run():
                 "expected_total_region_pixels": 37656,
                 "pointer_focus_changed": True,
             }, indent=2) + "\n")
+            focus_ready_before += 1
             key("j", super_key=True)
+            witness(focus_ready, focus_ready_before + 1)
             restored = latest(2, pointer_focus["frame"])
             if restored["focus"] != dual["focus"]:
                 raise RuntimeError("keyboard focus restore after pointer burst failed")
             switch_anchor = restored
+            focus_ready_before += 1
         key("j", super_key=True)
+        if HUB_MOUSE:
+            witness(focus_ready, focus_ready_before + 1)
         switched = latest(2, switch_anchor["frame"])
         type_text("terminala")
         settled_capture("dual-focused-a", switched, "dual-a")

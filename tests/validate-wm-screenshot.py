@@ -44,6 +44,8 @@ def frames(log):
             break
         line = line.rstrip("\r\n")
         match = re.search(r"wm: frame=(\d+) count=(\d+) focus=(\d+)$", line)
+        focus_match = re.search(
+            r"wm: focus-frame=(\d+) focus=(\d+)$", line)
         if match:
             current = dict(zip(("frame", "count", "focus"), map(int, match.groups())))
             current["tiles"] = []
@@ -57,6 +59,19 @@ def frames(log):
                 raise ValueError("incomplete frame witness")
             result.append(current)
             current = None
+        elif focus_match and result:
+            frame_number, focus = map(int, focus_match.groups())
+            previous = result[-1]
+            if (frame_number <= previous["frame"] or
+                    not any(tile["token"] == focus
+                            for tile in previous["tiles"])):
+                raise ValueError("invalid focus-only frame witness")
+            result.append({
+                "frame": frame_number,
+                "count": previous["count"],
+                "focus": focus,
+                "tiles": [dict(tile) for tile in previous["tiles"]],
+            })
     return result
 
 

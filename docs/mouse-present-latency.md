@@ -15,7 +15,10 @@ The physical USB mouse path is:
 7. The original display path called `display_managed_compose()` and `FRAMEBUFFER_PRESENT` for every non-zero move.
 8. `FRAMEBUFFER_PRESENT` copied, converted and wrote every logical scanout pixel to the firmware framebuffer.
 
-The queue remains FIFO and does not coalesce button transitions. `input_pending` continues to serialize display-to-WM delivery until the manager ACK, so button, keyboard and focus ordering are unchanged.
+The queue remains FIFO and does not coalesce button transitions. Normal button
+and keyboard delivery remains serialized by `input_pending`. A pointer-enter
+focus event is acknowledged before the focus-only control transaction so that
+subsequent pointer movement is no longer held behind focus rendering.
 
 ## Classification
 
@@ -39,7 +42,11 @@ The cursor remains a Ring-3 software cursor. The display service now keeps only 
 4. draws the cursor at the new position;
 5. presents the old and new rectangles through syscall 45 `FRAMEBUFFER_PRESENT_REGION`.
 
-Scene, window, wallpaper, client commit and focus-border changes still use the unchanged full-frame composition path. A full scene composition refreshes the saved cursor underlay before drawing the cursor, so overlapping content and later cursor moves remain correct.
+Scene, window, wallpaper and client commit changes still use the unchanged
+full-frame composition path. A full scene composition refreshes the saved
+cursor underlay before drawing the cursor, so overlapping content and later
+cursor moves remain correct. Focus-border changes use the separately bounded
+path described below.
 
 For a cursor fully inside the scanout, each move presents two 6x12 regions: at most 144 pixels instead of 480,000, a 3333x reduction in firmware-framebuffer writes. The deterministic 100-move test therefore presents 14,400 region pixels. The measured host loop reduced from roughly 188,000 `clock()` ticks for full recomposition to roughly 200 ticks for cursor damage on the development runner; timing is observational, while pixel counts are the acceptance metric.
 
@@ -85,3 +92,32 @@ again before the cursor is redrawn. Host coverage compares the partial result
 byte-for-byte with a full composition while the cursor overlaps a border, then
 moves the cursor and verifies that the new border underlay is restored without
 trails.
+
+The refined physical observation identifies a second, narrower boundary: the
+pointer stops sharply at the window edge, the focus highlight completes, and
+only then does motion continue. The bounded border implementation still kept
+the scanout inside the synchronous WM input transaction: all placement RPCs,
+the focus present, frame logging and finally `DISPLAY_INPUT_ACK` happened in
+that order. `boring-display` deliberately stopped reading further input while
+the ACK was outstanding, so even a smaller focus frame formed a hard event-flow
+barrier.
+
+There was also an indirect full-frame path. The focus transaction re-sent
+`BORING_WM_CONFIGURE` to every client even though no geometry changed. All
+current native clients handle `CONFIGURE` by redrawing and sending `COMMIT`, and
+each successful `COMMIT` invokes the full scene composer and full framebuffer
+present. Thus the first border-only fix reduced the explicit focus present but
+left one full-frame present per configured client behind it.
+
+The follow-up makes focus metadata atomic and the focus scanout input-deferred.
+BoringWM sends one `DISPLAY_PRESENT_FOCUS` request containing the focused window
+and both border colors instead of re-sending every unchanged placement or
+client `CONFIGURE`. Geometry configures remain on real layout changes. For a
+pointer-generated focus change BoringWM sends `DISPLAY_INPUT_ACK` before the
+focus request.
+The display service updates only the focus colors, replies without scanning out
+the border frame, and coalesces repeated pending focus paints into the latest
+state. Its event loop continues servicing ready input and IPC work; only when
+the queue is idle does it present the same eight bounded border bands. Full
+layout changes and every unsafe-placement fallback retain the established
+synchronous full compose.

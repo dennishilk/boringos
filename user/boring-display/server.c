@@ -13,7 +13,7 @@ static uint32_t peers[DISPLAY_PEERS];
 static uint32_t composition;
 static uint8_t *pixels;
 static struct boring_display_cursor_damage cursor_damage;
-static bool input_pending, manager_seen;
+static bool input_pending, manager_seen, focus_present_pending;
 #if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
 static bool m61_post37_present_return_probed;
 static bool m61_post37_loop_reentry_pending;
@@ -114,6 +114,7 @@ static void forget_peer(uint32_t endpoint) {
     if (managed.manager_endpoint == endpoint) {
         managed.manager_endpoint = 0U;
         input_pending = false;
+        focus_present_pending = false;
         desktop_say("display: manager disconnected; display survives\n");
     }
     for (index = 0U; index < DISPLAY_PEERS; ++index) {
@@ -204,8 +205,9 @@ static void control(uint32_t endpoint, const struct display_control *r) {
                 ((r->type == DISPLAY_PRESENT) ||
                  (r->type == DISPLAY_PRESENT_FOCUS))) {
                 if (r->type == DISPLAY_PRESENT_FOCUS) {
-                    present_focus_borders();
+                    focus_present_pending = true;
                 } else {
+                    focus_present_pending = false;
                     present();
                 }
 #if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
@@ -330,7 +332,23 @@ int boring_main(void) {
             m61_post37_loop_reentry_pending = false;
         }
 #endif
-        if (boring_event_wait(watches, count, 0U) <= 0L) { desktop_fail("display event wait"); }
+        {
+            const bool can_present_focus =
+                focus_present_pending && !input_pending;
+            const uint32_t flags = can_present_focus ?
+                BORING_EVENT_QUERY : 0U;
+            const long ready = boring_event_wait(watches, count, flags);
+            if (ready < 0L) { desktop_fail("display event wait"); }
+            if (ready == 0L) {
+                if (!can_present_focus) {
+                    desktop_fail("display event wait");
+                }
+                present_focus_borders();
+                focus_present_pending = false;
+                desktop_say("display: focus frame ready\n");
+                continue;
+            }
+        }
         for (index = 0U; index < count; ++index) {
             if (watches[index].events == 0U) { continue; }
             if (watches[index].kind == BORING_EVENT_INPUT) { input(); }

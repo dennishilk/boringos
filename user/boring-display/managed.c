@@ -11,27 +11,36 @@ uint32_t display_control_validate(const struct display_control *r, size_t size) 
     if ((r == NULL) || (size != sizeof(*r)) ||
         (r->version != BORING_DISPLAY_CONTROL_VERSION)) { return BORING_DISPLAY_STATUS_INVALID; }
     geometry = (r->x != 0U) || (r->y != 0U) || (r->width != 0U) ||
-        (r->height != 0U) || (r->border != 0U) || (r->color != 0U) || (r->order != 0U);
+        (r->height != 0U) || (r->border != 0U) || (r->order != 0U);
     switch (r->type) {
         case DISPLAY_INFO:
         case DISPLAY_MANAGER:
         case DISPLAY_PRESENT:
-        case DISPLAY_PRESENT_FOCUS:
         case DISPLAY_INPUT_ACK:
             if ((r->surface != 0U) || (r->window != 0U) || geometry ||
+                (r->color != 0U) ||
                 (r->owner_pid != 0ULL) || ((r->type != DISPLAY_PRESENT) &&
                 (r->background != 0U))) { return BORING_DISPLAY_STATUS_INVALID; }
             break;
+        case DISPLAY_PRESENT_FOCUS:
+            if ((r->surface != 0U) || (r->window == 0U) || geometry ||
+                (r->owner_pid != 0ULL) ||
+                ((r->color & 0xff000000U) != 0U) ||
+                ((r->background & 0xff000000U) != 0U)) {
+                return BORING_DISPLAY_STATUS_INVALID;
+            }
+            break;
         case DISPLAY_DELEGATE:
             if ((r->surface == 0U) || (r->window != 0U) || geometry ||
-                (r->background != 0U) || (r->owner_pid != 0ULL)) {
+                (r->color != 0U) || (r->background != 0U) ||
+                (r->owner_pid != 0ULL)) {
                 return BORING_DISPLAY_STATUS_INVALID;
             }
             break;
         case DISPLAY_BIND:
         case DISPLAY_UNBIND:
             if ((r->surface == 0U) || (r->window == 0U) || geometry ||
-                (r->background != 0U) ||
+                (r->color != 0U) || (r->background != 0U) ||
                 ((r->type == DISPLAY_BIND) != (r->owner_pid != 0ULL))) {
                 return BORING_DISPLAY_STATUS_INVALID;
             }
@@ -76,6 +85,24 @@ uint32_t display_managed_control(struct display_managed *state,
         return BORING_DISPLAY_STATUS_OK;
     }
     if (r->type == DISPLAY_PRESENT_FOCUS) {
+        bool found = false;
+        for (index = 0U; index < BORING_DISPLAY_SURFACE_MAX; ++index) {
+            const struct display_placement *placement =
+                &state->placements[index];
+            if (placement->visible && (placement->window == r->window)) {
+                found = true;
+            }
+        }
+        if (!found) {
+            return BORING_DISPLAY_STATUS_INVALID;
+        }
+        for (index = 0U; index < BORING_DISPLAY_SURFACE_MAX; ++index) {
+            struct display_placement *placement = &state->placements[index];
+            if (placement->visible) {
+                placement->color = (placement->window == r->window) ?
+                    r->color : r->background;
+            }
+        }
         return BORING_DISPLAY_STATUS_OK;
     }
     for (index = 0U; index < BORING_DISPLAY_SURFACE_MAX; ++index) {
