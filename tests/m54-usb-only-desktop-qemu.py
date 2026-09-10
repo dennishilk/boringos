@@ -325,6 +325,7 @@ def run():
 
         type_text("terminalb")
         settled_capture("dual-focused-b", dual, "dual-b")
+        switch_anchor = dual
         if HUB_MOUSE:
             movement = "display: M66 USB hub mouse movement reached Ring3 desktop"
             movement_before = text().count(movement)
@@ -350,8 +351,9 @@ def run():
             restored = latest(2, pointer_focus["frame"])
             if restored["focus"] != dual["focus"]:
                 raise RuntimeError("keyboard focus restore after pointer burst failed")
+            switch_anchor = restored
         key("j", super_key=True)
-        switched = latest(2, dual["frame"])
+        switched = latest(2, switch_anchor["frame"])
         type_text("terminala")
         settled_capture("dual-focused-a", switched, "dual-a")
 
