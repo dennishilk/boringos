@@ -252,9 +252,11 @@ struct x86_64_trap_frame *x86_64_irq_dispatch(
     if ((irq_number == (uint8_t)X86_64_TIMER_IRQ) && expected &&
         timer_handle_irq()) {
         ++timer_irq_count;
+#if !defined(BORING_M54_USB_ONLY_DESKTOP)
         if (boring_input_repeat_tick(timer_ticks())) {
             boring_event_input_irq();
         }
+#endif
         restore_frame = task_scheduler_tick(frame);
         if (restore_frame == NULL) {
             ++unexpected_irq_count;

@@ -241,6 +241,8 @@ struct xhci_state {
     uint32_t downstream_devices_addressed;
     uint8_t addressed_count;
     uint8_t controller_index;
+    uint16_t runtime_mfindex;
+    bool runtime_mfindex_valid;
     bool addressing_truncated;
     bool legacy_handoff_complete;
     bool controller_running;

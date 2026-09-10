@@ -138,6 +138,14 @@ bool xhci_classify_shared_transfer_event(
 #undef xhci_poll_hid_reports
 #undef xhci_service_hid_reports
 
+#define M60_RUNTIME_MFINDEX 0x00U
+#define M60_MFINDEX_MASK 0x3fffU
+
+static uint32_t m60_mmio_read32(const volatile uint8_t *base,
+                                uint32_t offset) {
+    return *(const volatile uint32_t *)(const volatile void *)(base + offset);
+}
+
 static uint16_t m60_read_le16(const uint8_t *bytes) {
     return (uint16_t)((uint16_t)bytes[0] | ((uint16_t)bytes[1] << 8U));
 }
@@ -348,11 +356,14 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
     bool event_cycle;
     uint32_t completed = 0U;
     uint32_t attempt;
+    uint16_t runtime_mfindex = 0U;
+    bool runtime_mfindex_valid = false;
     bool success = false;
 
     if ((state == NULL) || (completion_goal == 0U) || (wait_limit == 0U)) {
         return false;
     }
+    state->runtime_mfindex_valid = false;
     published = xhci_get_controller(state->controller_index);
     if ((published == NULL) || !published->controller_running ||
         (published->addressed_count == 0U) ||
@@ -369,6 +380,16 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
     active = (struct xhci_state *)(uintptr_t)published;
     mmio = (volatile uint8_t *)mapping;
     event_ring = (volatile struct xhci_trb *)event_virtual;
+
+    if (active->capabilities.runtime_offset >
+        M52_MMIO_WINDOW_SIZE - 4U) {
+        goto out;
+    }
+    runtime_mfindex = (uint16_t)(
+        m60_mmio_read32(mmio, active->capabilities.runtime_offset +
+                              M60_RUNTIME_MFINDEX) &
+        M60_MFINDEX_MASK);
+    runtime_mfindex_valid = true;
 
     if (!m60_rearm_hid_endpoints(active, mmio)) { goto out; }
 #if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
@@ -449,6 +470,8 @@ static bool m60_poll_hid_reports_limit(struct xhci_state *state,
     success = completed >= completion_goal;
 out:
     *state = *active;
+    state->runtime_mfindex = runtime_mfindex;
+    state->runtime_mfindex_valid = runtime_mfindex_valid;
     if (mapping != NULL) {
         (void)vmm_unmap_mmio_region(mapping, M52_MMIO_WINDOW_SIZE);
     }

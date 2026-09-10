@@ -360,6 +360,59 @@ static void repeat_tests(void) {
     check(!boring_input_repeat_tick(1000000000004ULL),
           "reset leaves no stale repeat");
 
+    test_ticks = 2000ULL;
+    check(boring_input_submit_key(BORING_KEY_B, true),
+          "elapsed-clock B down");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U,
+          "elapsed-clock initial drain");
+    check(!boring_input_repeat_elapsed(44ULL),
+          "elapsed-clock no repeat before delay");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 0U,
+          "elapsed-clock no early event");
+    check(boring_input_repeat_elapsed(1ULL),
+          "elapsed-clock reaches initial delay");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U &&
+          events[0].code == BORING_KEY_B &&
+          events[0].flags == BORING_INPUT_FLAG_REPEAT,
+          "elapsed-clock repeat event");
+    check(!boring_input_repeat_elapsed(3ULL),
+          "elapsed-clock cadence before interval");
+    check(boring_input_repeat_elapsed(1ULL),
+          "elapsed-clock cadence interval");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U &&
+          events[0].flags == BORING_INPUT_FLAG_REPEAT,
+          "elapsed-clock sustained repeat");
+    check(boring_input_submit_key(BORING_KEY_B, false),
+          "elapsed-clock B release");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U,
+          "elapsed-clock release drain");
+    check(!boring_input_repeat_elapsed(1000ULL),
+          "elapsed-clock release stops repeat");
+
+    test_ticks = 3000ULL;
+    check(boring_input_submit_key(BORING_KEY_C, true),
+          "elapsed-clock large progression down");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U,
+          "elapsed-clock large progression initial drain");
+    check(boring_input_repeat_elapsed(1000000ULL),
+          "elapsed-clock large progression emits one repeat");
+    check(boring_input_read(31ULL, events, BORING_INPUT_READ_MAX, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U,
+          "elapsed-clock large progression no catch-up burst");
+    check(!boring_input_repeat_elapsed(0ULL),
+          "elapsed-clock zero progression stays bounded");
+    check(boring_input_submit_key(BORING_KEY_C, false),
+          "elapsed-clock large progression release");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U,
+          "elapsed-clock large progression release drain");
+
     check(boring_input_release(31ULL) == BORING_INPUT_RESULT_OK,
           "repeat owner release");
     check(!boring_input_repeat_tick(1000000001000ULL),

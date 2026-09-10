@@ -19,6 +19,7 @@ struct boring_input_state {
     uint32_t modifiers;
     uint32_t repeat_key;
     uint64_t next_repeat_tick;
+    uint64_t repeat_remaining_ticks;
     bool owned;
     bool owner_waiting;
     bool initialized;
@@ -40,6 +41,7 @@ static void input_clear_queue(void) {
 static void input_clear_repeat(void) {
     input_state.repeat_key = (uint32_t)BORING_KEY_NONE;
     input_state.next_repeat_tick = 0ULL;
+    input_state.repeat_remaining_ticks = 0ULL;
 }
 
 static void input_clear_keys(void) {
@@ -313,6 +315,8 @@ bool boring_input_submit_key(uint32_t code, bool down) {
         input_state.repeat_key = code;
         input_state.next_repeat_tick =
             timer_ticks() + BORING_INPUT_REPEAT_DELAY_TICKS;
+        input_state.repeat_remaining_ticks =
+            BORING_INPUT_REPEAT_DELAY_TICKS;
     } else if ((!down) && (input_state.repeat_key == code)) {
         input_clear_repeat();
     }
@@ -358,6 +362,51 @@ bool boring_input_repeat_tick(uint64_t now_ticks) {
      */
     input_state.next_repeat_tick =
         now_ticks + BORING_INPUT_REPEAT_INTERVAL_TICKS;
+    input_state.repeat_remaining_ticks =
+        BORING_INPUT_REPEAT_INTERVAL_TICKS;
+    input_restore_interrupts(interrupts_were_enabled);
+    return pushed;
+}
+
+bool boring_input_repeat_elapsed(uint64_t elapsed_ticks) {
+    struct boring_input_event event;
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+    bool pushed;
+
+    x86_64_interrupts_disable();
+    if ((!input_state.initialized) || (!input_state.owned) ||
+        (input_state.repeat_key == (uint32_t)BORING_KEY_NONE) ||
+        (input_state.repeat_key > (uint32_t)BORING_KEY_MAX) ||
+        !input_state.held[input_state.repeat_key] ||
+        !input_key_repeatable(input_state.repeat_key) ||
+        (elapsed_ticks == 0ULL)) {
+        input_restore_interrupts(interrupts_were_enabled);
+        return false;
+    }
+    if (elapsed_ticks < input_state.repeat_remaining_ticks) {
+        input_state.repeat_remaining_ticks -= elapsed_ticks;
+        input_restore_interrupts(interrupts_were_enabled);
+        return false;
+    }
+
+    event.type = BORING_INPUT_EVENT_KEY;
+    event.code = input_state.repeat_key;
+    event.value1 = BORING_KEY_DOWN_VALUE;
+    event.value2 = 0;
+    event.modifiers = input_modifier_mask();
+    input_state.modifiers = event.modifiers;
+    event.flags = BORING_INPUT_FLAG_REPEAT;
+    pushed = input_push(&event);
+
+    /*
+     * The elapsed-time source follows the same bounded policy as the PIT
+     * deadline source: one observation can emit at most one repeat. Any
+     * excess elapsed time is deliberately discarded instead of bursting.
+     */
+    input_state.repeat_remaining_ticks =
+        BORING_INPUT_REPEAT_INTERVAL_TICKS;
+    input_state.next_repeat_tick =
+        timer_ticks() + BORING_INPUT_REPEAT_INTERVAL_TICKS;
     input_restore_interrupts(interrupts_were_enabled);
     return pushed;
 }

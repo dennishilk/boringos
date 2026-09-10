@@ -42,6 +42,7 @@ bool boring_input_wait_prepare(uint64_t pid);
 void boring_input_wait_cancel(uint64_t pid);
 bool boring_input_submit_key(uint32_t code, bool down);
 bool boring_input_repeat_tick(uint64_t now_ticks);
+bool boring_input_repeat_elapsed(uint64_t elapsed_ticks);
 bool boring_input_repeat_active(uint64_t pid);
 bool boring_input_reset_keys(void);
 bool boring_input_submit_mouse_move(int32_t dx, int32_t dy);
