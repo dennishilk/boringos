@@ -169,6 +169,60 @@ static long poll_watches(struct process *process,
 
 #if defined(BORING_M54_USB_ONLY_DESKTOP)
 #define M61_TRACE_TRB_CYCLE (1U << 0U)
+#define M67_USB_MFINDEX_MASK 0x3fffU
+#define M67_USB_MFINDEX_PER_INPUT_TICK 80U
+
+struct m67_usb_repeat_clock {
+    uint16_t last_mfindex;
+    uint32_t partial_microframes;
+    bool valid;
+};
+
+static struct m67_usb_repeat_clock m67_usb_repeat_clock;
+
+static void m67_usb_repeat_clock_reset(void) {
+    m67_usb_repeat_clock.last_mfindex = 0U;
+    m67_usb_repeat_clock.partial_microframes = 0U;
+    m67_usb_repeat_clock.valid = false;
+}
+
+static bool m67_usb_repeat_service(
+    struct process *process, const struct xhci_state *usb_state) {
+    uint16_t current;
+    uint16_t delta;
+    uint32_t total;
+    uint64_t elapsed_ticks;
+
+    if ((process == NULL) || (usb_state == NULL) ||
+        !usb_state->runtime_mfindex_valid ||
+        !boring_input_repeat_active(process->pid)) {
+        m67_usb_repeat_clock_reset();
+        return false;
+    }
+
+    current = usb_state->runtime_mfindex;
+    if (!m67_usb_repeat_clock.valid) {
+        m67_usb_repeat_clock.last_mfindex = current;
+        m67_usb_repeat_clock.partial_microframes = 0U;
+        m67_usb_repeat_clock.valid = true;
+        return false;
+    }
+
+    delta = (uint16_t)(
+        ((uint32_t)current -
+         (uint32_t)m67_usb_repeat_clock.last_mfindex) &
+        M67_USB_MFINDEX_MASK);
+    m67_usb_repeat_clock.last_mfindex = current;
+    total = m67_usb_repeat_clock.partial_microframes + (uint32_t)delta;
+    elapsed_ticks =
+        (uint64_t)(total / M67_USB_MFINDEX_PER_INPUT_TICK);
+    m67_usb_repeat_clock.partial_microframes =
+        total % M67_USB_MFINDEX_PER_INPUT_TICK;
+    if (elapsed_ticks == 0ULL) {
+        return false;
+    }
+    return boring_input_repeat_elapsed(elapsed_ticks);
+}
 
 static bool m54_is_input_owner(const struct process *process) {
     struct boring_input_stats input;
@@ -344,6 +398,7 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
             M61_POST37_DISPLAY_WITNESS(
                 process, M61_POST37_INPUT_OWNER_TRUE);
             M61_RUNTIME_HID_WITNESS(M61_RUNTIME_HID_POST_A_SERVICE_LOOP);
+            x86_64_interrupts_enable();
             const bool serviced = xhci_service_hid_reports(&usb_state);
             static bool m54_initial_service_witness;
             if (!m54_initial_service_witness) {
@@ -373,7 +428,12 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
             } else {
                 m61_trace_failed_hid_service();
             }
-            x86_64_interrupts_enable();
+            (void)m67_usb_repeat_service(process, &usb_state);
+            /*
+             * Keep the proven M54/M66 xHCI path cooperative. USB typematic
+             * advances from the controller's read-only MFINDEX sample above;
+             * never turn polling into an HLT wait on an unrelated interrupt.
+             */
             task_yield();
 
             /*

@@ -3,7 +3,7 @@ name: M61 bootable persistent USB
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, feature/m67-typematic]
   workflow_dispatch:
     inputs:
       publish_physical:

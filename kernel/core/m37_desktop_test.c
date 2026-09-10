@@ -23,6 +23,7 @@
 #include <boring/serial.h>
 #include <boring/syscall.h>
 #include <boring/task.h>
+#include <boring/timer.h>
 #include <boring/user_memory.h>
 #include <boring/vfs.h>
 #include <boring/virtio_blk.h>
@@ -301,7 +302,8 @@ static bool input_hardware_init(void) {
     struct i8042_state state = {false};
 
     x86_64_interrupts_disable();
-    if (!boring_input_init() || !irq_init()) {
+    if (!boring_input_init() || !irq_init() ||
+        !timer_init(BORING_INPUT_REPEAT_TIMER_HZ)) {
         return false;
     }
     (void)i8042_init(&state);
