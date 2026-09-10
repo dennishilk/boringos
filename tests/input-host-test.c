@@ -5,11 +5,17 @@
 
 #include <boring/cpu.h>
 #include <boring/input.h>
+#include <boring/timer.h>
 #include <boring/ps2_keyboard.h>
 #include <boring/ps2_mouse.h>
 
 static bool test_interrupts_enabled = true;
+static uint64_t test_ticks;
 static unsigned failures;
+
+uint64_t timer_ticks(void) {
+    return test_ticks;
+}
 
 void x86_64_interrupts_disable(void) {
     test_interrupts_enabled = false;
@@ -124,6 +130,242 @@ static void keyboard_tests(void) {
     check(boring_input_release(11ULL) == BORING_INPUT_RESULT_OK, "keyboard release");
 }
 
+static void repeat_tests(void) {
+    struct boring_input_event events[BORING_INPUT_READ_MAX];
+    struct boring_input_stats stats;
+    size_t count = 0U;
+    size_t drained = 0U;
+    size_t index;
+    uint64_t dropped_before;
+
+    check(boring_input_claim(31ULL) == BORING_INPUT_RESULT_OK,
+          "repeat owner claim");
+
+    test_ticks = 100ULL;
+    check(boring_input_submit_key(BORING_KEY_A, true),
+          "repeat initial A down");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK &&
+          count == 1U && events[0].code == BORING_KEY_A &&
+          events[0].flags == 0U,
+          "repeat initial down emitted once");
+    check(!boring_input_repeat_tick(144ULL),
+          "no repeat before initial delay");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 0U,
+          "no early repeat queued");
+    check(boring_input_repeat_tick(145ULL),
+          "repeat exactly at initial deadline");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK &&
+          count == 1U && events[0].code == BORING_KEY_A &&
+          events[0].value1 == BORING_KEY_DOWN_VALUE &&
+          events[0].flags == BORING_INPUT_FLAG_REPEAT,
+          "deadline repeat event");
+    check(!boring_input_repeat_tick(148ULL),
+          "repeat cadence before interval");
+    check(boring_input_repeat_tick(149ULL),
+          "repeat cadence interval");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U &&
+          events[0].flags == BORING_INPUT_FLAG_REPEAT,
+          "sustained repeat cadence event");
+    check(boring_input_submit_key(BORING_KEY_A, false),
+          "repeat A release");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U &&
+          events[0].value1 == BORING_KEY_UP_VALUE,
+          "repeat key up queued");
+    check(!boring_input_repeat_tick(153ULL),
+          "key up immediately stops repeat");
+
+    test_ticks = 200ULL;
+    check(boring_input_submit_key(BORING_KEY_LEFT_SHIFT, true),
+          "modifier down for no-repeat");
+    check(!boring_input_repeat_tick(1000ULL),
+          "pure modifier never repeats");
+    check(boring_input_submit_key(BORING_KEY_LEFT_SHIFT, false),
+          "modifier release for no-repeat");
+    check(boring_input_read(31ULL, events, 2U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 2U,
+          "modifier no-repeat drain");
+
+    test_ticks = 300ULL;
+    check(boring_input_submit_key(BORING_KEY_A, true),
+          "modifier-current A down");
+    test_ticks = 310ULL;
+    check(boring_input_submit_key(BORING_KEY_LEFT_SHIFT, true),
+          "modifier-current Shift down");
+    check(boring_input_read(31ULL, events, 2U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 2U,
+          "modifier-current setup drain");
+    check(boring_input_repeat_tick(345ULL),
+          "repeat while modifier held");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U &&
+          events[0].modifiers == BORING_MOD_SHIFT &&
+          events[0].flags == BORING_INPUT_FLAG_REPEAT,
+          "repeat carries current modifier state");
+    check(boring_input_submit_key(BORING_KEY_LEFT_SHIFT, false),
+          "modifier-current Shift release");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U,
+          "modifier-current release drain");
+    check(boring_input_repeat_tick(349ULL),
+          "repeat after modifier release");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U &&
+          events[0].modifiers == 0U,
+          "repeat observes released modifier");
+    check(boring_input_submit_key(BORING_KEY_A, false),
+          "modifier-current A release");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U,
+          "modifier-current final drain");
+
+    test_ticks = 400ULL;
+    check(boring_input_submit_key(BORING_KEY_BACKSPACE, true),
+          "Backspace repeat down");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U,
+          "Backspace initial drain");
+    check(boring_input_repeat_tick(445ULL),
+          "Backspace repeats");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U &&
+          events[0].code == BORING_KEY_BACKSPACE &&
+          events[0].flags == BORING_INPUT_FLAG_REPEAT,
+          "Backspace repeat event");
+    check(boring_input_submit_key(BORING_KEY_BACKSPACE, false),
+          "Backspace release");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U,
+          "Backspace release drain");
+
+    test_ticks = 500ULL;
+    check(boring_input_submit_key(BORING_KEY_LEFT, true),
+          "arrow repeat down");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U,
+          "arrow initial drain");
+    check(boring_input_repeat_tick(545ULL),
+          "arrow repeats");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U &&
+          events[0].code == BORING_KEY_LEFT &&
+          events[0].flags == BORING_INPUT_FLAG_REPEAT,
+          "arrow repeat event");
+    check(boring_input_submit_key(BORING_KEY_LEFT, false),
+          "arrow release");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U,
+          "arrow release drain");
+
+    test_ticks = 600ULL;
+    check(boring_input_submit_key(BORING_KEY_A, true),
+          "candidate A down");
+    test_ticks = 610ULL;
+    check(boring_input_submit_key(BORING_KEY_B, true),
+          "candidate B replaces A");
+    check(boring_input_read(31ULL, events, 2U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 2U,
+          "candidate setup drain");
+    check(!boring_input_repeat_tick(645ULL),
+          "old candidate deadline ignored");
+    check(boring_input_repeat_tick(655ULL),
+          "new candidate deadline");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U &&
+          events[0].code == BORING_KEY_B,
+          "most recent repeatable key wins");
+    check(boring_input_submit_key(BORING_KEY_B, false),
+          "candidate B release");
+    check(boring_input_submit_key(BORING_KEY_A, false),
+          "candidate A release");
+    check(boring_input_read(31ULL, events, 2U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 2U,
+          "candidate release drain");
+
+    test_ticks = 700ULL;
+    check(boring_input_submit_key(BORING_KEY_BACKSPACE, true),
+          "queue-full active repeat");
+    for (index = 0U; index + 1U < (size_t)BORING_INPUT_QUEUE_CAPACITY;
+         ++index) {
+        check(boring_input_submit_mouse_move((int32_t)index + 1, 0),
+              "queue-full fill");
+    }
+    check(boring_input_get_stats(&stats) &&
+          stats.queued_events == (size_t)BORING_INPUT_QUEUE_CAPACITY,
+          "queue-full prepared");
+    dropped_before = stats.dropped_events;
+    check(!boring_input_repeat_tick(745ULL),
+          "queue-full repeat is bounded drop");
+    check(boring_input_get_stats(&stats) &&
+          stats.dropped_events == dropped_before + 1ULL,
+          "queue-full repeat drop accounted");
+    check(!boring_input_repeat_tick(745ULL),
+          "same tick does not retry dropped repeat");
+    check(boring_input_get_stats(&stats) &&
+          stats.dropped_events == dropped_before + 1ULL,
+          "same tick no drop storm");
+    drained = 0U;
+    do {
+        check(boring_input_read(31ULL, events, BORING_INPUT_READ_MAX, &count) ==
+              BORING_INPUT_RESULT_OK, "queue-full drain");
+        drained += count;
+    } while (count != 0U);
+    check(drained == (size_t)BORING_INPUT_QUEUE_CAPACITY,
+          "queue-full bounded queue size");
+    check(boring_input_submit_key(BORING_KEY_BACKSPACE, false),
+          "queue-full key release");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U,
+          "queue-full release drain");
+
+    test_ticks = UINT64_MAX - 20ULL;
+    check(boring_input_submit_key(BORING_KEY_A, true),
+          "wrap A down");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U,
+          "wrap initial drain");
+    check(!boring_input_repeat_tick(UINT64_MAX - 1ULL),
+          "wrap no early repeat");
+    check(boring_input_repeat_tick(24ULL),
+          "wrap deadline repeat");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U &&
+          events[0].flags == BORING_INPUT_FLAG_REPEAT,
+          "wrap repeat event");
+    check(boring_input_submit_key(BORING_KEY_A, false),
+          "wrap A release");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U,
+          "wrap release drain");
+
+    test_ticks = 1000ULL;
+    check(boring_input_submit_key(BORING_KEY_A, true),
+          "large progression A down");
+    check(boring_input_read(31ULL, events, 1U, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U,
+          "large progression initial drain");
+    check(boring_input_repeat_tick(1000000000000ULL),
+          "large progression emits one repeat");
+    check(boring_input_read(31ULL, events, BORING_INPUT_READ_MAX, &count) ==
+              BORING_INPUT_RESULT_OK && count == 1U,
+          "large progression no catch-up burst");
+    check(!boring_input_repeat_tick(1000000000000ULL),
+          "large progression same tick bounded");
+    check(boring_input_reset_keys(),
+          "keyboard reset clears repeat state");
+    check(!boring_input_repeat_tick(1000000000004ULL),
+          "reset leaves no stale repeat");
+
+    check(boring_input_release(31ULL) == BORING_INPUT_RESULT_OK,
+          "repeat owner release");
+    check(!boring_input_repeat_tick(1000000001000ULL),
+          "no repeat without input owner");
+}
+
 static bool mouse_packet(struct ps2_mouse_decoder *decoder,
                          uint8_t first, uint8_t second, uint8_t third,
                          struct ps2_mouse_packet *packet) {
@@ -186,6 +428,7 @@ static void queue_tests(void) {
     size_t drained = 0U;
     size_t index;
     int32_t wrap_expected_dx;
+    uint64_t dropped_before;
     bool released = false;
 
     check(boring_input_claim(21ULL) == BORING_INPUT_RESULT_OK, "owner claim");
@@ -203,6 +446,8 @@ static void queue_tests(void) {
     check(boring_input_read(21ULL, events, 1U, &count) == BORING_INPUT_RESULT_OK &&
           count == 1U && events[0].code == BORING_KEY_A, "single dequeue");
 
+    check(boring_input_get_stats(&stats), "overflow baseline stats");
+    dropped_before = stats.dropped_events;
     for (index = 0U; index < (size_t)BORING_INPUT_QUEUE_CAPACITY; ++index) {
         check(boring_input_submit_key(BORING_KEY_A, (index & 1U) == 0U),
               "fill queue");
@@ -210,7 +455,7 @@ static void queue_tests(void) {
     check(!boring_input_submit_key(BORING_KEY_Q, true), "drop newest on overflow");
     check(boring_input_get_stats(&stats) &&
           stats.queued_events == (size_t)BORING_INPUT_QUEUE_CAPACITY &&
-          stats.dropped_events == 1ULL, "overflow accounting");
+          stats.dropped_events == dropped_before + 1ULL, "overflow accounting");
     while (drained < (size_t)BORING_INPUT_QUEUE_CAPACITY) {
         check(boring_input_read(21ULL, events, BORING_INPUT_READ_MAX, &count) ==
               BORING_INPUT_RESULT_OK && count != 0U, "drain chunk");
@@ -278,8 +523,10 @@ static void queue_tests(void) {
 }
 
 int main(void) {
+    check(!boring_input_repeat_tick(0ULL), "no repeat before input init");
     check(boring_input_init(), "input init");
     keyboard_tests();
+    repeat_tests();
     mouse_tests();
     queue_tests();
     if (failures != 0U) {

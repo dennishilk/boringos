@@ -6,6 +6,7 @@
 #include <boring/exception.h>
 #include <boring/event_syscall.h>
 #include <boring/i8042.h>
+#include <boring/input.h>
 #include <boring/io.h>
 #include <boring/irq.h>
 #include <boring/task.h>
@@ -251,6 +252,9 @@ struct x86_64_trap_frame *x86_64_irq_dispatch(
     if ((irq_number == (uint8_t)X86_64_TIMER_IRQ) && expected &&
         timer_handle_irq()) {
         ++timer_irq_count;
+        if (boring_input_repeat_tick(timer_ticks())) {
+            boring_event_input_irq();
+        }
         restore_frame = task_scheduler_tick(frame);
         if (restore_frame == NULL) {
             ++unexpected_irq_count;

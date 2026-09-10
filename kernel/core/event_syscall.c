@@ -344,6 +344,7 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
             M61_POST37_DISPLAY_WITNESS(
                 process, M61_POST37_INPUT_OWNER_TRUE);
             M61_RUNTIME_HID_WITNESS(M61_RUNTIME_HID_POST_A_SERVICE_LOOP);
+            x86_64_interrupts_enable();
             const bool serviced = xhci_service_hid_reports(&usb_state);
             static bool m54_initial_service_witness;
             if (!m54_initial_service_witness) {
@@ -373,7 +374,12 @@ void x86_64_syscall_dispatch_events(struct x86_64_syscall_frame *frame) {
             } else {
                 m61_trace_failed_hid_service();
             }
-            x86_64_interrupts_enable();
+            /*
+             * Keep cooperative xHCI polling preemptible by the PIT.
+             * Typematic is clocked by timer IRQs in the transport-neutral
+             * input core; never turn the proven M54/M66 polling path into
+             * an HLT wait on an unrelated interrupt.
+             */
             task_yield();
 
             /*

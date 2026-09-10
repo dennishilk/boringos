@@ -4,6 +4,7 @@
 
 #include <boring/cpu.h>
 #include <boring/input.h>
+#include <boring/timer.h>
 #if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
 #include <boring/m61_runtime_hid.h>
 #endif
@@ -16,6 +17,8 @@ struct boring_input_state {
     size_t head;
     size_t count;
     uint32_t modifiers;
+    uint32_t repeat_key;
+    uint64_t next_repeat_tick;
     bool owned;
     bool owner_waiting;
     bool initialized;
@@ -34,6 +37,11 @@ static void input_clear_queue(void) {
     input_state.count = 0U;
 }
 
+static void input_clear_repeat(void) {
+    input_state.repeat_key = (uint32_t)BORING_KEY_NONE;
+    input_state.next_repeat_tick = 0ULL;
+}
+
 static void input_clear_keys(void) {
     size_t index;
 
@@ -41,6 +49,52 @@ static void input_clear_keys(void) {
         input_state.held[index] = false;
     }
     input_state.modifiers = 0U;
+    input_clear_repeat();
+}
+
+static bool input_key_repeatable(uint32_t code) {
+    if (((code >= (uint32_t)BORING_KEY_A) &&
+         (code <= (uint32_t)BORING_KEY_Z)) ||
+        ((code >= (uint32_t)BORING_KEY_0) &&
+         (code <= (uint32_t)BORING_KEY_9))) {
+        return true;
+    }
+    switch (code) {
+        case BORING_KEY_SPACE:
+        case BORING_KEY_BACKSPACE:
+        case BORING_KEY_MINUS:
+        case BORING_KEY_EQUAL:
+        case BORING_KEY_LEFT_BRACKET:
+        case BORING_KEY_RIGHT_BRACKET:
+        case BORING_KEY_BACKSLASH:
+        case BORING_KEY_SEMICOLON:
+        case BORING_KEY_APOSTROPHE:
+        case BORING_KEY_GRAVE:
+        case BORING_KEY_COMMA:
+        case BORING_KEY_DOT:
+        case BORING_KEY_SLASH:
+        case BORING_KEY_DELETE:
+        case BORING_KEY_HOME:
+        case BORING_KEY_END:
+        case BORING_KEY_PAGE_UP:
+        case BORING_KEY_PAGE_DOWN:
+        case BORING_KEY_LEFT:
+        case BORING_KEY_RIGHT:
+        case BORING_KEY_UP:
+        case BORING_KEY_DOWN:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool input_tick_reached(uint64_t now_ticks, uint64_t deadline) {
+    /*
+     * Repeat deadlines are always only a few ticks ahead. Unsigned delta
+     * comparison therefore remains correct across UINT64 wrap and avoids
+     * implementation-defined signed conversions.
+     */
+    return (now_ticks - deadline) < (1ULL << 63U);
 }
 
 static uint32_t input_modifier_mask(void) {
@@ -255,6 +309,13 @@ bool boring_input_submit_key(uint32_t code, bool down) {
     repeat = down && input_state.held[code];
     input_state.held[code] = down;
     input_state.modifiers = input_modifier_mask();
+    if (down && !repeat && input_key_repeatable(code)) {
+        input_state.repeat_key = code;
+        input_state.next_repeat_tick =
+            timer_ticks() + BORING_INPUT_REPEAT_DELAY_TICKS;
+    } else if ((!down) && (input_state.repeat_key == code)) {
+        input_clear_repeat();
+    }
     event.type = BORING_INPUT_EVENT_KEY;
     event.code = code;
     event.value1 = down ? BORING_KEY_DOWN_VALUE : BORING_KEY_UP_VALUE;
@@ -264,6 +325,69 @@ bool boring_input_submit_key(uint32_t code, bool down) {
     pushed = input_push(&event);
     input_restore_interrupts(interrupts_were_enabled);
     return pushed;
+}
+
+bool boring_input_repeat_tick(uint64_t now_ticks) {
+    struct boring_input_event event;
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+    bool pushed;
+
+    x86_64_interrupts_disable();
+    if ((!input_state.initialized) || (!input_state.owned) ||
+        (input_state.repeat_key == (uint32_t)BORING_KEY_NONE) ||
+        (input_state.repeat_key > (uint32_t)BORING_KEY_MAX) ||
+        !input_state.held[input_state.repeat_key] ||
+        !input_key_repeatable(input_state.repeat_key) ||
+        !input_tick_reached(now_ticks, input_state.next_repeat_tick)) {
+        input_restore_interrupts(interrupts_were_enabled);
+        return false;
+    }
+
+    event.type = BORING_INPUT_EVENT_KEY;
+    event.code = input_state.repeat_key;
+    event.value1 = BORING_KEY_DOWN_VALUE;
+    event.value2 = 0;
+    event.modifiers = input_modifier_mask();
+    input_state.modifiers = event.modifiers;
+    event.flags = BORING_INPUT_FLAG_REPEAT;
+    pushed = input_push(&event);
+
+    /*
+     * Never catch up a backlog in one IRQ. A delayed tick produces at most
+     * one repeat and re-arms from the observed tick, bounding queue pressure.
+     */
+    input_state.next_repeat_tick =
+        now_ticks + BORING_INPUT_REPEAT_INTERVAL_TICKS;
+    input_restore_interrupts(interrupts_were_enabled);
+    return pushed;
+}
+
+bool boring_input_repeat_active(uint64_t pid) {
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+    bool active;
+
+    x86_64_interrupts_disable();
+    active = input_state.initialized && input_state.owned &&
+             (input_state.owner_pid == pid) &&
+             (input_state.repeat_key != (uint32_t)BORING_KEY_NONE) &&
+             (input_state.repeat_key <= (uint32_t)BORING_KEY_MAX) &&
+             input_state.held[input_state.repeat_key] &&
+             input_key_repeatable(input_state.repeat_key);
+    input_restore_interrupts(interrupts_were_enabled);
+    return active;
+}
+
+bool boring_input_reset_keys(void) {
+    const bool interrupts_were_enabled = x86_64_interrupts_enabled();
+
+    x86_64_interrupts_disable();
+    if (!input_state.initialized) {
+        input_restore_interrupts(interrupts_were_enabled);
+        return false;
+    }
+    input_clear_keys();
+    input_restore_interrupts(interrupts_were_enabled);
+    return true;
 }
 
 bool boring_input_submit_mouse_move(int32_t dx, int32_t dy) {

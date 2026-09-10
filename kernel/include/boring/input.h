@@ -15,6 +15,11 @@ enum boring_input_result {
     BORING_INPUT_RESULT_NOT_INITIALIZED = 4
 };
 
+/* The bootstrap PIT is 100 Hz: 45 ticks = 450 ms, 4 ticks = 25 Hz. */
+#define BORING_INPUT_REPEAT_TIMER_HZ 100U
+#define BORING_INPUT_REPEAT_DELAY_TICKS 45ULL
+#define BORING_INPUT_REPEAT_INTERVAL_TICKS 4ULL
+
 struct boring_input_stats {
     uint64_t owner_pid;
     uint64_t dropped_events;
@@ -36,6 +41,9 @@ enum boring_input_result boring_input_read(uint64_t pid,
 bool boring_input_wait_prepare(uint64_t pid);
 void boring_input_wait_cancel(uint64_t pid);
 bool boring_input_submit_key(uint32_t code, bool down);
+bool boring_input_repeat_tick(uint64_t now_ticks);
+bool boring_input_repeat_active(uint64_t pid);
+bool boring_input_reset_keys(void);
 bool boring_input_submit_mouse_move(int32_t dx, int32_t dy);
 bool boring_input_submit_mouse_button(uint32_t button, bool down);
 bool boring_input_get_stats(struct boring_input_stats *stats);
