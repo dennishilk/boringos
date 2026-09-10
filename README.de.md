@@ -11,43 +11,48 @@ Es ist **kein Linux**, **kein BSD** und verwendet keinen Kernel eines anderen Be
 
 ## Aktueller Stand
 
-~~~text
+```text
 BoringKernel 0.0.62-dev
-Milestone 66 · physische Multi-xHCI-/USB-Hub-/HID-Recovery-Basis
-~~~
+M66 physische USB/HID-Basis + physisch bewiesener Low-Latency-Cursor-/Fokuspfad
+```
 
-Am **08.09.2026** hat BoringOS nach erneuter physischer Revalidierung der M66-Artefakte auf der echten Maschine **Cthulhu** einen korrigierten physischen USB-Basisstand festgelegt:
+Die aktuelle physische Grundlage ist auf der echten Workstation **Cthulhu** bewiesen. BoringOS bootet sein natives schreibbares USB-System, verwaltet die relevanten xHCI-Controller unabhängig, enumeriert den echten Genesys-Logic-USB-Hub, nimmt die daran angeschlossene ROCCAT-Maus über den nativen xHCI-/HID-Pfad an, hält die direkte Holtek-USB-Tastatur funktionsfähig und betreibt den nativen BoringWM-Desktop mit BoringTerminal, BoringEdit und BoringFiles.
 
-- der native BoringWM-Desktop bootet weiterhin vom schreibbaren USB-Image;
-- BoringOS besitzt die relevanten xHCI-Controller unabhängig voneinander statt nur eine globale Controller-Instanz anzunehmen;
-- der echte Genesys-Logic-USB-Hub wird über begrenzte Hub-Class-Power-/Status-/Reset-Pfade enumeriert;
-- die echte ROCCAT-Maus hinter diesem Hub erreicht BoringOS über den nativen xHCI-/HID-Pfad;
-- gültige Composite-/Generic-HID-Konfigurationen werden nicht mehr allein wegen legitimer Schwester-Endpunkte fälschlich als fatal ungültig klassifiziert; BoringOS behält den nutzbaren Interrupt-IN-Kandidaten, wertet den begrenzten Maus-Report-Descriptor aus und aktiviert danach den nativen Input-Pfad;
-- physische Mausbewegung bewegt den bestehenden Software-Cursor und wechselt den BoringWM-Fokus zwischen zwei laufenden Fenstern, sobald der Zeiger darüber fährt;
-- die echte USB-Tastatur funktioniert im selben Boot weiterhin;
-- die bereits eingefrorene M63-Basis bleibt der physische Nachweis für persistentes BoringFS, Reboot und ACPI S5.
+Die autoritative M66-USB/HID-Recovery-Basis bleibt eingefroren unter:
 
-Der physisch akzeptierte Runtime-Stand ist eingefroren unter:
-
-~~~text
+```text
 freeze/m66-physical-hid-recovery-2026-09-08
 bd3f181d24547189b004328aea54c54fd194fc96
 TREE: 96f5b177a5afa8ea24c9f94168117ce09c1c8507
-~~~
-
-Autoritatives physisches Image:
-
-~~~text
-100663296 Bytes
-SHA256: 83e22073a408fa45474b409804c4b29932b4451ce68ec87c8d21681d948858f8
 Artifact: 10055706794
-~~~
+RAW: 100663296 Bytes
+SHA256: 83e22073a408fa45474b409804c4b29932b4451ce68ec87c8d21681d948858f8
+```
 
-QEMU bleibt die automatisierte Regression-Plattform; Multi-Controller-xHCI, echte Hub-Enumeration und der Hub-verbundene physische Mauspfad sind jetzt zusätzlich auf Cthulhu bewiesen. Die frühere Zuordnung `freeze/m66-usb-hub-mouse-physical-2026-09-06` / `8ccd618d...` bleibt nur als historische Evidenz erhalten: Beim erneuten physischen Test trat ein schwarzer Bildschirm mit finalem POST `D8` auf, daher ist dieser Stand keine autoritative physisch gute Basis. Der Recovery-Freeze vom 08.09.2026 oben ist der maßgebliche physische M66-Anker. M63 bleibt die akzeptierte physische Durability-/Reboot-/Shutdown-Basis.
+### Physische Cursor-/Fokus-Reaktionszeit — abgenommen am 10.09.2026
+
+Nachdem die M66-Basis stabil war, ließ sich das verbleibende physische Mausproblem auf den Software-Present-Pfad statt auf USB/HID eingrenzen. Eine normale Pointer-Bewegung löste zuvor einen vollständigen 800x600-Software-Compose samt vollständiger Framebuffer-Kopie aus. Bei Pointer-Fokuswechseln wurden außerdem synchron unveränderte `CONFIGURE`-Nachrichten an Clients geschickt; die nativen Clients antworteten mit `COMMIT`, was indirekt zusätzliche Full-Frame-Presents auslöste und weitere Mausbewegungen kurz blockierte.
+
+Der abgenommene Fix lässt USB/HID, Pointer-Semantik, GOP-Modus und Auflösung unverändert. Normale Cursorbewegungen restaurieren und präsentieren nur noch die begrenzten alten/neuen 6x12-Cursorregionen. Pointer-erzeugte Fokuswechsel bestätigen Input zuerst, aktualisieren Fokus-Metadaten atomar, vermeiden unveränderte Client-`CONFIGURE`-Roundtrips, fassen ausstehende Fokus-Paints auf den neuesten Zustand zusammen und präsentieren die begrenzten Fokusrahmen-Regionen erst dann, wenn Input-/IPC-Arbeit frei ist.
+
+Auf dem physischen Cthulhu sind damit beide beobachteten Latenzformen verschwunden: Normale Cursorbewegung reagiert jetzt so direkt wie auf dem Sway-Desktop des Nutzers, und beim kontinuierlichen Kreuzen zwischen Fenstern bleibt der Pointer nicht mehr an der Fenstergrenze stehen, während der Fokusrahmen gezeichnet wird.
+
+Der exakte physisch akzeptierte Runtime-Stand ist eingefroren unter:
+
+```text
+freeze/mouse-present-latency-physical-2026-09-10
+c5ded88e3d473162b94f963d9509394246ef782c
+TREE: 8a8c01fa61670f8085d8259c7635072d7317f36e
+Artifact: 10154738768
+RAW: 100663296 Bytes
+SHA256: 6ac9e6096849ea4e906f0c70a322a8599de163bec34499bdd8794f6b202ce26f
+```
+
+QEMU bleibt die automatisierte Regression-Plattform; USB-Topologie, Hub-verbundene Maus, Pointer-Fokus sowie der Low-Latency-Cursor-/Fokus-Present-Pfad sind zusätzlich physisch auf Cthulhu bewiesen.
 
 ## Was heute wirklich läuft
 
-~~~text
+```text
 UEFI / QEMU oder physischer Cthulhu
         ↓
       Limine
@@ -75,7 +80,7 @@ Multi-xHCI / USB-Hubs / HID / USB Mass Storage
 │ boring-shell │              │              │
 │ boringfetch  │              │              │
 └──────────────┴──────────────┴──────────────┘
-~~~
+```
 
 Zu den implementierten Grundlagen gehören physische und virtuelle Speicherverwaltung, Kernel-Heap, Exceptions, PIC/PIT, kooperatives und präemptives Scheduling, unabhängige Prozessadressräume, Ring 3, native Syscalls, ELF64-Userspace, PTYs, File Descriptors, VFS, BoringFS, natives IPC, Shared Buffer, Display-Service, Software-Komposition, BoringWM, native Anwendungen, CPUID/PCI/SMBIOS-Inventar, xHCI-HID, USB Mass Storage, AHCI/SATA-Storage und ACPI-System-Power-Control.
 
@@ -85,13 +90,13 @@ Der grafische Desktop gehört vollständig BoringOS. Darunter gibt es weder X11 
 
 Aktuelle Tastenkürzel:
 
-~~~text
+```text
 Super+Return   BoringTerminal öffnen
 Super+E        BoringEdit öffnen
 Super+F        BoringFiles öffnen
 Super+J/L      Fokus wechseln
 Super+Q        fokussierten Client schließen
-~~~
+```
 
 Der Desktop bleibt absichtlich auch mit **null offenen Fenstern** aktiv. Wird die letzte Anwendung geschlossen, bleibt der leere BoringWM-Desktop bestehen und Anwendungen können anschließend erneut gestartet werden.
 
@@ -99,134 +104,111 @@ BoringTerminal startet eine separat geplante `boring-shell` über ein echtes PTY
 
 ## Shell und System-Lifecycle
 
-Die native Shell besitzt inzwischen Dateisystem-, Identitäts-/Prozess- und Power-Kommandos, darunter:
+Die native Shell besitzt Dateisystem-, Identitäts-/Prozess- und Power-Kommandos, darunter:
 
-~~~text
+```text
 ls cd pwd mkdir rmdir touch write rm
 clear echo history help
 uname hostname whoami ps
 reboot shutdown
-~~~
+```
 
-Die physische M63-Abnahme hat auf Cthulhu diese komplette Sequenz bewiesen:
-
-~~~text
-mkdir
-touch
-write
-reboot
-erneut booten
-persistierte Daten lesen
-shutdown
-~~~
-
-`reboot` synchronisiert zuerst registrierte schreibbare Blockgeräte und wechselt danach in einen echten Plattform-Reset. `shutdown` synchronisiert Storage und wechselt in ACPI S5. Keines der beiden Kommandos ist als QEMU-only Magic-Port implementiert.
+Die physische M63-Abnahme bewies einen echten schreibbaren USB-Root-Lifecycle auf Cthulhu: Dateien anlegen und schreiben, rebooten, erneut booten, persistierte Daten lesen und anschließend sauber über ACPI S5 ausschalten. `reboot` und `shutdown` synchronisieren zuerst registrierte schreibbare Blockgeräte; keines der beiden Kommandos ist als QEMU-only Magic-Port implementiert.
 
 ## Prozess- und Desktop-Kapazität
 
 M62 hat die alten statischen Prozess-/Task-Arrays aus der Runtime-Architektur entfernt.
 
-Aktuelle Policy-Grenzen:
-
-~~~text
+```text
 Prozess-Policy-Limit: 64
 Task-Policy-Limit:    64
 BoringWM-Clients:     16
 WM-IPC-Peers:         16
 Display-IPC-Peers:    16
-~~~
+```
 
-Auf Cthulhu wurden physisch **sieben BoringTerminal-Fenster plus BoringEdit und BoringFiles** geöffnet, alles geschlossen, zum leeren Desktop zurückgekehrt und Anwendungen erneut gestartet — ohne Capacity- oder Lifecycle-Fehler.
-
-Das sind Policy-Grenzen und keine fest verdrahteten Architektur-Slots.
+Auf Cthulhu wurden physisch **sieben BoringTerminal-Fenster plus BoringEdit und BoringFiles** geöffnet, alles geschlossen, zum leeren Desktop zurückgekehrt und Anwendungen erneut gestartet — ohne Capacity- oder Lifecycle-Fehler. Das sind Policy-Grenzen und keine fest verdrahteten Architektur-Slots.
 
 ## Physische Cthulhu-Hardware
 
-~~~text
+```text
 CPU:       AMD Ryzen 7 5800X3D
 Board:     Gigabyte B550 VISION D
 Memory:    32 GiB installiert, über SMBIOS erkannt
 Firmware:  AMI / Gigabyte F18d
 Display:   aktueller Firmware-Framebuffer 800x600x32, Pitch 3328
-~~~
+```
 
-Cthulhu besitzt mehrere xHCI-Controller; die M66-Basis besitzt die relevanten Controller-Instanzen jetzt unabhängig voneinander.
+Der bewiesene native Input-Pfad ist:
 
-Die direkt angeschlossene Holtek-USB-Tastatur und die ROCCAT-Maus hinter dem echten Genesys-Logic-Hub sind physisch durch den nativen Pfad bewiesen:
-
-~~~text
+```text
 xHCI-Controller
-→ USB-Root / Hub-Topologie
+→ USB-Root / Genesys-Logic-Hub
 → HID Interrupt-IN
 → BoringOS-Inputqueue
 → boring-display
 → BoringWM
-→ native Shortcuts / Cursor / Pointer-Fokus
-~~~
+→ native Shortcuts / Software-Cursor / Pointer-Fokus
+```
 
 ## USB und Storage
 
-BoringOS unterstützt begrenzte Multi-xHCI-Controller-Ownership, Root-Port- und Downstream-Hub-Topologie, Descriptor Discovery, HID Interrupt-IN und USB Mass Storage über Bulk/BOT/SCSI. Der physische M66-Boot beweist den echten Genesys-Logic-Hub und die darunter angeschlossene ROCCAT-Maus auf Cthulhu.
+BoringOS unterstützt begrenzte Multi-xHCI-Controller-Ownership, Root-Port- und Downstream-Hub-Topologie, Descriptor Discovery, HID Interrupt-IN und USB Mass Storage über Bulk/BOT/SCSI.
 
-Der physische USB-Root besitzt jetzt einen strengen Durability-Pfad. Normale Geräte verwenden SCSI `SYNCHRONIZE CACHE(10)`. Meldet ein Gerät exakt den erwarteten SCSI-Sense-Nachweis dafür, dass dieses Kommando nicht unterstützt wird, schaltet BoringOS auf `WRITE(10)` mit FUA um, statt Flushfehler pauschal zu ignorieren. Andere Transport-, CSW-, Sense- oder FUA-Fehler bleiben harte I/O-Fehler.
-
-Die physische M63-Abnahme hat schreibbares BoringFS, Persistenz über einen Reboot und anschließenden sauberen Poweroff auf dem echten SanDisk-USB-Gerät bewiesen.
+Der physische USB-Root besitzt einen strengen Durability-Pfad. Normale Geräte verwenden SCSI `SYNCHRONIZE CACHE(10)`. Meldet ein Gerät exakt den erwarteten SCSI-Sense-Nachweis dafür, dass dieses Kommando nicht unterstützt wird, schaltet BoringOS auf `WRITE(10)` mit FUA um, statt Flushfehler pauschal zu ignorieren. Andere Transport-, CSW-, Sense- oder FUA-Fehler bleiben harte I/O-Fehler.
 
 Weitere verifizierte Storage-Pfade sind VirtIO Block und begrenztes synchrones AHCI/SATA.
-
-## Physischer USB-Stand / nächstes Input-Polish
-
-Der frühere USB-Topologie-Blocker ist physisch geschlossen:
-
-1. **mehrere xHCI-Controller** werden unabhängig verwaltet;
-2. der echte **Genesys-Logic-Hub** wird auf Hardware enumeriert;
-3. die Downstream-**ROCCAT-Maus** bewegt den BoringOS-Cursor;
-4. BoringWM-Hit-Testing wechselt den Fokus physisch zwischen zwei Fenstern.
-
-Die nächste beobachtete Input-Ecke ist Tastatur-Typematic: Eine gehaltene Taste wie Backspace erzeugt auf dem USB-Boot-Keyboard-Pfad aktuell nur die erste Aktion; für wiederholtes Löschen muss die Taste erneut gedrückt werden. Das ist ein kleines Input-Polish und keine USB-Topologie-Regression.
 
 ## Grafik heute
 
 BoringOS verwendet aktuell einen **softwaregerenderten Framebuffer-Desktop**.
 
-~~~text
+```text
 BoringWM / boring-display Komposition im RAM
         ↓
-CPU-Software-Present / Kopie
+begrenzte Cursor-/Fokus-Region-Presents, wo möglich
+oder Full-Software-Present bei Scene-/Layout-/Client-Änderungen
         ↓
 Firmware-/Limine-Framebuffer
         ↓
 GPU-Scanout zum Monitor
-~~~
+```
 
-Es gibt noch keinen nativen AMD-/NVIDIA-/Intel-Modesetting- oder Beschleunigungstreiber. Das unmittelbare Grafikziel ist ein besserer bzw. nativer GOP-Framebuffer-Modus, danach ein schnellerer Software-Present mit Damage-/Dirty-Regionen. Ein eigener AMD-Treiber ist deutlich spätere Arbeit.
+Der physisch bewiesene Cursor-Fast-Path präsentiert pro normaler Bewegung höchstens die geclippten alten/neuen 6x12-Cursorrechtecke statt jedes Mal alle 480.000 Pixel neu zu schreiben. Reine Pointer-Fokuswechsel verwenden begrenzte Border-Region-Presents und werden hinter bereits bereiter Input-/IPC-Arbeit zurückgestellt. Vollständige Scene-Änderungen, Fenstergeometrie, Wallpaper-Änderungen und Client-Commits behalten weiterhin den etablierten Full-Software-Compose-Pfad.
+
+Es gibt noch keinen nativen AMD-/NVIDIA-/Intel-Modesetting- oder Beschleunigungstreiber. Das nächste sichtbare Grafikziel ist ein besserer bzw. nativer GOP-Framebuffer-Modus; breiteres allgemeines Damage-/Present-Polish folgt später, ein eigener AMD-Treiber ist deutlich spätere Arbeit.
 
 ## Aktuelle Grenzen
 
-- gehaltenes Tastatur-Typematic/Key-Repeat ist auf dem USB-Tastaturpfad noch nicht implementiert;
+- gehaltenes Tastatur-Typematic/Key-Repeat auf der physischen USB-Tastatur ist weiterhin ungelöst und bewusst für späteres Input-Polish geparkt;
+- das aktuelle Tastaturlayout ist praktisch noch ENG/US und noch kein fertiges DE-Layout;
 - das physische Display nutzt aktuell den Firmware-Framebuffer mit 800x600;
 - die vollständige praktische Nutzung der installierten 32 GiB auf Cthulhu ist noch zukünftige Arbeit;
 - noch kein Netzwerk, Audio, NVMe, SMP-Runtime oder nativer GPU-Treiber.
 
 Das sind Implementierungsgrenzen und keine als Support verkleideten Versprechen.
 
-## Roadmap ab dem M66-Freeze
+## Roadmap ab der physischen M66-Basis
 
-~~~text
-M66 PHYSICAL FREEZE
+```text
+M66 PHYSICAL USB/HID FREEZE
     ↓
-1. Tastatur-Typematic / gehaltenes Key-Repeat
+Low-Latency-Cursor + Pointer-Fokus  ✅ physisch auf Cthulhu bewiesen
     ↓
-2. bessere / native GOP-Auflösung
+bessere / native GOP-Auflösung
     ↓
-3. schnellere Software-Grafik / Present
+breitere Software-Grafik / Damage / Present
     ↓
-4. die vollen 32 GiB RAM physisch sinnvoll nutzen
+die vollen 32 GiB RAM physisch sinnvoll nutzen
     ↓
-...
+Networking / NVMe / Audio / SMP
     ↓
 irgendwann: eigener AMD-Grafiktreiber
-~~~
+
+geparktes Input-Polish:
+- gehaltenes Typematic / Key-Repeat
+- richtiges DE-Tastaturlayout
+```
 
 Die detaillierte historische Aufzeichnung liegt in [docs/roadmap.md](docs/roadmap.md).
 
@@ -234,11 +216,11 @@ Die detaillierte historische Aufzeichnung liegt in [docs/roadmap.md](docs/roadma
 
 Der Build verwendet GCC/binutils als freestanding x86_64-Toolchain und eine fest gepinnte Limine-Version.
 
-~~~sh
+```sh
 make
 make run
 make test
-~~~
+```
 
 Die GitHub-Actions-Workflows halten bewusst frühere Milestone-Regressionen am Leben. Sie sind Testabdeckung und keine aktiven Entwicklungsbranches.
 
@@ -250,6 +232,7 @@ Das Repository behält nur wenige immutable-by-policy physische Freeze-Branches:
 - `freeze/m62-dynamic-capacity-physical-2026-09-05`
 - `freeze/m63-system-power-lifecycle-physical-2026-09-05`
 - `freeze/m66-physical-hid-recovery-2026-09-08`
+- `freeze/mouse-present-latency-physical-2026-09-10`
 
 Normale Entwicklung läuft von `main` weiter; Freeze-Branches sind Referenzpunkte und dürfen nicht bewegt werden.
 
