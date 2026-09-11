@@ -9,6 +9,7 @@
 #define DISPLAY_PEERS 16U
 static struct boring_display_core core;
 static struct display_managed managed;
+static struct display_layout_damage layout_damage;
 static uint32_t peers[DISPLAY_PEERS];
 static uint32_t composition;
 static uint8_t *pixels;
@@ -80,6 +81,52 @@ static void present(void) {
 #if defined(BORING_M66_USB_HUB_MOUSE)
     m66_damage_witness("full", core.width, core.height);
 #endif
+}
+
+static void present_layout(void) {
+    struct boring_display_region regions[BORING_DISPLAY_LAYOUT_REGION_MAX];
+    size_t count = 0U;
+    size_t index;
+    if (!display_managed_layout_regions(&managed, &layout_damage, &core,
+                                        regions, BORING_DISPLAY_LAYOUT_REGION_MAX,
+                                        &count)) {
+        desktop_fail("display layout regions");
+    }
+    if (count == 0U) {
+        display_managed_layout_complete(&layout_damage);
+        return;
+    }
+    if (!boring_display_cursor_damage_restore(&cursor_damage, &core, pixels,
+                                              (size_t)core.byte_size)) {
+        desktop_fail("display layout cursor restore");
+    }
+    for (index = 0U; index < count; ++index) {
+        uint64_t composed_pixels = 0ULL;
+        if (!display_managed_compose_scene_region(&managed, &core, pixels,
+                                                  (size_t)core.byte_size,
+                                                  &regions[index],
+                                                  &composed_pixels)) {
+            desktop_fail("display layout compose");
+        }
+        (void)composed_pixels;
+    }
+    if (!boring_display_cursor_damage_reset(&cursor_damage, &core, pixels,
+                                            (size_t)core.byte_size)) {
+        desktop_fail("display layout cursor reset");
+    }
+    for (index = 0U; index < count; ++index) {
+        const struct boring_display_region *region = &regions[index];
+        if (boring_framebuffer_present_region(composition,
+                                              region->x, region->y,
+                                              region->width,
+                                              region->height) != 0L) {
+            desktop_fail("display layout present");
+        }
+#if defined(BORING_M66_USB_HUB_MOUSE)
+        m66_damage_witness("layout", region->width, region->height);
+#endif
+    }
+    display_managed_layout_complete(&layout_damage);
 }
 
 static bool present_damage(uint32_t surface,
@@ -193,6 +240,7 @@ static void forget_peer(uint32_t endpoint) {
         managed.manager_endpoint = 0U;
         input_pending = false;
         focus_present_pending = false;
+        display_managed_layout_complete(&layout_damage);
         desktop_say("display: manager disconnected; display survives\n");
     }
     for (index = 0U; index < DISPLAY_PEERS; ++index) {
@@ -319,8 +367,9 @@ static void control(uint32_t endpoint, const struct display_control *r) {
             }
             status = BORING_DISPLAY_STATUS_ACCESS;
         } else {
-            status = display_managed_control(&managed, &core, endpoint,
-                                             (uint64_t)peer, r);
+            status = display_managed_layout_control(&managed, &layout_damage,
+                                                    &core, endpoint,
+                                                    (uint64_t)peer, r);
             if ((status == BORING_DISPLAY_STATUS_OK) &&
                 ((r->type == DISPLAY_PRESENT) ||
                  (r->type == DISPLAY_PRESENT_FOCUS))) {
@@ -328,7 +377,7 @@ static void control(uint32_t endpoint, const struct display_control *r) {
                     focus_present_pending = true;
                 } else {
                     focus_present_pending = false;
-                    present();
+                    present_layout();
                 }
 #if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
                 if (r->type == DISPLAY_PRESENT) { m61_post37_present_completed = true; }
@@ -424,6 +473,7 @@ int boring_main(void) {
         desktop_fail("display claim/init");
     }
     display_managed_init(&managed);
+    display_layout_damage_init(&layout_damage);
     boring_display_cursor_damage_init(&cursor_damage);
     buffer = boring_buffer_create((size_t)info.byte_size);
     if (buffer <= 0L) { desktop_fail("display composition buffer"); }

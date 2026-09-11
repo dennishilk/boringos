@@ -19,6 +19,18 @@ HOST_CFLAGS='-std=c11 -fno-builtin -fno-tree-loop-distribute-patterns -Wall -Wex
 
 build/m68-safe-higher-gop-host-test
 
+"$HOST_CC" \
+    -Iuser/runtime/include -Ikernel/include \
+    $HOST_CFLAGS \
+    tests/m68-layout-host.c \
+    user/boring-display/core.c \
+    user/boring-display/managed.c \
+    user/boring-display/wallpaper.c \
+    user/boringwm/core.c \
+    -o build/m68-layout-host-test
+
+build/m68-layout-host-test
+
 # Existing production regressions that exercise the same sizing, mapping,
 # region-present, cursor-damage, focus-border, and WM boundaries.
 make \

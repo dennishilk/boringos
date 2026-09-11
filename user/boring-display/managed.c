@@ -6,6 +6,10 @@ void display_managed_init(struct display_managed *state) {
     state->background = 0x00282828U;
 }
 
+void display_layout_damage_init(struct display_layout_damage *damage) {
+    if (damage != NULL) { *damage = (struct display_layout_damage){0}; }
+}
+
 uint32_t display_control_validate(const struct display_control *r, size_t size) {
     bool geometry;
     if ((r == NULL) || (size != sizeof(*r)) ||
@@ -148,6 +152,186 @@ uint32_t display_managed_control(struct display_managed *state,
     p->border = r->border; p->color = r->color; p->order = r->order;
     p->visible = (r->width != 0U) && (r->height != 0U);
     return BORING_DISPLAY_STATUS_OK;
+}
+
+static bool layout_surface_index(const struct boring_display_core *core,
+                                 uint32_t surface, uint32_t *index_out) {
+    uint32_t index;
+    if ((core == NULL) || (index_out == NULL) || (surface == 0U)) { return false; }
+    for (index = 0U; index < BORING_DISPLAY_SURFACE_MAX; ++index) {
+        if (core->surfaces[index].active &&
+            (core->surfaces[index].token == surface)) {
+            *index_out = index;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void layout_capture(struct display_layout_damage *damage,
+                           uint32_t index,
+                           const struct display_placement *placement) {
+    struct display_layout_change *change;
+    if ((damage == NULL) || (placement == NULL) ||
+        (index >= BORING_DISPLAY_SURFACE_MAX)) {
+        return;
+    }
+    change = &damage->changes[index];
+    if (change->changed) { return; }
+    change->changed = true;
+    change->old_visible = placement->visible;
+    if (placement->visible) {
+        change->old_region = (struct boring_display_region){
+            placement->x, placement->y, placement->width, placement->height
+        };
+    }
+}
+
+uint32_t display_managed_layout_control(
+    struct display_managed *state,
+    struct display_layout_damage *damage,
+    const struct boring_display_core *core,
+    uint32_t endpoint,
+    uint64_t peer_pid,
+    const struct display_control *r) {
+    struct display_placement before = {0};
+    uint32_t index = 0U;
+    uint32_t status;
+    bool capture = false;
+    bool wallpaper_before;
+    uint32_t background_before;
+    if ((state == NULL) || (damage == NULL) || (core == NULL) || (r == NULL)) {
+        return BORING_DISPLAY_STATUS_INVALID;
+    }
+    wallpaper_before = state->wallpaper;
+    background_before = state->background;
+    if (((r->type == DISPLAY_PLACE) || (r->type == DISPLAY_UNBIND)) &&
+        layout_surface_index(core, r->surface, &index)) {
+        before = state->placements[index];
+        capture = true;
+    }
+    status = display_managed_control(state, core, endpoint, peer_pid, r);
+    if (status != BORING_DISPLAY_STATUS_OK) { return status; }
+    if (capture) { layout_capture(damage, index, &before); }
+    if ((r->type == DISPLAY_PRESENT) &&
+        (!wallpaper_before || (background_before != state->background))) {
+        damage->full = true;
+    }
+    return status;
+}
+
+static bool layout_region_valid(const struct boring_display_core *core,
+                                const struct boring_display_region *region) {
+    return (core != NULL) && (region != NULL) &&
+        (region->width != 0U) && (region->height != 0U) &&
+        (region->x < core->width) && (region->y < core->height) &&
+        (region->width <= core->width - region->x) &&
+        (region->height <= core->height - region->y);
+}
+
+static bool layout_contains(const struct boring_display_region *outer,
+                            const struct boring_display_region *inner) {
+    return (inner->x >= outer->x) && (inner->y >= outer->y) &&
+        ((uint64_t)inner->x + inner->width <= (uint64_t)outer->x + outer->width) &&
+        ((uint64_t)inner->y + inner->height <= (uint64_t)outer->y + outer->height);
+}
+
+static bool layout_overlap(const struct boring_display_region *first,
+                           const struct boring_display_region *second) {
+    return ((uint64_t)first->x < (uint64_t)second->x + second->width) &&
+        ((uint64_t)second->x < (uint64_t)first->x + first->width) &&
+        ((uint64_t)first->y < (uint64_t)second->y + second->height) &&
+        ((uint64_t)second->y < (uint64_t)first->y + first->height);
+}
+
+static struct boring_display_region layout_union(
+    const struct boring_display_region *first,
+    const struct boring_display_region *second) {
+    const uint32_t left = first->x < second->x ? first->x : second->x;
+    const uint32_t top = first->y < second->y ? first->y : second->y;
+    const uint32_t first_right = first->x + first->width;
+    const uint32_t second_right = second->x + second->width;
+    const uint32_t first_bottom = first->y + first->height;
+    const uint32_t second_bottom = second->y + second->height;
+    const uint32_t right = first_right > second_right ? first_right : second_right;
+    const uint32_t bottom = first_bottom > second_bottom ? first_bottom : second_bottom;
+    return (struct boring_display_region){left, top, right - left, bottom - top};
+}
+
+static bool layout_region_add(struct boring_display_region *regions,
+                              size_t capacity, size_t *count,
+                              const struct boring_display_region *region) {
+    struct boring_display_region candidate;
+    size_t index;
+    bool retry;
+    if ((regions == NULL) || (count == NULL) || (region == NULL)) { return false; }
+    candidate = *region;
+    do {
+        retry = false;
+        for (index = 0U; index < *count; ++index) {
+            if (layout_contains(&regions[index], &candidate)) { return true; }
+            if (layout_contains(&candidate, &regions[index]) ||
+                layout_overlap(&candidate, &regions[index])) {
+                candidate = layout_union(&candidate, &regions[index]);
+                regions[index] = regions[*count - 1U];
+                --*count;
+                retry = true;
+                break;
+            }
+        }
+    } while (retry);
+    if (*count >= capacity) { return false; }
+    regions[*count] = candidate;
+    ++*count;
+    return true;
+}
+
+bool display_managed_layout_regions(
+    const struct display_managed *state,
+    const struct display_layout_damage *damage,
+    const struct boring_display_core *core,
+    struct boring_display_region *regions,
+    size_t region_capacity,
+    size_t *region_count) {
+    uint32_t index;
+    if ((state == NULL) || (damage == NULL) || (core == NULL) ||
+        (regions == NULL) || (region_count == NULL) ||
+        (region_capacity < BORING_DISPLAY_LAYOUT_REGION_MAX)) {
+        return false;
+    }
+    *region_count = 0U;
+    if (damage->full) {
+        regions[0] = (struct boring_display_region){0U, 0U, core->width, core->height};
+        *region_count = 1U;
+        return true;
+    }
+    for (index = 0U; index < BORING_DISPLAY_SURFACE_MAX; ++index) {
+        const struct display_layout_change *change = &damage->changes[index];
+        const struct display_placement *placement = &state->placements[index];
+        struct boring_display_region final_region;
+        if (!change->changed) { continue; }
+        if (change->old_visible) {
+            if (!layout_region_valid(core, &change->old_region) ||
+                !layout_region_add(regions, region_capacity, region_count,
+                                   &change->old_region)) {
+                return false;
+            }
+        }
+        if (!placement->visible) { continue; }
+        final_region = (struct boring_display_region){
+            placement->x, placement->y, placement->width, placement->height
+        };
+        if (!layout_region_valid(core, &final_region) ||
+            !layout_region_add(regions, region_capacity, region_count,
+                               &final_region)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void display_managed_layout_complete(struct display_layout_damage *damage) {
+    display_layout_damage_init(damage);
 }
 
 static void put(uint8_t *output, size_t offset, uint32_t color) {
