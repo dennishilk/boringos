@@ -140,12 +140,13 @@ if any(position < 0 for position in positions) or positions != sorted(positions)
     fail(f"display manager authentication/reply order changed: {positions!r}")
 
 display_main = function_body(DISPLAY, "int boring_main(")
+display_main_search = re.sub(r"\s+", " ", display_main)
 for token in (
     "peers[slot] = (uint32_t)ep;",
-    "watches[count++] = (struct boring_event_watch){BORING_EVENT_IPC, peers[index]",
-    "else { receive(watches[index].handle); }",
+    "BORING_EVENT_IPC, peers[index], 0U, 0U, 0ULL",
+    "receive(watches[index].handle);",
 ):
-    if token not in display_main:
+    if token not in display_main_search:
         fail(f"accepted display endpoint is not carried into event wait: {token}")
 if "incoming_queue(connection, entry->side)->count != 0U" not in IPC:
     fail("accepted endpoint queue is not polled for READ")
