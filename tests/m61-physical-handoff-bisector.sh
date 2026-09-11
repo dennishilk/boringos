@@ -66,12 +66,19 @@ text = replace_once(
 )
 
 handoff_wrapper = r'''void __wrap_boring_boot_console_desktop_handoff(void) {
+    static uint8_t witness_underlay[48U * 48U * 4U];
     const struct boring_framebuffer *surface;
     uint64_t witness_x;
     uint64_t witness_y;
     uint64_t witness_width;
     uint64_t witness_height;
+    uint64_t witness_row;
+    uint64_t witness_column;
+    uint64_t surface_offset;
+    size_t witness_index;
     uint32_t witness_color;
+    uint8_t byte_index;
+    bool witness_verified = true;
 
     M61_POST(M61_POST_DESKTOP_HANDOFF_ENTER);
     __real_boring_boot_console_desktop_handoff();
@@ -87,10 +94,85 @@ handoff_wrapper = r'''void __wrap_boring_boot_console_desktop_handoff(void) {
     witness_height = surface->height < 48ULL ? surface->height : 48ULL;
     witness_x = surface->width - witness_width;
     witness_y = surface->height - witness_height;
+    witness_index = 0U;
+    for (witness_row = 0ULL; witness_row < witness_height; ++witness_row) {
+        for (witness_column = 0ULL;
+             witness_column < witness_width;
+             ++witness_column) {
+            surface_offset = ((witness_y + witness_row) * surface->pitch) +
+                ((witness_x + witness_column) *
+                 (uint64_t)surface->bytes_per_pixel);
+            for (byte_index = 0U;
+                 byte_index < surface->bytes_per_pixel;
+                 ++byte_index) {
+                witness_underlay[witness_index] =
+                    surface->address[surface_offset + (uint64_t)byte_index];
+                ++witness_index;
+            }
+        }
+    }
     witness_color = boring_color_pack(surface, 0xffU, 0x00U, 0xffU);
     if (!boring_graphics_fill_rect(surface, witness_x, witness_y,
                                    witness_width, witness_height,
                                    witness_color)) {
+        M61_POST(M61_POST_DESKTOP_WITNESS_FAILED);
+        return;
+    }
+    for (witness_row = 0ULL; witness_row < witness_height; ++witness_row) {
+        for (witness_column = 0ULL;
+             witness_column < witness_width;
+             ++witness_column) {
+            surface_offset = ((witness_y + witness_row) * surface->pitch) +
+                ((witness_x + witness_column) *
+                 (uint64_t)surface->bytes_per_pixel);
+            for (byte_index = 0U;
+                 byte_index < surface->bytes_per_pixel;
+                 ++byte_index) {
+                if (surface->address[surface_offset + (uint64_t)byte_index] !=
+                    (uint8_t)((witness_color >>
+                        ((uint32_t)byte_index * 8U)) & 0xffU)) {
+                    witness_verified = false;
+                }
+            }
+        }
+    }
+    witness_index = 0U;
+    for (witness_row = 0ULL; witness_row < witness_height; ++witness_row) {
+        for (witness_column = 0ULL;
+             witness_column < witness_width;
+             ++witness_column) {
+            surface_offset = ((witness_y + witness_row) * surface->pitch) +
+                ((witness_x + witness_column) *
+                 (uint64_t)surface->bytes_per_pixel);
+            for (byte_index = 0U;
+                 byte_index < surface->bytes_per_pixel;
+                 ++byte_index) {
+                surface->address[surface_offset + (uint64_t)byte_index] =
+                    witness_underlay[witness_index];
+                ++witness_index;
+            }
+        }
+    }
+    witness_index = 0U;
+    for (witness_row = 0ULL; witness_row < witness_height; ++witness_row) {
+        for (witness_column = 0ULL;
+             witness_column < witness_width;
+             ++witness_column) {
+            surface_offset = ((witness_y + witness_row) * surface->pitch) +
+                ((witness_x + witness_column) *
+                 (uint64_t)surface->bytes_per_pixel);
+            for (byte_index = 0U;
+                 byte_index < surface->bytes_per_pixel;
+                 ++byte_index) {
+                if (surface->address[surface_offset + (uint64_t)byte_index] !=
+                    witness_underlay[witness_index]) {
+                    witness_verified = false;
+                }
+                ++witness_index;
+            }
+        }
+    }
+    if (!witness_verified) {
         M61_POST(M61_POST_DESKTOP_WITNESS_FAILED);
         return;
     }
@@ -392,4 +474,5 @@ printf '%s\n' 'M61_POST_HANDOFF_ENTER=34'
 printf '%s\n' 'M61_POST_HANDOFF_RETURNED=35'
 printf '%s\n' 'M61_POST_SCANOUT_WITNESS_FAILED=36'
 printf '%s\n' 'M61_POST_SCANOUT_WITNESS_WRITTEN=37'
-printf '%s\n' 'M61_SCANOUT_WITNESS=48x48 magenta bottom-right through boring_framebuffer_get() alias'
+printf '%s\n' 'M61_SCANOUT_WITNESS=48x48 transient magenta bottom-right through boring_framebuffer_get() alias'
+printf '%s\n' 'M61_SCANOUT_WITNESS_RESTORED=YES'
