@@ -93,6 +93,14 @@ present_probe=d[d.index("static void m61_post37_present_return_probe("):d.index(
 assert "BORING_EVENT_QUERY" in present_probe and "boring_event_wait(&watch, 1U" in present_probe
 loop_probe=d[d.index("static void m61_post37_loop_reentry_probe("):d.index("static void present(")]
 assert loop_probe.count("BORING_EVENT_IPC") == 2 and "boring_event_wait(watches, 2U" in loop_probe
+layout_present=d[d.index("static void present_layout("):d.index("static bool present_damage(")]
+full_layout=("if (layout_damage.full) {\n"
+             "        present();\n"
+             "        display_managed_layout_complete(&layout_damage);\n"
+             "        return;\n"
+             "    }")
+assert full_layout in layout_present
+assert layout_present.index(full_layout) < layout_present.index("display_managed_layout_regions(")
 control_flow=d[d.index("static void control("):d.index("static void receive(")]
 assert control_flow.index("present_layout();") < control_flow.index("control_reply(endpoint, status, r->surface);") < control_flow.index("m61_post37_present_return_probe(endpoint);")
 main_flow=d[d.index("int boring_main(void) {"):]

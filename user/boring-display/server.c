@@ -87,6 +87,11 @@ static void present_layout(void) {
     struct boring_display_region regions[BORING_DISPLAY_LAYOUT_REGION_MAX];
     size_t count = 0U;
     size_t index;
+    if (layout_damage.full) {
+        present();
+        display_managed_layout_complete(&layout_damage);
+        return;
+    }
     if (!display_managed_layout_regions(&managed, &layout_damage, &core,
                                         regions, BORING_DISPLAY_LAYOUT_REGION_MAX,
                                         &count)) {
