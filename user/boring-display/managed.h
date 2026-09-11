@@ -21,12 +21,23 @@ uint32_t display_managed_control(struct display_managed *state,
                                  uint32_t endpoint, uint64_t peer_pid,
                                  const struct display_control *request);
 void display_managed_forget(struct display_managed *state, uint32_t surface);
+bool display_managed_damage_region(const struct display_managed *state,
+                                   const struct boring_display_core *core,
+                                   uint32_t surface,
+                                   const struct boring_display_region *client_damage,
+                                   struct boring_display_region *screen_damage);
 bool display_managed_compose(const struct display_managed *state,
                              const struct boring_display_core *core,
                              uint8_t *output, size_t size);
 bool display_managed_compose_scene(const struct display_managed *state,
                                    const struct boring_display_core *core,
                                    uint8_t *output, size_t size);
+bool display_managed_compose_scene_region(
+    const struct display_managed *state,
+    const struct boring_display_core *core,
+    uint8_t *output, size_t size,
+    const struct boring_display_region *region,
+    uint64_t *pixel_count);
 bool display_managed_compose_focus_borders(
     const struct display_managed *state,
     const struct boring_display_core *core,

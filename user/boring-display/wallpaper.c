@@ -35,6 +35,21 @@ static uint8_t glyph_row(char character, uint32_t row) {
     return glyph[row];
 }
 
+static bool arguments_valid(const struct boring_display_core *core,
+                            const uint8_t *output, size_t size) {
+    uint64_t minimum_stride;
+    if ((core == NULL) || (output == NULL) || (core->width == 0U) ||
+        (core->height == 0U) || (core->byte_size > (uint64_t)SIZE_MAX)) {
+        return false;
+    }
+    minimum_stride = (uint64_t)core->width *
+                     (uint64_t)BORING_DISPLAY_BYTES_PER_PIXEL;
+    return ((uint64_t)core->stride >= minimum_stride) &&
+           (core->byte_size ==
+            (uint64_t)core->stride * (uint64_t)core->height) &&
+           (size == (size_t)core->byte_size);
+}
+
 static bool pixel(const struct boring_display_core *core,
                   uint8_t *output, size_t size,
                   uint32_t x, uint32_t y,
@@ -42,13 +57,13 @@ static bool pixel(const struct boring_display_core *core,
     size_t row_offset;
     size_t pixel_offset;
 
-    if ((core == NULL) || (output == NULL) || (size < 4U) ||
+    if (!arguments_valid(core, output, size) ||
         (x >= core->width) || (y >= core->height) ||
         ((size_t)y > SIZE_MAX / (size_t)core->stride)) {
         return false;
     }
     row_offset = (size_t)y * (size_t)core->stride;
-    if (((size_t)x > (SIZE_MAX - row_offset) / 4U)) {
+    if ((size_t)x > (SIZE_MAX - row_offset) / 4U) {
         return false;
     }
     pixel_offset = row_offset + ((size_t)x * 4U);
@@ -62,13 +77,21 @@ static bool pixel(const struct boring_display_core *core,
     return true;
 }
 
-static bool background(const struct boring_display_core *core,
-                       uint8_t *output, size_t size) {
+static bool point_in_region(const struct boring_display_region *region,
+                            uint32_t x, uint32_t y) {
+    return (x >= region->x) && (y >= region->y) &&
+           ((uint64_t)x < (uint64_t)region->x + region->width) &&
+           ((uint64_t)y < (uint64_t)region->y + region->height);
+}
+
+static bool background_region(const struct boring_display_core *core,
+                              uint8_t *output, size_t size,
+                              const struct boring_display_region *region) {
     uint32_t y;
-    for (y = 0U; y < core->height; ++y) {
+    for (y = region->y; y < region->y + region->height; ++y) {
         uint32_t x;
         const uint32_t vertical_distance = y > 365U ? y - 365U : 365U - y;
-        for (x = 0U; x < core->width; ++x) {
+        for (x = region->x; x < region->x + region->width; ++x) {
             uint32_t glow = 0U;
             uint32_t noise;
             uint32_t hash = x * 0x45d9f3bU;
@@ -92,8 +115,9 @@ static bool background(const struct boring_display_core *core,
     return true;
 }
 
-static bool logo(const struct boring_display_core *core,
-                 uint8_t *output, size_t size) {
+static bool logo_region(const struct boring_display_core *core,
+                        uint8_t *output, size_t size,
+                        const struct boring_display_region *region) {
     static const char mark[] = "boring by design.";
     uint32_t x = 596U;
     size_t index;
@@ -111,14 +135,20 @@ static bool logo(const struct boring_display_core *core,
                         for (xx = 0U; xx < 2U; ++xx) {
                             const uint32_t pixel_x = x + column * 2U + xx;
                             const uint32_t pixel_y = 529U + row * 2U + yy;
-                            const bool ready = index < 6U ?
+                            bool ready = true;
+                            if (!point_in_region(region, pixel_x, pixel_y)) {
+                                continue;
+                            }
+                            if ((pixel_x >= core->width) ||
+                                (pixel_y >= core->height)) {
+                                continue;
+                            }
+                            ready = index < 6U ?
                                 pixel(core, output, size, pixel_x, pixel_y,
                                       98U, 96U, 100U) :
                                 pixel(core, output, size, pixel_x, pixel_y,
                                       76U, 75U, 80U);
-                            if (!ready) {
-                                return false;
-                            }
+                            if (!ready) { return false; }
                         }
                     }
                 }
@@ -129,20 +159,25 @@ static bool logo(const struct boring_display_core *core,
     return true;
 }
 
+bool display_wallpaper_compose_region(
+    const struct boring_display_core *core,
+    uint8_t *output, size_t size,
+    const struct boring_display_region *region) {
+    if (!arguments_valid(core, output, size) || (region == NULL) ||
+        (region->width == 0U) || (region->height == 0U) ||
+        (region->x >= core->width) || (region->y >= core->height) ||
+        (region->width > core->width - region->x) ||
+        (region->height > core->height - region->y)) {
+        return false;
+    }
+    return background_region(core, output, size, region) &&
+           logo_region(core, output, size, region);
+}
+
 bool display_wallpaper_compose(const struct boring_display_core *core,
                                uint8_t *output, size_t size) {
-    size_t required;
-
-    if ((core == NULL) || (output == NULL) || (size != core->byte_size) ||
-        (core->width != BORING_WALLPAPER_WIDTH) ||
-        (core->height != BORING_WALLPAPER_HEIGHT) ||
-        (core->stride < BORING_WALLPAPER_WIDTH * 4U) ||
-        ((size_t)core->height > SIZE_MAX / (size_t)core->stride)) {
-        return false;
-    }
-    required = (size_t)core->height * (size_t)core->stride;
-    if (required != size) {
-        return false;
-    }
-    return background(core, output, size) && logo(core, output, size);
+    struct boring_display_region region;
+    if (!arguments_valid(core, output, size)) { return false; }
+    region = (struct boring_display_region){0U, 0U, core->width, core->height};
+    return display_wallpaper_compose_region(core, output, size, &region);
 }

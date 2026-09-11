@@ -21,6 +21,9 @@ bool boring_client_open(struct boring_client *client);
 /* Call after drawing the first frame into pixels. */
 bool boring_client_publish(struct boring_client *client);
 bool boring_client_commit(struct boring_client *client);
+bool boring_client_commit_damage(struct boring_client *client,
+                                 uint32_t x, uint32_t y,
+                                 uint32_t width, uint32_t height);
 /* Call only after EVENT_WAIT reports WM input; HUP remains caller policy. */
 bool boring_client_receive(struct boring_client *client, struct boring_wm_message *event);
 bool boring_client_unregister(struct boring_client *client);
