@@ -463,10 +463,11 @@ def run():
             if not scene_damage or any(
                     pixels <= 0 or pixels >= 800 * 600 for pixels in scene_damage):
                 raise RuntimeError("M68 general scene damage is not independently bounded")
-            if not layout_damage or layout_damage[0] != 800 * 600 or any(
-                    pixels <= 0 or pixels > 800 * 600 for pixels in layout_damage):
+            if not layout_damage or any(
+                    pixels <= 0 or pixels >= 800 * 600 for pixels in layout_damage):
                 raise RuntimeError("M68 layout damage classification is inconsistent")
-            if any(pixels != 800 * 600 for pixels in full_damage):
+            if not full_damage or any(
+                    pixels != 800 * 600 for pixels in full_damage):
                 raise RuntimeError("M66 full-frame present accounting is inconsistent")
             classified_region_count = (len(cursor_damage) + len(focus_damage) +
                                        len(scene_damage) + len(layout_damage))
