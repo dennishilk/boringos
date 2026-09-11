@@ -31,6 +31,32 @@ build/m68-safe-higher-gop-host-test
 
 build/m68-layout-host-test
 
+"$HOST_CC" \
+    -Iuser/runtime/include -Ikernel/include \
+    $HOST_CFLAGS \
+    tests/m68-damage-matrix-host.c \
+    user/boring-display/core.c \
+    user/boring-display/managed.c \
+    user/boring-display/wallpaper.c \
+    -o build/m68-damage-matrix-host-test
+
+build/m68-damage-matrix-host-test
+
+"$HOST_CC" \
+    -Iuser/runtime/include -Ikernel/include \
+    $HOST_CFLAGS \
+    tests/m68-performance-host.c \
+    user/boring-display/core.c \
+    user/boring-display/managed.c \
+    user/boring-display/wallpaper.c \
+    user/boringwm/core.c \
+    -o build/m68-performance-host-test
+
+build/m68-performance-host-test | tee build/m68-performance-measurement.txt
+
+python3 tests/m68-production-visual-contract.py
+python3 tests/m68-damage-routing-contract.py
+
 # Existing production regressions that exercise the same sizing, mapping,
 # region-present, cursor-damage, focus-border, and WM boundaries.
 make \

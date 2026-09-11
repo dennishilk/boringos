@@ -239,6 +239,7 @@ static void run_layout_transition_test(void) {
     struct wm_core wm;
     struct boring_display_region regions[BORING_DISPLAY_LAYOUT_REGION_MAX];
     struct boring_display_region first_old;
+    struct boring_display_region second_old;
     struct boring_display_region first_final;
     struct boring_display_region second_final;
     uint8_t *surface_a = NULL;
@@ -343,6 +344,27 @@ static void run_layout_transition_test(void) {
     check(ready && matches_full_reference(&managed, &core, working, reference),
           "regional retile composes against final placements exactly");
     if (!ready) { goto cleanup; }
+
+    first_old = first_final;
+    second_old = second_final;
+    ready = wm_reorder(&wm, -1) &&
+        place_layout(&managed, &damage, &core, &wm) &&
+        layout_present(&managed, &damage, &core) &&
+        compose_layout(&managed, &damage, &core, working, regions, &count);
+    check(ready, "reorder retile uses bounded OLD/FINAL layout transaction");
+    if (!ready) { goto cleanup; }
+    first_final = rect_region(&wm_lookup(&wm, window_a)->rect);
+    second_final = rect_region(&wm_lookup(&wm, window_b)->rect);
+    check(regions_cover(regions, count, &first_old) &&
+          regions_cover(regions, count, &second_old),
+          "reorder damage covers both OLD z-order geometries");
+    check(regions_cover(regions, count, &first_final) &&
+          regions_cover(regions, count, &second_final),
+          "reorder damage covers both FINAL z-order geometries");
+    check(regions_bounded(regions, count, WIDTH, HEIGHT, true),
+          "reorder transition stays sub-frame and screen-bounded");
+    check(matches_full_reference(&managed, &core, working, reference),
+          "regional reorder has correct final z-order with no stale pixels");
 
     ready = unbind_window(&managed, &damage, &core,
                           surface_b_token, window_b) &&
