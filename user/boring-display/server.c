@@ -20,6 +20,20 @@ static bool m61_post37_loop_reentry_pending;
 #endif
 int boring_main(void);
 
+#if defined(BORING_M66_USB_HUB_MOUSE)
+static void m66_damage_witness(const char *kind, uint32_t width, uint32_t height) {
+    char text[21];
+    const size_t used = desktop_number(text, 0U,
+                                       (uint64_t)width * (uint64_t)height);
+    text[used] = '\0';
+    desktop_say("m66-damage: ");
+    desktop_say(kind);
+    desktop_say(" pixels=");
+    desktop_say(text);
+    desktop_say("\n");
+}
+#endif
+
 #if defined(BORING_M61_PHYSICAL_BREADCRUMBS)
 static void m61_post37_present_return_probe(uint32_t endpoint) {
     struct boring_event_watch watch = {BORING_EVENT_IPC, endpoint, 0U, 0U, 0ULL};
@@ -43,6 +57,9 @@ static void present(void) {
         (boring_framebuffer_present(composition) != 0L)) {
         desktop_fail("display present");
     }
+#if defined(BORING_M66_USB_HUB_MOUSE)
+    m66_damage_witness("full", core.width, core.height);
+#endif
 }
 
 static bool present_damage(uint32_t surface,
@@ -71,6 +88,9 @@ static bool present_damage(uint32_t surface,
                                            screen_damage.height) != 0L)) {
         desktop_fail("display damage present");
     }
+#if defined(BORING_M66_USB_HUB_MOUSE)
+    m66_damage_witness("scene", screen_damage.width, screen_damage.height);
+#endif
     (void)composed_pixels;
     return true;
 }
@@ -102,6 +122,9 @@ static void present_focus_borders(void) {
                                               region->width, region->height) != 0L) {
             desktop_fail("display focus border present");
         }
+#if defined(BORING_M66_USB_HUB_MOUSE)
+        m66_damage_witness("focus", region->width, region->height);
+#endif
     }
 }
 
@@ -122,6 +145,10 @@ static void present_cursor_move(int32_t dx, int32_t dy) {
                                            new_region.width, new_region.height) != 0L)) {
         desktop_fail("display cursor damage present");
     }
+#if defined(BORING_M66_USB_HUB_MOUSE)
+    m66_damage_witness("cursor", old_region.width, old_region.height);
+    m66_damage_witness("cursor", new_region.width, new_region.height);
+#endif
 }
 
 static void forget_peer(uint32_t endpoint) {
