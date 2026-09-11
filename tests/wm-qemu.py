@@ -142,7 +142,10 @@ def run(mode):
                 witness(f"wm-client-{client}: WM gone; app and display survived")
         else:
             capture("initial-layout", initial)
+            focus_ready = log().count("display: focus frame ready")
             chord("j"); focused = state([3, 4, 5], 3, initial["frame"])
+            wait(lambda output: output.count("display: focus frame ready") > focus_ready,
+                 "deferred focus frame ready")
             capture("focus-changed", focused)
             chord("j"); next_focus = state([3, 4, 5], 4, focused["frame"])
             chord("k"); back = state([3, 4, 5], 3, next_focus["frame"])

@@ -273,6 +273,10 @@ def run():
             "live_pids": live, "terminals": terminals,
             "cr3": {str(pid): cr3[pid] for pid in live}}, indent=2) + "\n")
 
+    def damage_values(kind):
+        return [int(value) for value in re.findall(
+            rf"m66-damage: {kind} pixels=(\d+)", text())]
+
     try:
         witness("m37-desktop: real BoringFS root mounted")
         witness("m37-desktop: PID 1 scheduler task ready; desktop children must come from BoringFS")
@@ -291,6 +295,7 @@ def run():
             witness("display: M66 USB hub mouse movement reached Ring3 desktop")
             witness("display: M66 USB hub left button down reached Ring3 desktop")
             witness("display: M66 USB hub left button up reached Ring3 desktop")
+            witness("wm: frame ready")
         else:
             witness("m54-desktop: q35 i8042-free xHCI USB keyboard/tablet path online")
             # Baseline is decoded by M53 without producing a synthetic move;
@@ -303,8 +308,29 @@ def run():
             witness("display: M54 USB left button down reached Ring3 desktop")
             witness("display: M54 USB left button up reached Ring3 desktop")
 
+        if HUB_MOUSE:
+            first_layout_before = len(damage_values("layout"))
+            first_cursor_before = len(damage_values("cursor"))
+            first_focus_before = len(damage_values("focus"))
+            first_scene_before = len(damage_values("scene"))
+            first_full_before = len(damage_values("full"))
+            first_frame_ready_before = text().count("wm: frame ready")
         key("ret", super_key=True)
         witness("wm: Super+Return spawned /bin/boring-terminal")
+        if HUB_MOUSE:
+            witness("wm: frame ready", first_frame_ready_before + 1)
+            first_layout = damage_values("layout")[first_layout_before:]
+            first_scene = damage_values("scene")[first_scene_before:]
+            if not first_layout or any(
+                    pixels <= 0 or pixels >= 800 * 600 for pixels in first_layout):
+                raise RuntimeError("M66 first Win+Return layout damage is not bounded")
+            if any(pixels <= 0 or pixels >= 800 * 600 for pixels in first_scene):
+                raise RuntimeError("M66 first Win+Return scene damage is not bounded")
+            if len(damage_values("full")) != first_full_before:
+                raise RuntimeError("M66 first Win+Return triggered full-frame present")
+            if len(damage_values("cursor")) != first_cursor_before or \
+                    len(damage_values("focus")) != first_focus_before:
+                raise RuntimeError("M66 first Win+Return changed cursor/focus accounting")
         witness("boring-spawn: VFS executable source /bin/boring-terminal")
         witness("boring-terminal: Ring3 managed client + PTY + boring-shell ready")
         witness("boring-spawn: VFS executable source /bin/boring-shell")
@@ -332,13 +358,30 @@ def run():
             focus_before = text().count("wm: action focus")
             focus_ready = "display: focus frame ready"
             focus_ready_before = text().count(focus_ready)
+            cursor_before = len(damage_values("cursor"))
+            scene_before = len(damage_values("scene"))
+            layout_before = len(damage_values("layout"))
+            full_before = len(damage_values("full"))
             started = time.monotonic()
             for index in range(16):
                 usb_inject([usb_rel("x", 1 if index % 2 == 0 else -1)])
                 witness(movement, movement_before + index + 1)
             elapsed = time.monotonic() - started
+            burst_cursor = damage_values("cursor")[cursor_before:]
+            if len(burst_cursor) != 32 or sum(burst_cursor) != 2304:
+                raise RuntimeError("M66 pure cursor bounded damage changed")
+            if len(damage_values("scene")) != scene_before:
+                raise RuntimeError("M66 pure cursor movement triggered scene damage")
+            if len(damage_values("layout")) != layout_before:
+                raise RuntimeError("M66 pure cursor movement triggered layout damage")
+            if len(damage_values("full")) != full_before:
+                raise RuntimeError("M66 pure cursor movement triggered full-frame present")
             witness("wm: action focus", focus_before + 1)
             witness(focus_ready, focus_ready_before + 1)
+            if len(damage_values("full")) != full_before:
+                raise RuntimeError("M66 pointer focus triggered synchronous full-frame present")
+            if len(damage_values("layout")) != layout_before:
+                raise RuntimeError("M66 pointer focus triggered layout damage")
             pointer_focus = latest(2, dual["frame"])
             if pointer_focus["focus"] == dual["focus"]:
                 raise RuntimeError("real USB mouse movement did not change pointer focus")
@@ -354,16 +397,35 @@ def run():
                 "pointer_focus_changed": True,
             }, indent=2) + "\n")
             focus_ready_before += 1
+            focus_full_before = len(damage_values("full"))
+            focus_scene_before = len(damage_values("scene"))
+            focus_layout_before = len(damage_values("layout"))
             key("j", super_key=True)
             witness(focus_ready, focus_ready_before + 1)
+            if len(damage_values("full")) != focus_full_before:
+                raise RuntimeError("M66 keyboard focus restore triggered full-frame present")
+            if len(damage_values("scene")) != focus_scene_before:
+                raise RuntimeError("M66 keyboard focus restore triggered scene damage")
+            if len(damage_values("layout")) != focus_layout_before:
+                raise RuntimeError("M66 keyboard focus restore triggered layout damage")
             restored = latest(2, pointer_focus["frame"])
             if restored["focus"] != dual["focus"]:
                 raise RuntimeError("keyboard focus restore after pointer burst failed")
             switch_anchor = restored
             focus_ready_before += 1
+        if HUB_MOUSE:
+            focus_full_before = len(damage_values("full"))
+            focus_scene_before = len(damage_values("scene"))
+            focus_layout_before = len(damage_values("layout"))
         key("j", super_key=True)
         if HUB_MOUSE:
             witness(focus_ready, focus_ready_before + 1)
+            if len(damage_values("full")) != focus_full_before:
+                raise RuntimeError("M66 keyboard focus switch triggered full-frame present")
+            if len(damage_values("scene")) != focus_scene_before:
+                raise RuntimeError("M66 keyboard focus switch triggered scene damage")
+            if len(damage_values("layout")) != focus_layout_before:
+                raise RuntimeError("M66 keyboard focus switch triggered layout damage")
         switched = latest(2, switch_anchor["frame"])
         type_text("terminala")
         settled_capture("dual-focused-a", switched, "dual-a")
@@ -389,11 +451,47 @@ def run():
             stats = re.search(
                 r"m66-desktop: framebuffer full/region/pixels=(\d+)/(\d+)/(\d+)",
                 text())
-            if (stats is None or int(stats.group(1)) < 1 or
-                    int(stats.group(2)) != 58 or
-                    int(stats.group(3)) - int(stats.group(1)) * 800 * 600 != 37656):
+            cursor_damage = damage_values("cursor")
+            focus_damage = damage_values("focus")
+            scene_damage = damage_values("scene")
+            layout_damage = damage_values("layout")
+            full_damage = damage_values("full")
+            if (len(cursor_damage) + len(focus_damage) != 58 or
+                    sum(cursor_damage) + sum(focus_damage) != 37656):
                 raise RuntimeError(
                     "missing exact M66 cursor/focus region-present accounting")
+            if not scene_damage or any(
+                    pixels <= 0 or pixels >= 800 * 600 for pixels in scene_damage):
+                raise RuntimeError("M68 general scene damage is not independently bounded")
+            if not layout_damage or any(
+                    pixels <= 0 or pixels >= 800 * 600 for pixels in layout_damage):
+                raise RuntimeError("M68 layout damage classification is inconsistent")
+            if not full_damage or any(
+                    pixels != 800 * 600 for pixels in full_damage):
+                raise RuntimeError("M66 full-frame present accounting is inconsistent")
+            classified_region_count = (len(cursor_damage) + len(focus_damage) +
+                                       len(scene_damage) + len(layout_damage))
+            classified_pixels = (sum(full_damage) + sum(cursor_damage) +
+                                 sum(focus_damage) + sum(scene_damage) +
+                                 sum(layout_damage))
+            if (stats is None or int(stats.group(1)) != len(full_damage) or
+                    int(stats.group(2)) != classified_region_count or
+                    int(stats.group(3)) != classified_pixels):
+                raise RuntimeError("M66 framebuffer presents escaped damage classification")
+            (OUT / "damage-accounting.json").write_text(json.dumps({
+                "cursor": {"presents": len(cursor_damage),
+                           "pixels": sum(cursor_damage)},
+                "focus": {"presents": len(focus_damage),
+                          "pixels": sum(focus_damage)},
+                "general_scene": {"presents": len(scene_damage),
+                                  "pixels": sum(scene_damage),
+                                  "max_pixels": max(scene_damage)},
+                "layout": {"presents": len(layout_damage),
+                           "pixels": sum(layout_damage),
+                           "max_pixels": max(layout_damage)},
+                "full_frame": {"presents": len(full_damage),
+                               "pixels": sum(full_damage)},
+            }, indent=2) + "\n")
             witness("M66 USB-hub mouse Ring3 desktop acceptance passed.")
         witness("M37 native desktop session startup acceptance passed.")
         label = ("M66 USB-hub mouse Ring3 desktop SUCCESS"

@@ -67,7 +67,22 @@ assert "!m61_runtime_hid_armed" in post37
 assert "m61_runtime_hid_highest >=\n         (uint8_t)M61_RUNTIME_HID_POST_A_SERVICE_LOOP" in post37
 assert "m61_post37_observed & bit" in post37 and "m61_post37_observed | bit" in post37
 assert post37.count("x86_64_out8(")==1
-assert "M61_POST(M61_POST_DESKTOP_WITNESS_WRITTEN);\n    boring_m61_runtime_hid_arm();\n    boring_m61_post37_witness((uint8_t)M61_POST37_ARM_RETURNED);" in w
+witness=w[w.index("handoff_wrapper = r'''"):w.index("text = replace_once(\n    text,\n    \"enum boring_framebuffer_user_result m61_post_boring_framebuffer_user_present",w.index("handoff_wrapper = r'''"))]
+for token in (
+    "static uint8_t witness_underlay[48U * 48U * 4U];",
+    "witness_underlay[witness_index] =",
+    "boring_graphics_fill_rect(surface, witness_x, witness_y,",
+    "surface->address[surface_offset + (uint64_t)byte_index] =\n                    witness_underlay[witness_index];",
+    "if (!witness_verified)",
+    "M61_POST(M61_POST_DESKTOP_WITNESS_WRITTEN);",
+    "boring_m61_runtime_hid_arm();",
+    "boring_m61_post37_witness((uint8_t)M61_POST37_ARM_RETURNED);",
+):
+    assert token in witness, token
+assert witness.index("witness_underlay[witness_index] =") < witness.index("boring_graphics_fill_rect(surface, witness_x, witness_y,")
+assert witness.index("boring_graphics_fill_rect(surface, witness_x, witness_y,") < witness.index("surface->address[surface_offset + (uint64_t)byte_index] =\n                    witness_underlay[witness_index];")
+assert witness.index("surface->address[surface_offset + (uint64_t)byte_index] =\n                    witness_underlay[witness_index];") < witness.index("M61_POST(M61_POST_DESKTOP_WITNESS_WRITTEN);")
+assert "M61_SCANOUT_WITNESS_RESTORED=YES" in w
 fb_return=t[t.index("enum boring_framebuffer_user_result __wrap_boring_framebuffer_user_present("):t.index("static uint8_t framebuffer_fault_post_code(")]
 assert fb_return.index("boring_boot_console_desktop_handoff();") < fb_return.index("M61_POST37_FRAMEBUFFER_PRESENT_RETURNED") < fb_return.index("return result;",fb_return.index("M61_POST37_FRAMEBUFFER_PRESENT_RETURNED"))
 assert "-DBORING_M61_PHYSICAL_BREADCRUMBS=1" in b
@@ -93,8 +108,16 @@ present_probe=d[d.index("static void m61_post37_present_return_probe("):d.index(
 assert "BORING_EVENT_QUERY" in present_probe and "boring_event_wait(&watch, 1U" in present_probe
 loop_probe=d[d.index("static void m61_post37_loop_reentry_probe("):d.index("static void present(")]
 assert loop_probe.count("BORING_EVENT_IPC") == 2 and "boring_event_wait(watches, 2U" in loop_probe
+layout_present=d[d.index("static void present_layout("):d.index("static bool present_damage(")]
+full_layout=("if (layout_damage.full) {\n"
+             "        present();\n"
+             "        display_managed_layout_complete(&layout_damage);\n"
+             "        return;\n"
+             "    }")
+assert full_layout in layout_present
+assert layout_present.index(full_layout) < layout_present.index("display_managed_layout_regions(")
 control_flow=d[d.index("static void control("):d.index("static void receive(")]
-assert control_flow.index("present();") < control_flow.index("control_reply(endpoint, status, r->surface);") < control_flow.index("m61_post37_present_return_probe(endpoint);")
+assert control_flow.index("present_layout();") < control_flow.index("control_reply(endpoint, status, r->surface);") < control_flow.index("m61_post37_present_return_probe(endpoint);")
 main_flow=d[d.index("int boring_main(void) {"):]
 assert main_flow.index("m61_post37_loop_reentry_probe((uint32_t)listener);") < main_flow.index("boring_event_wait(watches, count, flags)")
 

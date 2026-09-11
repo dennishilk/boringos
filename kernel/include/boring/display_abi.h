@@ -20,6 +20,7 @@
 #define BORING_DISPLAY_REQUEST_CREATE 1U
 #define BORING_DISPLAY_REQUEST_COMMIT 2U
 #define BORING_DISPLAY_REQUEST_DESTROY 3U
+#define BORING_DISPLAY_REQUEST_COMMIT_DAMAGE 4U
 
 #define BORING_DISPLAY_STATUS_OK 0U
 #define BORING_DISPLAY_STATUS_INVALID 1U
@@ -47,6 +48,21 @@ struct boring_display_request {
     uint64_t byte_size;
 };
 
+/* Same 40-byte wire envelope as boring_display_request.  This leaves the
+ * established CREATE/COMMIT/DESTROY layout untouched while giving the new
+ * bounded operation explicit client-local rectangle names. */
+struct boring_display_damage_request {
+    uint32_t version;
+    uint32_t type;
+    uint32_t surface_token;
+    uint32_t x;
+    uint32_t y;
+    uint32_t width;
+    uint32_t height;
+    uint32_t reserved;
+    uint64_t reserved2;
+};
+
 struct boring_display_reply {
     uint32_t version;
     uint32_t status;
@@ -58,6 +74,8 @@ _Static_assert(sizeof(struct boring_display_scanout_info) == 24U,
                "M34 scanout ABI must remain 24 bytes");
 _Static_assert(sizeof(struct boring_display_request) == 40U,
                "M34 request ABI must remain 40 bytes");
+_Static_assert(sizeof(struct boring_display_damage_request) == 40U,
+               "damage request ABI must remain 40 bytes");
 _Static_assert(sizeof(struct boring_display_reply) == 16U,
                "M34 reply ABI must remain 16 bytes");
 

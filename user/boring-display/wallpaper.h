@@ -7,5 +7,9 @@
 
 bool display_wallpaper_compose(const struct boring_display_core *core,
                                uint8_t *output, size_t size);
+bool display_wallpaper_compose_region(
+    const struct boring_display_core *core,
+    uint8_t *output, size_t size,
+    const struct boring_display_region *region);
 
 #endif

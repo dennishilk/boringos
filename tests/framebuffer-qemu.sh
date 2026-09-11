@@ -70,7 +70,8 @@ make -C "${ROOT}" boringfs-fixture boringfsck user-boringfetch user-cat
     "${ROOT}/build/user/cat.elf" >/dev/null
 "${ROOT}/build/boringfsck" "${IMAGE}" | grep -Fqx 'Status: VALID' ||
     fail 'seeded framebuffer acceptance image is invalid'
-make -C "${ROOT}" TEST_MODE=persistent-root
+make -C "${ROOT}" TEST_MODE=persistent-root \
+    TEST_CPPFLAGS=-DBORING_BOOT_DASHBOARD_DIAGNOSTIC=1
 
 mkfifo "${PIPE_BASE}.in" "${PIPE_BASE}.out"
 QMP_BACKEND=$(sh "${ROOT}/tests/qmp-backend.sh" "${QMP_SOCKET}")
