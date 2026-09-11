@@ -136,6 +136,9 @@ jobs:
           grep -Fqx 'target_request=1920x1080x32' "$proof"
           grep -Fqx 'known_safe_explicit_fallback=800x600x32' "$proof"
           grep -Fqx 'accepted_m61_config_preserved=YES' "$proof"
+          grep -Fqx 'successful_boot_dashboard_visible=NO' "$proof"
+          grep -Fqx 'graphical_boot_console_diagnostic=disabled' "$proof"
+          grep -Fqx 'magenta_scanout_witness_wrapper=absent' "$proof"
           grep -Fqx 'physical_support_proven=NO_PENDING_CTHULHU' "$proof"
           grep -Fqx '3440x1440_attempted=NO' "$proof"
           test "$(grep -Fc '    resolution: 1920x1080x32' build/m68-safe-higher-gop/embedded-limine.conf)" -eq 1

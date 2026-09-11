@@ -36,6 +36,17 @@ restore_config() {
 }
 trap restore_config EXIT INT TERM
 
+# The preceding M61 handoff bisector proves the diagnostic build. Rebuild the
+# same accepted runtime without successful-boot graphics or the generated
+# scanout-witness wrapper before constructing the single physical candidate.
+M61_EXTRA_TEST_CPPFLAGS='-DBORING_M68_PHYSICAL_RELEASE=1' \
+    sh tests/m61-build.sh
+nm build/kernel.elf | grep -Fq 'boring_m68_physical_release_ui_enabled'
+if nm build/kernel.elf | grep -Fq '__wrap_boring_boot_console_desktop_handoff'; then
+    echo 'M68 candidate retained the diagnostic scanout-witness wrapper' >&2
+    exit 1
+fi
+
 # Reuse the accepted M61 image constructor without changing its source contract:
 # substitute only the staged Limine config inside this process, then restore it.
 cp "$HIGHER_CONFIG" "$BASE_CONFIG"
@@ -85,6 +96,9 @@ printf '%s  %s\n' "$raw_sha" "$(basename "$NEW_IMAGE")" > "$NEW_IMAGE.sha256"
     printf 'known_safe_explicit_fallback=800x600x32\n'
     printf 'limine_unavailable_request_fallback=preserved\n'
     printf 'accepted_m61_config_preserved=YES\n'
+    printf 'successful_boot_dashboard_visible=NO\n'
+    printf 'graphical_boot_console_diagnostic=disabled\n'
+    printf 'magenta_scanout_witness_wrapper=absent\n'
     printf 'physical_support_proven=NO_PENDING_CTHULHU\n'
     printf 'raw_filename=%s\n' "$(basename "$NEW_IMAGE")"
     printf 'raw_size=%s\n' "$raw_size"

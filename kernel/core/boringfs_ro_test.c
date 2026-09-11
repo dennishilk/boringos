@@ -476,7 +476,8 @@ void boringfs_ro_test_run(void) {
                         "BoringFS writable mount ready.\n\n" :
                         "BoringFS read-only mount ready.\n\n");
 
-#if BORING_TEST_MODE == 15
+#if (BORING_TEST_MODE == 15) && \
+    defined(BORING_BOOT_DASHBOARD_DIAGNOSTIC)
     {
         const struct boring_framebuffer *const surface = boring_framebuffer_get();
         struct pmm_stats memory_stats;
