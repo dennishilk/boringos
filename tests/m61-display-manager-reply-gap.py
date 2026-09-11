@@ -122,6 +122,7 @@ if not (
     fail("probe-auth witness is not after successful query copy-back")
 
 control = function_body(DISPLAY, "static void control(")
+control_search = re.sub(r"\s+", " ", control)
 control_sequence = (
     "display_control_validate(r, sizeof(*r))",
     "boring_endpoint_peer(endpoint)",
@@ -134,7 +135,7 @@ control_sequence = (
     "boring_ipc_close((uint32_t)probe)",
     "control_reply(endpoint, status, r->surface)",
 )
-positions = [control.find(token) for token in control_sequence]
+positions = [control_search.find(token) for token in control_sequence]
 if any(position < 0 for position in positions) or positions != sorted(positions):
     fail(f"display manager authentication/reply order changed: {positions!r}")
 
