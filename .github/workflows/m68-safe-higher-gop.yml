@@ -13,6 +13,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Higher GOP deterministic geometry and accepted mouse-present regressions
         run: sh tests/m68-safe-higher-gop-host.sh
 
@@ -21,6 +23,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Install generic QEMU dependencies
         run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 xorriso
       - name: Current general regression suite
@@ -31,6 +35,8 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Install focused QEMU dependencies
         run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 xorriso
       - name: Multi-xHCI host/model acceptance
@@ -100,6 +106,14 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source provenance
+        run: |
+          expected='${{ github.event.pull_request.head.sha || github.sha }}'
+          actual=$(git rev-parse HEAD)
+          test "$actual" = "$expected"
+          printf 'EXACT_SOURCE_HEAD=%s\n' "$actual"
       - name: Install physical image dependencies
         run: |
           sudo apt-get update
@@ -130,20 +144,22 @@ jobs:
       - name: Record exact physical candidate identity
         id: candidate
         run: |
+          head=$(git rev-parse HEAD)
           raw_size=$(stat -c %s build/boringos-m68-safe-higher-gop.img)
           raw_sha256=$(awk '{print $1}' build/boringos-m68-safe-higher-gop.img.sha256)
           xz_sha256=$(sha256sum build/boringos-m68-safe-higher-gop.img.xz | awk '{print $1}')
           tree=$(git rev-parse HEAD^{tree})
+          echo "head=$head" >> "$GITHUB_OUTPUT"
           echo "raw_size=$raw_size" >> "$GITHUB_OUTPUT"
           echo "raw_sha256=$raw_sha256" >> "$GITHUB_OUTPUT"
           echo "xz_sha256=$xz_sha256" >> "$GITHUB_OUTPUT"
           echo "tree=$tree" >> "$GITHUB_OUTPUT"
           printf 'HEAD=%s\nTREE=%s\nRAW=%s\nRAW_SHA256=%s\nXZ_SHA256=%s\n' \
-            "$GITHUB_SHA" "$tree" "$raw_size" "$raw_sha256" "$xz_sha256"
+            "$head" "$tree" "$raw_size" "$raw_sha256" "$xz_sha256"
       - name: Publish one physical candidate and proof
         uses: actions/upload-artifact@v4
         with:
-          name: m68-safe-higher-gop-${{ github.sha }}-${{ steps.candidate.outputs.raw_size }}-${{ steps.candidate.outputs.raw_sha256 }}
+          name: m68-safe-higher-gop-${{ steps.candidate.outputs.head }}-${{ steps.candidate.outputs.raw_size }}-${{ steps.candidate.outputs.raw_sha256 }}
           path: |
             build/boringos-m68-safe-higher-gop.img.xz
             build/boringos-m68-safe-higher-gop.img.sha256
