@@ -21,16 +21,36 @@ static bool m61_post37_loop_reentry_pending;
 int boring_main(void);
 
 #if defined(BORING_M66_USB_HUB_MOUSE)
+#define M66_DAMAGE_WITNESS_CAPACITY 64U
+static bool m66_damage_append(char *record, size_t capacity, size_t *used,
+                              const char *text) {
+    size_t index = 0U;
+    while (text[index] != '\0') {
+        if ((*used + 1U) >= capacity) { return false; }
+        record[*used] = text[index];
+        *used += 1U;
+        ++index;
+    }
+    return true;
+}
+
 static void m66_damage_witness(const char *kind, uint32_t width, uint32_t height) {
-    char text[21];
-    const size_t used = desktop_number(text, 0U,
-                                       (uint64_t)width * (uint64_t)height);
-    text[used] = '\0';
-    desktop_say("m66-damage: ");
-    desktop_say(kind);
-    desktop_say(" pixels=");
-    desktop_say(text);
-    desktop_say("\n");
+    char record[M66_DAMAGE_WITNESS_CAPACITY];
+    char number[21];
+    size_t used = 0U;
+    const size_t number_used = desktop_number(
+        number, 0U, (uint64_t)width * (uint64_t)height);
+    number[number_used] = '\0';
+    if (!m66_damage_append(record, sizeof(record), &used, "m66-damage: ") ||
+        !m66_damage_append(record, sizeof(record), &used, kind) ||
+        !m66_damage_append(record, sizeof(record), &used, " pixels=") ||
+        !m66_damage_append(record, sizeof(record), &used, number) ||
+        (used + 2U > sizeof(record))) {
+        desktop_fail("M66 damage witness overflow");
+    }
+    record[used++] = '\n';
+    record[used] = '\0';
+    desktop_say(record);
 }
 #endif
 
