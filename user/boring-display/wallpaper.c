@@ -50,31 +50,16 @@ static bool arguments_valid(const struct boring_display_core *core,
            (size == (size_t)core->byte_size);
 }
 
-static bool pixel(const struct boring_display_core *core,
-                  uint8_t *output, size_t size,
-                  uint32_t x, uint32_t y,
-                  uint8_t red, uint8_t green, uint8_t blue) {
-    size_t row_offset;
-    size_t pixel_offset;
-
-    if (!arguments_valid(core, output, size) ||
-        (x >= core->width) || (y >= core->height) ||
-        ((size_t)y > SIZE_MAX / (size_t)core->stride)) {
-        return false;
-    }
-    row_offset = (size_t)y * (size_t)core->stride;
-    if ((size_t)x > (SIZE_MAX - row_offset) / 4U) {
-        return false;
-    }
-    pixel_offset = row_offset + ((size_t)x * 4U);
-    if (pixel_offset > size - 4U) {
-        return false;
-    }
+static void pixel_unchecked(const struct boring_display_core *core,
+                            uint8_t *output,
+                            uint32_t x, uint32_t y,
+                            uint8_t red, uint8_t green, uint8_t blue) {
+    const size_t pixel_offset =
+        (size_t)y * (size_t)core->stride + (size_t)x * 4U;
     output[pixel_offset] = blue;
     output[pixel_offset + 1U] = green;
     output[pixel_offset + 2U] = red;
     output[pixel_offset + 3U] = 0U;
-    return true;
 }
 
 static bool point_in_region(const struct boring_display_region *region,
@@ -84,8 +69,8 @@ static bool point_in_region(const struct boring_display_region *region,
            ((uint64_t)y < (uint64_t)region->y + region->height);
 }
 
-static bool background_region(const struct boring_display_core *core,
-                              uint8_t *output, size_t size,
+static void background_region(const struct boring_display_core *core,
+                              uint8_t *output,
                               const struct boring_display_region *region) {
     uint32_t y;
     for (y = region->y; y < region->y + region->height; ++y) {
@@ -104,19 +89,16 @@ static bool background_region(const struct boring_display_core *core,
             noise = (hash >> 29U) & 3U;
             if ((hash & 0x1fffU) == 0U) { noise += 9U; }
             if (glow + noise > 29U) { noise = 29U - glow; }
-            if (!pixel(core, output, size, x, y,
-                       (uint8_t)(glow + noise),
-                       (uint8_t)(glow + noise + 1U),
-                       (uint8_t)(glow + noise + 3U))) {
-                return false;
-            }
+            pixel_unchecked(core, output, x, y,
+                            (uint8_t)(glow + noise),
+                            (uint8_t)(glow + noise + 1U),
+                            (uint8_t)(glow + noise + 3U));
         }
     }
-    return true;
 }
 
-static bool logo_region(const struct boring_display_core *core,
-                        uint8_t *output, size_t size,
+static void logo_region(const struct boring_display_core *core,
+                        uint8_t *output,
                         const struct boring_display_region *region) {
     static const char mark[] = "boring by design.";
     uint32_t x = 596U;
@@ -135,7 +117,6 @@ static bool logo_region(const struct boring_display_core *core,
                         for (xx = 0U; xx < 2U; ++xx) {
                             const uint32_t pixel_x = x + column * 2U + xx;
                             const uint32_t pixel_y = 529U + row * 2U + yy;
-                            bool ready = true;
                             if (!point_in_region(region, pixel_x, pixel_y)) {
                                 continue;
                             }
@@ -143,12 +124,13 @@ static bool logo_region(const struct boring_display_core *core,
                                 (pixel_y >= core->height)) {
                                 continue;
                             }
-                            ready = index < 6U ?
-                                pixel(core, output, size, pixel_x, pixel_y,
-                                      98U, 96U, 100U) :
-                                pixel(core, output, size, pixel_x, pixel_y,
-                                      76U, 75U, 80U);
-                            if (!ready) { return false; }
+                            if (index < 6U) {
+                                pixel_unchecked(core, output, pixel_x, pixel_y,
+                                                98U, 96U, 100U);
+                            } else {
+                                pixel_unchecked(core, output, pixel_x, pixel_y,
+                                                76U, 75U, 80U);
+                            }
                         }
                     }
                 }
@@ -156,7 +138,6 @@ static bool logo_region(const struct boring_display_core *core,
         }
         x += character == ' ' ? 8U : 12U;
     }
-    return true;
 }
 
 bool display_wallpaper_compose_region(
@@ -170,8 +151,9 @@ bool display_wallpaper_compose_region(
         (region->height > core->height - region->y)) {
         return false;
     }
-    return background_region(core, output, size, region) &&
-           logo_region(core, output, size, region);
+    background_region(core, output, region);
+    logo_region(core, output, region);
+    return true;
 }
 
 bool display_wallpaper_compose(const struct boring_display_core *core,
