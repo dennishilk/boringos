@@ -50,3 +50,20 @@ If a physical Cthulhu boot exposes a narrow correctness failure, that failure mu
 Native 3440x1440, native GPU drivers, broad GOP mode enumeration, generic M69 present optimization, and M67 typematic work are deliberately deferred.
 
 **3440x1440 WAS NOT ATTEMPTED.**
+
+## Later physical result and follow-up
+
+The preceding audit describes the initial candidate boundary. Subsequent
+physical testing on Cthulhu confirmed a working 1920x1080 desktop with
+responsive mouse input. Opening several terminal windows remained noticeably
+demanding. That runtime is preserved at
+`freeze/m68-1080p-physical-2026-09-16` (`7a9594508bc02b6a5c8d5d13c2ed5c858c9cb54e`).
+The M68 branch includes bounded client/layout damage, while the remaining
+physical cost motivated a subsequent wallpaper loop optimization. These
+changes do not alter the frozen M61 USB/HID baseline or its 800x600 boot entry.
+
+The branch then removed per-pixel validation inside the wallpaper loops at
+`e5480ff7396cb21ffbc364aae8855e558e4858a1`. The full and regional
+wallpaper paths are covered by the padded-pitch damage matrix and a sanitized
+host run. CI passed at that commit. The physical result above applies to the
+freeze revision and must not be attributed to the subsequent optimization.

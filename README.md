@@ -13,7 +13,7 @@ It is **not Linux**, **not BSD**, and does not use another operating-system kern
 
 ```text
 BoringKernel 0.0.62-dev
-M66 physical USB/HID baseline + physically proven low-latency cursor/focus path
+M68 1920x1080 physical desktop + bounded display damage
 ```
 
 The current physical foundation is proven on the real **Cthulhu** workstation. BoringOS boots its native writable USB system, owns the relevant xHCI controllers independently, enumerates the real Genesys Logic USB hub, accepts the downstream ROCCAT mouse through the native xHCI/HID path, keeps the direct Holtek USB keyboard working, and runs the native BoringWM desktop with BoringTerminal, BoringEdit and BoringFiles.
@@ -49,6 +49,12 @@ SHA256: 6ac9e6096849ea4e906f0c70a322a8599de163bec34499bdd8794f6b202ce26f
 ```
 
 QEMU remains the automated regression platform, but the USB topology, hub-connected mouse, pointer focus and the low-latency cursor/focus presentation path are also physically proven on Cthulhu.
+
+### M68 higher resolution and display damage
+
+The M68 boot entry prefers `1920x1080x32` and retains a selectable `800x600x32` fallback. The accepted M61 boot configuration remains separate and unchanged. On physical Cthulhu, the 1920x1080 desktop, keyboard and mouse worked; cursor responsiveness remained good. Opening several terminal windows was still noticeably demanding. The physical reference is `freeze/m68-1080p-physical-2026-09-16` at `7a9594508bc02b6a5c8d5d13c2ed5c858c9cb54e`.
+
+M68 adds bounded composition and framebuffer presents for client damage and window-layout changes. Legacy full `COMMIT` requests still use a full present. The subsequent wallpaper loop optimization at `e5480ff7396cb21ffbc364aae8855e558e4858a1` passed automated regressions; a separate physical result for that exact revision is not recorded here.
 
 ## What runs today
 
@@ -136,7 +142,7 @@ CPU:       AMD Ryzen 7 5800X3D
 Board:     Gigabyte B550 VISION D
 Memory:    32 GiB installed, detected through SMBIOS
 Firmware:  AMI / Gigabyte F18d
-Display:   current firmware framebuffer 800x600x32, pitch 3328
+Display:   1920x1080x32 physically tested; 800x600x32 fallback
 ```
 
 The proven native input path is:
@@ -166,23 +172,24 @@ BoringOS currently uses a **software-rendered framebuffer desktop**.
 ```text
 BoringWM / boring-display composition in RAM
         ↓
-bounded cursor/focus region presents where applicable
-or full software present for scene/layout/client changes
+bounded cursor/focus/client/layout region presents where applicable
+or full software present for initial/legacy full-frame changes
         ↓
 firmware/Limine-provided framebuffer
         ↓
 GPU scanout to the monitor
 ```
 
-The physical cursor fast path now presents at most the clipped old/new 6x12 cursor rectangles instead of repainting all 480,000 pixels for every move. Focus-only pointer transitions use bounded border-region presentation and are deferred behind ready input/IPC work. Full scene changes, window geometry changes, wallpaper changes and client commits still retain the established full software-composition path.
+The cursor fast path presents at most the clipped old/new 6x12 cursor rectangles. Focus-only pointer transitions use bounded border-region presentation and are deferred behind ready input/IPC work. M68 also presents bounded client damage and changed window regions; initial wallpaper activation and legacy full `COMMIT` requests can still present the full frame.
 
-There is no native AMD/NVIDIA/Intel modesetting or acceleration driver yet. A better/native GOP framebuffer mode is the next visible graphics target; broader generalized software damage/present work remains later, and a native AMD driver is much later work.
+There is no native AMD/NVIDIA/Intel modesetting or acceleration driver yet. The proven 1920x1080 mode is a firmware/Limine framebuffer request, with software composition; native ultrawide and GPU acceleration remain future work.
 
 ## Current boundaries
 
 - held-key typematic repeat on the physical USB keyboard is still unresolved and intentionally parked for later input polish;
 - the current keyboard mapping is still effectively ENG/US rather than a finished DE layout;
-- the physical display currently uses the firmware-provided 800x600 framebuffer;
+- the physically tested higher framebuffer is 1920x1080; native 3440x1440 was not attempted;
+- opening multiple windows at 1920x1080 can still be noticeably demanding;
 - full practical use of Cthulhu's installed 32 GiB is still future work;
 - no networking, audio, NVMe, SMP runtime or native GPU driver yet.
 
@@ -195,9 +202,9 @@ M66 PHYSICAL USB/HID FREEZE
     ↓
 low-latency cursor + pointer-focus path  ✅ physical Cthulhu proof
     ↓
-better / native GOP resolution
+1920x1080 firmware GOP + bounded client/layout damage  ✅ physical Cthulhu proof at M68 freeze
     ↓
-broader software graphics / damage / present
+broader software graphics / damage / present; native ultrawide later
     ↓
 make useful physical use of the full 32 GiB RAM
     ↓
@@ -220,6 +227,7 @@ The build uses GCC/binutils as a freestanding x86_64 toolchain and a pinned Limi
 make
 make run
 make test
+sh tests/m68-safe-higher-gop-host.sh
 ```
 
 The GitHub Actions workflows intentionally keep earlier milestone regressions alive. They are test coverage, not active development branches.
@@ -233,6 +241,7 @@ The repository keeps a small number of immutable-by-policy physical freeze branc
 - `freeze/m63-system-power-lifecycle-physical-2026-09-05`
 - `freeze/m66-physical-hid-recovery-2026-09-08`
 - `freeze/mouse-present-latency-physical-2026-09-10`
+- `freeze/m68-1080p-physical-2026-09-16`
 
 Normal development continues from `main`; freeze branches are reference points and must not move.
 

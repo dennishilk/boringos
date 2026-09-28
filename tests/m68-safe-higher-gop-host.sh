@@ -42,6 +42,21 @@ build/m68-layout-host-test
 
 build/m68-damage-matrix-host-test
 
+# The wallpaper renderer validates geometry once before writing pixels. Run
+# the guarded 1080p damage matrix with sanitizers as well, so a bounds error
+# in full or regional composition fails before a physical image is built.
+"$HOST_CC" \
+    -Iuser/runtime/include -Ikernel/include \
+    $HOST_CFLAGS \
+    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    tests/m68-damage-matrix-host.c \
+    user/boring-display/core.c \
+    user/boring-display/managed.c \
+    user/boring-display/wallpaper.c \
+    -o build/m68-damage-matrix-host-test-sanitized
+
+ASAN_OPTIONS=detect_leaks=0 build/m68-damage-matrix-host-test-sanitized
+
 "$HOST_CC" \
     -Iuser/runtime/include -Ikernel/include \
     $HOST_CFLAGS \
