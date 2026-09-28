@@ -1,5 +1,6 @@
 #include <stddef.h>
 #include <boring/client.h>
+#include <boring/desktop_log.h>
 #include <boring/display.h>
 #include <boring/display_control.h>
 #include <boring/ipc.h>
@@ -9,6 +10,21 @@ static bool fail(struct boring_client *c, const char *reason) {
     c->error = reason;
     return false;
 }
+
+#if defined(BORING_M66_USB_HUB_MOUSE)
+static void m68_damage_number(uint64_t value) {
+    char text[21];
+    const size_t used = desktop_number(text, 0U, value);
+    text[used] = '\0';
+    desktop_say(text);
+}
+
+static void m68_report_scene_damage(uint32_t width, uint32_t height) {
+    desktop_say("m68-scene-damage: pixels=");
+    m68_damage_number((uint64_t)width * (uint64_t)height);
+    desktop_say("\n");
+}
+#endif
 
 static bool control_rpc(struct boring_client *c, const struct display_control *request,
                         struct display_event *reply) {
@@ -22,10 +38,11 @@ static bool control_rpc(struct boring_client *c, const struct display_control *r
     return true;
 }
 
-static bool surface_rpc(struct boring_client *c, const struct boring_display_request *request,
+static bool surface_rpc(struct boring_client *c, const void *request,
                         uint32_t attachment, struct boring_display_reply *reply) {
     struct boring_ipc_receive_result received;
-    if (boring_ipc_send(c->display, request, sizeof(*request), attachment) != 0L ||
+    if (boring_ipc_send(c->display, request, sizeof(struct boring_display_request),
+                        attachment) != 0L ||
         boring_ipc_receive(c->display, reply, sizeof(*reply), &received) != 0L ||
         received.payload_length != sizeof(*reply) || received.buffer_handle != 0U ||
         reply->version != BORING_DISPLAY_PROTOCOL_VERSION) {
@@ -127,6 +144,31 @@ bool boring_client_commit(struct boring_client *c) {
     request.surface_token = c->surface;
     if (!surface_rpc(c, &request, 0U, &reply)) { return false; }
     return reply.status == BORING_DISPLAY_STATUS_OK || fail(c, "surface commit");
+}
+
+bool boring_client_commit_damage(struct boring_client *c,
+                                 uint32_t x, uint32_t y,
+                                 uint32_t width, uint32_t height) {
+    struct boring_display_damage_request request = {0};
+    struct boring_display_reply reply;
+    if ((c == NULL) || (width == 0U) || (height == 0U)) {
+        return c != NULL ? fail(c, "surface damage geometry") : false;
+    }
+    request.version = BORING_DISPLAY_PROTOCOL_VERSION;
+    request.type = BORING_DISPLAY_REQUEST_COMMIT_DAMAGE;
+    request.surface_token = c->surface;
+    request.x = x;
+    request.y = y;
+    request.width = width;
+    request.height = height;
+    if (!surface_rpc(c, &request, 0U, &reply)) { return false; }
+    if (reply.status != BORING_DISPLAY_STATUS_OK) {
+        return fail(c, "surface damage commit");
+    }
+#if defined(BORING_M66_USB_HUB_MOUSE)
+    m68_report_scene_damage(width, height);
+#endif
+    return true;
 }
 
 bool boring_client_receive(struct boring_client *c, struct boring_wm_message *event) {

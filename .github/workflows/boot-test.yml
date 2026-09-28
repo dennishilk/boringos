@@ -134,6 +134,9 @@ jobs:
           make mouse-latency-host-test framebuffer-present-region-host-test
           make mouse-latency-host-test-sanitized framebuffer-present-region-host-test-sanitized
 
+      - name: M68 higher resolution and bounded display damage regressions
+        run: sh tests/m68-safe-higher-gop-host.sh
+
       - name: Build boring-shell test mode
         run: make TEST_MODE=shell
 

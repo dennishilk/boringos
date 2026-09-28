@@ -13,7 +13,7 @@ Es ist **kein Linux**, **kein BSD** und verwendet keinen Kernel eines anderen Be
 
 ```text
 BoringKernel 0.0.62-dev
-M66 physische USB/HID-Basis + physisch bewiesener Low-Latency-Cursor-/Fokuspfad
+M68: physischer 1920x1080-Desktop + begrenzte Display-Damage-Regionen
 ```
 
 Die aktuelle physische Grundlage ist auf der echten Workstation **Cthulhu** bewiesen. BoringOS bootet sein natives schreibbares USB-System, verwaltet die relevanten xHCI-Controller unabhängig, enumeriert den echten Genesys-Logic-USB-Hub, nimmt die daran angeschlossene ROCCAT-Maus über den nativen xHCI-/HID-Pfad an, hält die direkte Holtek-USB-Tastatur funktionsfähig und betreibt den nativen BoringWM-Desktop mit BoringTerminal, BoringEdit und BoringFiles.
@@ -49,6 +49,12 @@ SHA256: 6ac9e6096849ea4e906f0c70a322a8599de163bec34499bdd8794f6b202ce26f
 ```
 
 QEMU bleibt die automatisierte Regression-Plattform; USB-Topologie, Hub-verbundene Maus, Pointer-Fokus sowie der Low-Latency-Cursor-/Fokus-Present-Pfad sind zusätzlich physisch auf Cthulhu bewiesen.
+
+### M68: höhere Auflösung und Display-Damage
+
+Der M68-Boot-Eintrag bevorzugt `1920x1080x32` und bietet weiterhin einen auswählbaren `800x600x32`-Fallback. Die abgenommene M61-Boot-Konfiguration bleibt davon getrennt und unverändert. Auf dem physischen Cthulhu funktionierten der 1920x1080-Desktop, Tastatur und Maus; die Cursor-Reaktionszeit blieb gut. Das Öffnen mehrerer Terminalfenster war weiterhin spürbar aufwendig. Die physische Referenz ist `freeze/m68-1080p-physical-2026-09-16` bei `7a9594508bc02b6a5c8d5d13c2ed5c858c9cb54e`.
+
+M68 ergänzt begrenzte Komposition und Framebuffer-Presents für Client-Damage und Änderungen am Fensterlayout. Ältere vollständige `COMMIT`-Anfragen verwenden weiterhin einen Full-Present. Die anschließende Wallpaper-Schleifenoptimierung bei `e5480ff7396cb21ffbc364aae8855e558e4858a1` bestand die automatisierten Regressionstests; für genau diese Revision ist hier noch kein eigener physischer Test dokumentiert.
 
 ## Was heute wirklich läuft
 
@@ -136,7 +142,7 @@ CPU:       AMD Ryzen 7 5800X3D
 Board:     Gigabyte B550 VISION D
 Memory:    32 GiB installiert, über SMBIOS erkannt
 Firmware:  AMI / Gigabyte F18d
-Display:   aktueller Firmware-Framebuffer 800x600x32, Pitch 3328
+Display:   1920x1080x32 physisch getestet; 800x600x32 als Fallback
 ```
 
 Der bewiesene native Input-Pfad ist:
@@ -166,23 +172,24 @@ BoringOS verwendet aktuell einen **softwaregerenderten Framebuffer-Desktop**.
 ```text
 BoringWM / boring-display Komposition im RAM
         ↓
-begrenzte Cursor-/Fokus-Region-Presents, wo möglich
-oder Full-Software-Present bei Scene-/Layout-/Client-Änderungen
+begrenzte Cursor-/Fokus-/Client-/Layout-Region-Presents, wo möglich
+oder Full-Software-Present bei initialen/älteren Full-Frame-Änderungen
         ↓
 Firmware-/Limine-Framebuffer
         ↓
 GPU-Scanout zum Monitor
 ```
 
-Der physisch bewiesene Cursor-Fast-Path präsentiert pro normaler Bewegung höchstens die geclippten alten/neuen 6x12-Cursorrechtecke statt jedes Mal alle 480.000 Pixel neu zu schreiben. Reine Pointer-Fokuswechsel verwenden begrenzte Border-Region-Presents und werden hinter bereits bereiter Input-/IPC-Arbeit zurückgestellt. Vollständige Scene-Änderungen, Fenstergeometrie, Wallpaper-Änderungen und Client-Commits behalten weiterhin den etablierten Full-Software-Compose-Pfad.
+Der Cursor-Fast-Path präsentiert höchstens die geclippten alten/neuen 6x12-Cursorrechtecke. Reine Pointer-Fokuswechsel verwenden begrenzte Border-Region-Presents und werden hinter bereits bereiter Input-/IPC-Arbeit zurückgestellt. M68 präsentiert auch begrenzte Client-Damage- und geänderte Fensterregionen; die initiale Wallpaper-Aktivierung und ältere vollständige `COMMIT`-Anfragen können weiterhin den ganzen Frame präsentieren.
 
-Es gibt noch keinen nativen AMD-/NVIDIA-/Intel-Modesetting- oder Beschleunigungstreiber. Das nächste sichtbare Grafikziel ist ein besserer bzw. nativer GOP-Framebuffer-Modus; breiteres allgemeines Damage-/Present-Polish folgt später, ein eigener AMD-Treiber ist deutlich spätere Arbeit.
+Es gibt noch keinen nativen AMD-/NVIDIA-/Intel-Modesetting- oder Beschleunigungstreiber. Der bewiesene 1920x1080-Modus ist ein Firmware-/Limine-Framebuffer mit Software-Komposition; native Ultrawide-Auflösung und GPU-Beschleunigung sind spätere Arbeit.
 
 ## Aktuelle Grenzen
 
 - gehaltenes Tastatur-Typematic/Key-Repeat auf der physischen USB-Tastatur ist weiterhin ungelöst und bewusst für späteres Input-Polish geparkt;
 - das aktuelle Tastaturlayout ist praktisch noch ENG/US und noch kein fertiges DE-Layout;
-- das physische Display nutzt aktuell den Firmware-Framebuffer mit 800x600;
+- der physisch getestete höhere Framebuffer ist 1920x1080; natives 3440x1440 wurde nicht versucht;
+- mehrere Fenster bei 1920x1080 zu öffnen, kann noch spürbar aufwendig sein;
 - die vollständige praktische Nutzung der installierten 32 GiB auf Cthulhu ist noch zukünftige Arbeit;
 - noch kein Netzwerk, Audio, NVMe, SMP-Runtime oder nativer GPU-Treiber.
 
@@ -195,9 +202,9 @@ M66 PHYSICAL USB/HID FREEZE
     ↓
 Low-Latency-Cursor + Pointer-Fokus  ✅ physisch auf Cthulhu bewiesen
     ↓
-bessere / native GOP-Auflösung
+1920x1080-Firmware-GOP + begrenztes Client-/Layout-Damage  ✅ physischer M68-Freeze
     ↓
-breitere Software-Grafik / Damage / Present
+breitere Software-Grafik / Damage / Present; natives Ultrawide später
     ↓
 die vollen 32 GiB RAM physisch sinnvoll nutzen
     ↓
@@ -220,6 +227,7 @@ Der Build verwendet GCC/binutils als freestanding x86_64-Toolchain und eine fest
 make
 make run
 make test
+sh tests/m68-safe-higher-gop-host.sh
 ```
 
 Die GitHub-Actions-Workflows halten bewusst frühere Milestone-Regressionen am Leben. Sie sind Testabdeckung und keine aktiven Entwicklungsbranches.
@@ -233,6 +241,7 @@ Das Repository behält nur wenige immutable-by-policy physische Freeze-Branches:
 - `freeze/m63-system-power-lifecycle-physical-2026-09-05`
 - `freeze/m66-physical-hid-recovery-2026-09-08`
 - `freeze/mouse-present-latency-physical-2026-09-10`
+- `freeze/m68-1080p-physical-2026-09-16`
 
 Normale Entwicklung läuft von `main` weiter; Freeze-Branches sind Referenzpunkte und dürfen nicht bewegt werden.
 

@@ -1163,6 +1163,7 @@ void boring_kernel_entry(void) {
         serial_write_string("Process subsystem: FAILED\n");
         x86_64_halt_forever();
     }
+#if defined(BORING_BOOT_DASHBOARD_DIAGNOSTIC)
     if (framebuffer_surface != NULL) {
         const struct boring_boot_dashboard_info dashboard_info = {
             .kernel_name = "BoringKernel",
@@ -1184,6 +1185,7 @@ void boring_kernel_entry(void) {
             serial_write_string("boring-graphics: dashboard skipped\n\n");
         }
     }
+#endif
     run_cooperative_task_test();
     run_preemptive_task_test();
     run_process_address_space_test();

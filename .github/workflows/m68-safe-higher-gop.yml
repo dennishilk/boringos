@@ -1,0 +1,172 @@
+name: M68 safe higher GOP
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  focused-display:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Higher GOP deterministic geometry and accepted mouse-present regressions
+        run: sh tests/m68-safe-higher-gop-host.sh
+
+  generic-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install generic QEMU dependencies
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 xorriso
+      - name: Current general regression suite
+        run: make test
+
+  usb-input-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install focused QEMU dependencies
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 xorriso
+      - name: Multi-xHCI host/model acceptance
+        run: make xhci-host-test
+      - name: Sanitized xHCI host/model acceptance
+        run: |
+          mkdir -p build
+          cc -Ikernel/include -std=c11 -fno-builtin \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/xhci-host-test.c kernel/core/xhci.c kernel/core/usb_topology.c kernel/core/usb_hid.c \
+            -o build/xhci-host-test-sanitized
+          ASAN_OPTIONS=detect_leaks=0 ./build/xhci-host-test-sanitized
+      - name: Mixed composite HID classification
+        run: |
+          cc -Ikernel/include -std=c11 -fno-builtin -fno-tree-loop-distribute-patterns \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            tests/xhci-mixed-host-test.c kernel/core/xhci.c \
+            kernel/core/usb_topology.c kernel/core/xhci_mixed.c \
+            kernel/core/usb_hid.c -o build/xhci-mixed-host-test
+          build/xhci-mixed-host-test
+          cc -Ikernel/include -std=c11 -fno-builtin -fno-tree-loop-distribute-patterns \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/xhci-mixed-host-test.c kernel/core/xhci.c \
+            kernel/core/usb_topology.c kernel/core/xhci_mixed.c \
+            kernel/core/usb_hid.c -o build/xhci-mixed-host-test-sanitized
+          ASAN_OPTIONS=detect_leaks=0 build/xhci-mixed-host-test-sanitized
+      - name: M66 bounded descriptor fallback contract
+        run: python3 tests/m66-hid-post-contract.py
+      - name: Bounded hub topology host acceptance
+        run: |
+          cc -Ikernel/include -std=c11 -fno-builtin \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            tests/usb-topology-host-test.c kernel/core/usb_topology.c \
+            -o build/usb-topology-host-test
+          ./build/usb-topology-host-test
+      - name: Sanitized hub topology host acceptance
+        run: |
+          cc -Ikernel/include -std=c11 -fno-builtin \
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/usb-topology-host-test.c kernel/core/usb_topology.c \
+            -o build/usb-topology-host-test-sanitized
+          ASAN_OPTIONS=detect_leaks=0 ./build/usb-topology-host-test-sanitized
+      - name: Real q35 xHCI controller regression
+        run: ./tests/m48-xhci-qemu.sh
+      - name: Real three-controller q35 ownership
+        run: ./tests/m64-multi-xhci-qemu.sh
+      - name: Cross-controller storage and HID
+        run: ./tests/m64-multi-usb-qemu.sh
+      - name: Real USB hub downstream mouse enumeration
+        run: ./tests/m65-usb-hub-mouse-qemu.sh
+      - name: Root USB graphical desktop regression
+        run: python3 tests/m54-usb-only-desktop-qemu.py
+      - name: USB hub mouse Ring3 graphical desktop
+        run: python3 tests/m66-usb-hub-desktop-qemu.py
+
+  physical-candidate:
+    needs: [focused-display, generic-regression, usb-input-regression]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source provenance
+        run: |
+          expected='${{ github.event.pull_request.head.sha || github.sha }}'
+          actual=$(git rev-parse HEAD)
+          test "$actual" = "$expected"
+          printf 'EXACT_SOURCE_HEAD=%s\n' "$actual"
+      - name: Install physical image dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 ovmf gdisk dosfstools mtools xz-utils xorriso
+      - name: Rebuild accepted M61 runtime contracts
+        run: |
+          sh tests/m61-xhci-event-coexistence-host.sh
+          sh tests/m61-build.sh
+          sh tests/m61-physical-handoff-bisector.sh
+      - name: Build exactly one isolated 1920x1080 preferred physical candidate
+        run: sh tests/m68-build-physical-candidate.sh
+      - name: Verify candidate identity, fallback, and baseline preservation
+        run: |
+          git diff --exit-code -- limine-m61-usb.conf
+          (cd build && sha256sum -c boringos-m68-safe-higher-gop.img.sha256)
+          expected=$(awk '{print $1}' build/boringos-m68-safe-higher-gop.img.sha256)
+          decompressed=$(xz -dc build/boringos-m68-safe-higher-gop.img.xz | sha256sum | awk '{print $1}')
+          test "$decompressed" = "$expected"
+          proof=build/m68-safe-higher-gop/candidate-proof.txt
+          grep -Fqx 'target_request=1920x1080x32' "$proof"
+          grep -Fqx 'known_safe_explicit_fallback=800x600x32' "$proof"
+          grep -Fqx 'accepted_m61_config_preserved=YES' "$proof"
+          grep -Fqx 'successful_boot_dashboard_visible=NO' "$proof"
+          grep -Fqx 'graphical_boot_console_diagnostic=disabled' "$proof"
+          grep -Fqx 'magenta_scanout_witness_wrapper=absent' "$proof"
+          grep -Fqx 'physical_support_proven=NO_PENDING_CTHULHU' "$proof"
+          grep -Fqx '3440x1440_attempted=NO' "$proof"
+          test "$(grep -Fc '    resolution: 1920x1080x32' build/m68-safe-higher-gop/embedded-limine.conf)" -eq 1
+          test "$(grep -Fc '    resolution: 800x600x32' build/m68-safe-higher-gop/embedded-limine.conf)" -eq 1
+          ! grep -Fq '3440x1440' build/m68-safe-higher-gop/embedded-limine.conf
+      - name: Record exact physical candidate identity
+        id: candidate
+        run: |
+          head=$(git rev-parse HEAD)
+          raw_size=$(stat -c %s build/boringos-m68-safe-higher-gop.img)
+          raw_sha256=$(awk '{print $1}' build/boringos-m68-safe-higher-gop.img.sha256)
+          xz_sha256=$(sha256sum build/boringos-m68-safe-higher-gop.img.xz | awk '{print $1}')
+          tree=$(git rev-parse HEAD^{tree})
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "raw_size=$raw_size" >> "$GITHUB_OUTPUT"
+          echo "raw_sha256=$raw_sha256" >> "$GITHUB_OUTPUT"
+          echo "xz_sha256=$xz_sha256" >> "$GITHUB_OUTPUT"
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          printf 'HEAD=%s\nTREE=%s\nRAW=%s\nRAW_SHA256=%s\nXZ_SHA256=%s\n' \
+            "$head" "$tree" "$raw_size" "$raw_sha256" "$xz_sha256"
+      - name: Publish one physical candidate and proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: m68-safe-higher-gop-${{ steps.candidate.outputs.head }}-${{ steps.candidate.outputs.raw_size }}-${{ steps.candidate.outputs.raw_sha256 }}
+          path: |
+            build/boringos-m68-safe-higher-gop.img.xz
+            build/boringos-m68-safe-higher-gop.img.sha256
+            build/m68-safe-higher-gop-image.txt
+            build/m68-safe-higher-gop/**
+          if-no-files-found: error
+          retention-days: 14

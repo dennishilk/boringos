@@ -180,6 +180,13 @@ uint64_t x86_64_read_cr2(void);
 
 const char boring_m61_physical_breadcrumbs_enabled[] =
     "M61 metadata-only framebuffer acquisition and safe boot console enabled";
+#if defined(BORING_M68_PHYSICAL_RELEASE)
+const char boring_m68_physical_release_ui_enabled[] =
+    "M68 graphical success diagnostics disabled; serial and POST preserved";
+#else
+const char boring_m61_graphical_boot_console_diagnostic_enabled[] =
+    "M61 graphical boot console diagnostic enabled";
+#endif
 #ifdef BORING_M61_EARLY_FAULT_TEST
 const char boring_m61_early_fault_test_enabled[] =
     "M61 controlled pre-exception-init fault test enabled";
@@ -191,7 +198,9 @@ static const struct boring_framebuffer *fb;
 static volatile bool early_containment_active;
 static bool serial_ready;
 static bool wm_ready;
+#if !defined(BORING_M68_PHYSICAL_RELEASE)
 static bool display_initial_presented;
+#endif
 static bool desktop_presented;
 
 static void emergency_halt(void) __attribute__((noreturn));
@@ -961,6 +970,7 @@ enum boring_framebuffer_user_result __wrap_boring_framebuffer_user_present(
         return result;
     }
 
+#if !defined(BORING_M68_PHYSICAL_RELEASE)
     (void)boring_boot_console_ok(BORING_BOOT_STAGE_BORING_DISPLAY);
     if (!display_initial_presented) {
         display_initial_presented = true;
@@ -971,6 +981,7 @@ enum boring_framebuffer_user_result __wrap_boring_framebuffer_user_present(
     } else {
         (void)boring_boot_console_refresh();
     }
+#endif
     trace_stage(stage_number, '+', label);
     return result;
 }
