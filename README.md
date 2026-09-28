@@ -232,18 +232,24 @@ sh tests/m68-safe-higher-gop-host.sh
 
 The GitHub Actions workflows intentionally keep earlier milestone regressions alive. They are test coverage, not active development branches.
 
-## Frozen physical baselines
+## Physical reference commits
 
-The repository keeps a small number of immutable-by-policy physical freeze branches:
+These physically tested checkpoints are identified by their exact commits. All
+are already ancestors of `main`; retaining separate freeze branches is not
+necessary to keep their source history.
 
-- `freeze/m61-physical-desktop-2026-09-04`
-- `freeze/m62-dynamic-capacity-physical-2026-09-05`
-- `freeze/m63-system-power-lifecycle-physical-2026-09-05`
-- `freeze/m66-physical-hid-recovery-2026-09-08`
-- `freeze/mouse-present-latency-physical-2026-09-10`
-- `freeze/m68-1080p-physical-2026-09-16`
+| Checkpoint | Commit |
+| --- | --- |
+| M61 USB desktop | `1e3c0e83e8e9159480782a6be624975ccbe0da3a` |
+| M62 dynamic capacity | `f8b23490cd2e8e9095f6623d9d8b6230d3111080` |
+| M63 power lifecycle | `799d1e6529b8eafead37acc340f3fd18dbb2d655` |
+| M66 HID recovery | `bd3f181d24547189b004328aea54c54fd194fc96` |
+| Mouse cursor/focus latency | `c5ded88e3d473162b94f963d9509394246ef782c` |
+| M68 1920x1080 desktop | `7a9594508bc02b6a5c8d5d13c2ed5c858c9cb54e` |
 
-Normal development continues from `main`; freeze branches are reference points and must not move.
+The [branch archive manifest](docs/branch-archive-2026-09-28.md) records all
+historical branch tips, including experiments that were never merged into
+`main`. Development continues on `main`.
 
 ## BoringWM
 

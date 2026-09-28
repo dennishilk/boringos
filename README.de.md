@@ -232,18 +232,24 @@ sh tests/m68-safe-higher-gop-host.sh
 
 Die GitHub-Actions-Workflows halten bewusst frühere Milestone-Regressionen am Leben. Sie sind Testabdeckung und keine aktiven Entwicklungsbranches.
 
-## Eingefrorene physische Baselines
+## Physische Referenz-Commits
 
-Das Repository behält nur wenige immutable-by-policy physische Freeze-Branches:
+Diese physisch getesteten Stände sind durch ihre exakten Commits festgelegt.
+Alle sind bereits Vorfahren von `main`; eigene Freeze-Branches sind für den
+Erhalt des Quellcodeverlaufs nicht nötig.
 
-- `freeze/m61-physical-desktop-2026-09-04`
-- `freeze/m62-dynamic-capacity-physical-2026-09-05`
-- `freeze/m63-system-power-lifecycle-physical-2026-09-05`
-- `freeze/m66-physical-hid-recovery-2026-09-08`
-- `freeze/mouse-present-latency-physical-2026-09-10`
-- `freeze/m68-1080p-physical-2026-09-16`
+| Prüfstand | Commit |
+| --- | --- |
+| M61 USB-Desktop | `1e3c0e83e8e9159480782a6be624975ccbe0da3a` |
+| M62 dynamische Kapazität | `f8b23490cd2e8e9095f6623d9d8b6230d3111080` |
+| M63 Power-Lifecycle | `799d1e6529b8eafead37acc340f3fd18dbb2d655` |
+| M66 HID-Recovery | `bd3f181d24547189b004328aea54c54fd194fc96` |
+| Maus-Cursor-/Fokus-Latenz | `c5ded88e3d473162b94f963d9509394246ef782c` |
+| M68 1920x1080-Desktop | `7a9594508bc02b6a5c8d5d13c2ed5c858c9cb54e` |
 
-Normale Entwicklung läuft von `main` weiter; Freeze-Branches sind Referenzpunkte und dürfen nicht bewegt werden.
+Das [Branch-Archivverzeichnis](docs/branch-archive-2026-09-28.md) erfasst alle
+historischen Branch-Spitzen, auch nie in `main` gemergte Experimente. Die
+Entwicklung läuft auf `main` weiter.
 
 ## BoringWM
 
