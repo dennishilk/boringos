@@ -6,7 +6,6 @@
 #include <boring/e1000.h>
 #include <boring/io.h>
 #include <boring/net.h>
-#include <boring/serial.h>
 #include <boring/timer.h>
 
 #define NET_ETH_HEADER 14U
@@ -1230,15 +1229,6 @@ static enum net_result initialize_network(void) {
     }
     driver_result = e1000_init();
     (void)e1000_get_info(&nic_info);
-    serial_write_string("net: e1000 result=");
-    serial_write_u64((uint64_t)driver_result);
-    serial_write_string(" link=");
-    serial_write_u64(nic_info.link_up ? 1ULL : 0ULL);
-    serial_write_string(" id=");
-    serial_write_hex_u64((uint64_t)nic_info.vendor_id);
-    serial_write_string(":");
-    serial_write_hex_u64((uint64_t)nic_info.device_id);
-    serial_write_string("\n");
     if (driver_result == E1000_RESULT_NO_DEVICE) {
         return NET_RESULT_NO_DEVICE;
     }
@@ -1292,16 +1282,8 @@ enum net_result net_ping_host(const char *host, size_t host_length,
         return init_result;
     }
     if (!configure_dhcp()) {
-        serial_write_string("net: DHCP failed\n");
         return NET_RESULT_DHCP_FAILED;
     }
-    serial_write_string("net: DHCP configured address=");
-    serial_write_hex_u64((uint64_t)config.address);
-    serial_write_string(" gateway=");
-    serial_write_hex_u64((uint64_t)config.gateway);
-    serial_write_string(" dns=");
-    serial_write_hex_u64((uint64_t)config.dns);
-    serial_write_string("\n");
     result->local_address = config.address;
     result->gateway = config.gateway;
     result->dns = config.dns;
