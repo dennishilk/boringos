@@ -53,9 +53,15 @@
 #define BORING_SYS_SPAWN 43
 #define BORING_SYS_SYSTEM_CONTROL 44
 #define BORING_SYS_FRAMEBUFFER_PRESENT_REGION 45
+#define BORING_SYS_NET_PING 46
 
 #define BORING_SYSTEM_REBOOT 1U
 #define BORING_SYSTEM_POWEROFF 2U
+
+#define BORING_NET_HOST_MAX 253U
+#define BORING_NET_PING_COUNT 4U
+#define BORING_NET_PING_ABI_VERSION 1U
+#define BORING_NET_RTT_TIMEOUT 0xffffffffU
 
 #define BORING_SYSCALL_DEBUG_WRITE_MAX 64
 #define BORING_SYSCALL_CONSOLE_IO_MAX 64
@@ -143,6 +149,7 @@
 #define BORING_SYSCALL_ENOEXEC 15
 #define BORING_SYSCALL_ENOMEM 16
 #define BORING_SYSCALL_EPIPE 17
+#define BORING_SYSCALL_ENETUNREACH 18
 
 #ifndef __ASSEMBLER__
 
@@ -181,6 +188,25 @@ struct boring_process_info {
     uint32_t state;
     uint32_t reserved;
     char name[BORING_PROCESS_NAME_CAPACITY];
+};
+
+struct boring_net_ping_result {
+    uint32_t abi_version;
+    uint32_t address;
+    uint32_t local_address;
+    uint32_t gateway;
+    uint32_t dns;
+    uint32_t transmitted;
+    uint32_t received;
+    uint32_t rtt_ms[BORING_NET_PING_COUNT];
+    uint16_t nic_vendor_id;
+    uint16_t nic_device_id;
+    uint8_t nic_bus;
+    uint8_t nic_device;
+    uint8_t nic_function;
+    uint8_t used_dns;
+    uint8_t mac[6];
+    uint8_t reserved[2];
 };
 
 #define BORING_SYSTEM_INFO_ABI_VERSION 3U
@@ -341,6 +367,8 @@ _Static_assert(BORING_SYS_SYSTEM_CONTROL == 44,
                "SYSTEM_CONTROL syscall number contract changed");
 _Static_assert(BORING_SYS_FRAMEBUFFER_PRESENT_REGION == 45,
                "FRAMEBUFFER_PRESENT_REGION syscall number contract changed");
+_Static_assert(BORING_SYS_NET_PING == 46,
+               "NET_PING syscall number contract changed");
 _Static_assert(sizeof(struct boring_pty_create_result) == 8U,
                "M36 PTY create ABI size must remain fixed");
 _Static_assert(sizeof(struct boring_spawn_stdio) == 16U,
@@ -353,6 +381,8 @@ _Static_assert(sizeof(struct boring_system_info) == 1024U,
                "BoringOS system-info ABI size must remain fixed");
 _Static_assert(sizeof(struct boring_process_info) == 56U,
                "BoringOS process snapshot ABI size must remain fixed");
+_Static_assert(sizeof(struct boring_net_ping_result) == 60U,
+               "BoringOS ping result ABI size must remain fixed");
 _Static_assert(sizeof(struct boring_dirent) == 272U,
                "BoringOS dirent ABI size must remain fixed");
 

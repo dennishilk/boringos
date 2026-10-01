@@ -45,6 +45,8 @@ long boring_spawn(const char *path, size_t path_length,
                   const char *const argv[], size_t argc,
                   const struct boring_spawn_stdio *stdio_config);
 long boring_system_control(uint32_t action);
+long boring_net_ping(const char *host, size_t host_length,
+                     struct boring_net_ping_result *result);
 long boring_input_claim(void);
 long boring_input_read(struct boring_input_event *events, size_t max_events);
 long boring_input_release(void);

@@ -11,7 +11,7 @@
 #define BORING_SHELL_ESCAPE_MAX 8U
 #define BORING_SHELL_HISTORY_CAPACITY 16U
 #define BORING_SHELL_COMMAND_NAME_CAPACITY 16U
-#define BORING_SHELL_COMMAND_COUNT 20U
+#define BORING_SHELL_COMMAND_COUNT 21U
 #define BORING_SHELL_PROMPT_CAPACITY \
     (BORING_SYSTEM_USERNAME_CAPACITY + BORING_SYSTEM_HOSTNAME_CAPACITY + \
      BORING_SYSCALL_CWD_MAX + 8U)
@@ -42,7 +42,7 @@ static const char shell_command_names[BORING_SHELL_COMMAND_COUNT]
                                      [BORING_SHELL_COMMAND_NAME_CAPACITY] = {
     "help", "ls", "mkdir", "rmdir", "cd", "touch", "write", "rm",
     "clear", "pwd", "echo", "hostname", "uname", "whoami",
-    "ps", "history", "reboot", "shutdown", "exit", "logout"
+    "ps", "history", "ping", "reboot", "shutdown", "exit", "logout"
 };
 
 static void shell_exit_failure(void) __attribute__((noreturn));
@@ -93,6 +93,39 @@ static bool shell_write_u64(uint64_t value) {
         digits[count - index - 1U] = temporary;
     }
     return shell_write(digits, count);
+}
+
+static bool shell_write_ipv4(uint32_t address) {
+    return shell_write_u64((uint64_t)((address >> 24U) & 0xffU)) &&
+           shell_write_text(".") &&
+           shell_write_u64((uint64_t)((address >> 16U) & 0xffU)) &&
+           shell_write_text(".") &&
+           shell_write_u64((uint64_t)((address >> 8U) & 0xffU)) &&
+           shell_write_text(".") &&
+           shell_write_u64((uint64_t)(address & 0xffU));
+}
+
+static bool shell_write_hex_nibble(uint8_t value) {
+    static const char alphabet[] = "0123456789ABCDEF";
+    const char character = alphabet[value & 0x0fU];
+    return shell_write(&character, 1U);
+}
+
+static bool shell_write_hex_u16(uint16_t value) {
+    uint32_t shift;
+
+    for (shift = 16U; shift != 0U; shift -= 4U) {
+        if (!shell_write_hex_nibble(
+                (uint8_t)((value >> (shift - 4U)) & 0x0fU))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool shell_write_hex_u8(uint8_t value) {
+    return shell_write_hex_nibble((uint8_t)(value >> 4U)) &&
+           shell_write_hex_nibble(value);
 }
 
 static size_t shell_bounded_length(const char *text, size_t maximum) {
@@ -1149,6 +1182,8 @@ static bool shell_command_help(const char *argument) {
            shell_write_text("  clear echo history help exit logout\r\n") &&
            shell_write_text("\r\nSystem:\r\n") &&
            shell_write_text("  uname hostname whoami ps reboot shutdown\r\n") &&
+           shell_write_text("\r\nNetworking:\r\n") &&
+           shell_write_text("  ping <IPv4|hostname>\r\n") &&
            shell_write_text("\r\nPrograms (/bin):\r\n") &&
            shell_write_text("  boringfetch cat\r\n");
 }
@@ -1554,6 +1589,93 @@ static bool shell_command_external(char *command, char *argument) {
     return true;
 }
 
+static bool shell_command_ping(const char *argument) {
+    struct boring_net_ping_result result;
+    long call_result;
+    uint32_t index;
+    uint32_t loss;
+
+    if (!shell_single_argument(argument)) {
+        return shell_write_text("ping: usage: ping <IPv4|hostname>\r\n");
+    }
+    call_result = boring_net_ping(argument, boring_strlen(argument), &result);
+    if ((result.abi_version != BORING_NET_PING_ABI_VERSION) &&
+        (call_result == 0L)) {
+        return shell_write_text("ping: network ABI mismatch\r\n");
+    }
+    if (call_result == -(long)BORING_SYSCALL_ENOTSUP) {
+        if ((result.abi_version == BORING_NET_PING_ABI_VERSION) &&
+            (result.nic_vendor_id != 0U)) {
+            return shell_write_text("ping: unsupported Ethernet controller ") &&
+                   shell_write_hex_u16(result.nic_vendor_id) &&
+                   shell_write_text(":") &&
+                   shell_write_hex_u16(result.nic_device_id) &&
+                   shell_write_text(" at ") &&
+                   shell_write_hex_u8(result.nic_bus) &&
+                   shell_write_text(":") &&
+                   shell_write_hex_u8(result.nic_device) &&
+                   shell_write_text(".") &&
+                   shell_write_u64((uint64_t)result.nic_function) &&
+                   shell_write_text("\r\n");
+        }
+        return shell_write_text("ping: no supported Ethernet controller found\r\n");
+    }
+    if (call_result == -(long)BORING_SYSCALL_ENETUNREACH) {
+        return shell_write_text(
+            "ping: network unavailable (link or DHCP)\r\n");
+    }
+    if (call_result == -(long)BORING_SYSCALL_ENOENT) {
+        return shell_write_text("ping: cannot resolve ") &&
+               shell_write_text(argument) && shell_write_text("\r\n");
+    }
+    if (call_result == -(long)BORING_SYSCALL_EINVAL) {
+        return shell_write_text("ping: invalid host\r\n");
+    }
+    if (call_result != 0L) {
+        return shell_write_text("ping: network I/O failed\r\n");
+    }
+    if ((result.abi_version != BORING_NET_PING_ABI_VERSION) ||
+        (result.transmitted == 0U) ||
+        (result.transmitted > BORING_NET_PING_COUNT) ||
+        (result.received > result.transmitted)) {
+        return false;
+    }
+    if (!shell_write_text("PING ") || !shell_write_text(argument) ||
+        !shell_write_text(" (") || !shell_write_ipv4(result.address) ||
+        !shell_write_text(") from ") ||
+        !shell_write_ipv4(result.local_address) ||
+        !shell_write_text("\r\n")) {
+        return false;
+    }
+    for (index = 0U; index < result.transmitted; ++index) {
+        if (result.rtt_ms[index] == BORING_NET_RTT_TIMEOUT) {
+            if (!shell_write_text("Request timeout for seq ") ||
+                !shell_write_u64((uint64_t)index + 1ULL) ||
+                !shell_write_text("\r\n")) {
+                return false;
+            }
+        } else {
+            if (!shell_write_text("64 bytes from ") ||
+                !shell_write_ipv4(result.address) ||
+                !shell_write_text(": seq=") ||
+                !shell_write_u64((uint64_t)index + 1ULL) ||
+                !shell_write_text(" time=") ||
+                !shell_write_u64((uint64_t)result.rtt_ms[index]) ||
+                !shell_write_text(" ms\r\n")) {
+                return false;
+            }
+        }
+    }
+    loss = ((result.transmitted - result.received) * 100U) /
+           result.transmitted;
+    return shell_write_u64((uint64_t)result.transmitted) &&
+           shell_write_text(" packets transmitted, ") &&
+           shell_write_u64((uint64_t)result.received) &&
+           shell_write_text(" received, ") &&
+           shell_write_u64((uint64_t)loss) &&
+           shell_write_text("% packet loss\r\n");
+}
+
 static bool shell_command_power(const char *command,
                                 const char *argument,
                                 uint32_t action) {
@@ -1638,6 +1760,9 @@ static bool shell_execute_line(char *line) {
     }
     if (shell_text_equals(command, "history")) {
         return shell_command_history(argument);
+    }
+    if (shell_text_equals(command, "ping")) {
+        return shell_command_ping(argument);
     }
     if (shell_text_equals(command, "reboot")) {
         return shell_command_power("reboot", argument, BORING_SYSTEM_REBOOT);

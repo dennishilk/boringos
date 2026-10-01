@@ -317,6 +317,19 @@ long boring_system_control(uint32_t action) {
     return result;
 }
 
+long boring_net_ping(const char *host, size_t host_length,
+                     struct boring_net_ping_result *ping_result) {
+    long result;
+
+    __asm__ volatile(
+        "syscall"
+        : "=a"(result)
+        : "a"((uint64_t)BORING_SYS_NET_PING), "D"(host), "S"(host_length),
+          "d"(ping_result)
+        : "rcx", "r11", "cc", "memory");
+    return result;
+}
+
 long boring_input_claim(void) {
     long result;
 

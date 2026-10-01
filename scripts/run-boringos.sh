@@ -17,7 +17,8 @@ set -- qemu-system-x86_64 \
     -boot d \
     -drive "file=${HERE}/boringos-root.img,if=none,format=raw,id=boringdisk" \
     -device "virtio-blk-pci,drive=boringdisk,disable-legacy=on" \
-    -vga std
+    -vga std \
+    -nic "user,model=e1000"
 
 if [ "${MODE}" = headless ]; then
     set -- "$@" -display none

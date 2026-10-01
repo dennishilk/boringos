@@ -94,6 +94,7 @@ FRAMEBUFFER_PRESENT_REGION_HOST_TEST_SANITIZED := \
 	$(BUILD_DIR)/framebuffer-present-region-host-test-sanitized
 PMM_READINESS_HOST_TEST := $(BUILD_DIR)/pmm-readiness-host-test
 XHCI_HOST_TEST := $(BUILD_DIR)/xhci-host-test
+NET_HOST_TEST := $(BUILD_DIR)/net-host-test
 MKBORINGFS_VERIFY := $(BUILD_DIR)/mkboringfs-test/mkboringfs-verify
 BORINGFS_HEADER := libs/boringfs/include/boring/boringfs.h
 BORINGFS_CODEC := libs/boringfs/codec.c
@@ -323,6 +324,7 @@ KERNEL_C_SOURCES := \
 	kernel/core/smbios_limine.c \
 	kernel/core/pci_inventory.c \
 	kernel/core/pci_inventory_x86.c \
+	kernel/core/net.c \
 	kernel/core/xhci.c \
 	kernel/core/usb_topology.c \
 	kernel/core/usb_hid.c \
@@ -356,6 +358,7 @@ KERNEL_C_SOURCES := \
 	libs/boringfs/codec.c \
 	libs/boringfs/validate.c \
 	kernel/drivers/ahci_block.c \
+	kernel/drivers/e1000.c \
 	kernel/drivers/virtio_blk.c \
 	kernel/core/task.c \
 	kernel/core/preemption_test.c \
@@ -518,6 +521,10 @@ pmm-readiness-host-test: $(PMM_READINESS_HOST_TEST)
 xhci-host-test: $(XHCI_HOST_TEST)
 	$(XHCI_HOST_TEST)
 
+.PHONY: net-host-test
+net-host-test: $(NET_HOST_TEST)
+	$(NET_HOST_TEST)
+
 boringfs-host-test:
 	sh ./tests/boringfs-host-test.sh
 
@@ -566,6 +573,14 @@ $(BORINGFS_FIXTURE): tests/boringfs-fixture.c $(BORINGFS_CODEC) $(BORINGFS_VALID
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) \
 		tests/boringfs-fixture.c $(BORINGFS_CODEC) $(BORINGFS_VALIDATE) -o $@
+
+$(NET_HOST_TEST): tests/net-host-test.c kernel/core/net.c \
+		kernel/include/boring/net.h kernel/include/boring/e1000.h \
+		kernel/include/boring/syscall_abi.h kernel/include/boring/cpu.h \
+		kernel/include/boring/io.h kernel/include/boring/timer.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -Ikernel/include $(HOST_CFLAGS) \
+		tests/net-host-test.c kernel/core/net.c -o $@
 
 $(BORINGFS_VFS_HOST_TEST): tests/boringfs-vfs-host-test.c \
 		kernel/fs/boringfs_vfs.c kernel/core/block_device.c \
@@ -997,6 +1012,7 @@ test:
 	sh ./tests/ipc-test-build-audit.sh
 	sh ./tests/display-build-audit.sh
 	$(MAKE) shell-host-test
+	$(MAKE) net-host-test
 	$(MAKE) fd-host-test
 	$(MAKE) pty-host-test
 	$(MAKE) framebuffer-host-test

@@ -15,6 +15,7 @@
 #endif
 #include <boring/process.h>
 #include <boring/pci_inventory.h>
+#include <boring/net.h>
 #include <boring/pmm.h>
 #include <boring/ring3_memory.h>
 #include <boring/serial.h>
@@ -700,6 +701,47 @@ static int syscall_copy_explicit_string(uint64_t user_address,
     }
     buffer[safe_length] = '\0';
     return 0;
+}
+
+static uint64_t syscall_net_ping(uint64_t user_host,
+                                 uint64_t host_length,
+                                 uint64_t user_result) {
+    char host[BORING_NET_HOST_MAX + 1U];
+    struct boring_net_ping_result result;
+    enum net_result network_result;
+    int copy_error;
+
+    if (!syscall_user_range_accessible((uintptr_t)user_result,
+                                       sizeof(result), true)) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+    copy_error = syscall_copy_explicit_string(
+        user_host, host_length, (size_t)BORING_NET_HOST_MAX, host);
+    if (copy_error != 0) {
+        return syscall_error(copy_error);
+    }
+    network_result = net_ping_host(host, (size_t)host_length, &result);
+    if (!syscall_copy_to_user((uintptr_t)user_result, &result,
+                              sizeof(result))) {
+        return syscall_error(BORING_SYSCALL_EFAULT);
+    }
+    switch (network_result) {
+        case NET_RESULT_OK:
+            return 0ULL;
+        case NET_RESULT_NO_DEVICE:
+        case NET_RESULT_UNSUPPORTED_DEVICE:
+            return syscall_error(BORING_SYSCALL_ENOTSUP);
+        case NET_RESULT_LINK_DOWN:
+        case NET_RESULT_DHCP_FAILED:
+            return syscall_error(BORING_SYSCALL_ENETUNREACH);
+        case NET_RESULT_DNS_FAILED:
+            return syscall_error(BORING_SYSCALL_ENOENT);
+        case NET_RESULT_INVALID_HOST:
+            return syscall_error(BORING_SYSCALL_EINVAL);
+        case NET_RESULT_DRIVER_ERROR:
+        default:
+            return syscall_error(BORING_SYSCALL_EIO);
+    }
 }
 
 static int syscall_copy_launch_arguments(
@@ -2611,6 +2653,9 @@ void x86_64_syscall_dispatch(struct x86_64_syscall_frame *frame) {
             } else {
                 system_control_execute((uint32_t)frame->rdi);
             }
+            break;
+        case BORING_SYS_NET_PING:
+            result = syscall_net_ping(frame->rdi, frame->rsi, frame->rdx);
             break;
         default:
             result = syscall_error(BORING_SYSCALL_ENOSYS);

@@ -111,6 +111,9 @@ jobs:
       - name: Bounded shell editor and completion host tests
         run: make shell-host-test
 
+      - name: M69 hostile packet parser host tests
+        run: make net-host-test
+
       - name: Native descriptor host tests
         run: make fd-host-test
 
@@ -139,6 +142,9 @@ jobs:
 
       - name: Build boring-shell test mode
         run: make TEST_MODE=shell
+
+      - name: M69 E1000 DHCP and ICMP QEMU acceptance
+        run: sh ./tests/m69-network-qemu.sh
 
       - name: Real interactive boring-shell
         run: sh ./tests/shell-qemu.sh

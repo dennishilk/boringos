@@ -277,6 +277,30 @@ long boring_system_control(uint32_t action) {
     return 0L;
 }
 
+long boring_net_ping(const char *host, size_t host_length,
+                     struct boring_net_ping_result *result) {
+    size_t index;
+
+    if ((host == NULL) || (result == NULL) ||
+        (host_length != strlen(host))) {
+        return -(long)BORING_SYSCALL_EINVAL;
+    }
+    (void)memset(result, 0, sizeof(*result));
+    result->abi_version = BORING_NET_PING_ABI_VERSION;
+    result->address = 0x01010101U;
+    result->local_address = 0x0a00020fU;
+    result->gateway = 0x0a000202U;
+    result->dns = 0x0a000203U;
+    result->transmitted = BORING_NET_PING_COUNT;
+    result->received = BORING_NET_PING_COUNT;
+    result->nic_vendor_id = 0x8086U;
+    result->nic_device_id = 0x100eU;
+    for (index = 0U; index < BORING_NET_PING_COUNT; ++index) {
+        result->rtt_ms[index] = 10U + (uint32_t)index;
+    }
+    return 0L;
+}
+
 long boring_waitpid(uint64_t pid, int *status) {
     if ((pid != 3ULL) || (status == NULL)) {
         return -(long)BORING_SYSCALL_EINVAL;
@@ -378,6 +402,8 @@ int main(void) {
                 "reboot builtin completion");
     expect_line("shut\t\n", sizeof(shell_history_draft), "shutdown ",
                 "shutdown builtin completion");
+    expect_line("pi\t\n", sizeof(shell_history_draft), "ping ",
+                "ping builtin completion");
     expect_line("cd TES\t\n", sizeof(shell_history_draft), "cd TEST/",
                 "directory completion");
     expect_line("cat REA\t\n", sizeof(shell_history_draft),
@@ -482,6 +508,20 @@ int main(void) {
                  "cat argv is forwarded to the standalone program");
     test_require(mock_wait_pid == 3ULL,
                  "external cat waitpid");
+
+    {
+        char ping_line[] = "ping 1.1.1.1";
+
+        mock_output_length = 0U;
+        mock_output[0] = '\0';
+        test_require(shell_execute_line(ping_line), "ping builtin execution");
+        test_require(strstr(mock_output,
+                            "PING 1.1.1.1 (1.1.1.1) from 10.0.2.15") != NULL,
+                     "ping prints resolved and local IPv4 addresses");
+        test_require(strstr(mock_output,
+                            "4 packets transmitted, 4 received, 0% packet loss") != NULL,
+                     "ping prints packet summary");
+    }
 
     {
         char reboot_line[] = "reboot";
