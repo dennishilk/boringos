@@ -1,0 +1,28 @@
+name: M69 defensive networking
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  network:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Install build and QEMU dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential binutils curl xorriso qemu-system-x86
+      - name: Hostile packet parser regressions
+        run: make net-host-test
+      - name: E1000 DHCP ARP IPv4 ICMP acceptance
+        run: sh ./tests/m69-network-qemu.sh
