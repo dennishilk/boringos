@@ -326,6 +326,7 @@ DISPLAY_LDFLAGS := -nostdlib -static --build-id=none -z max-page-size=0x1000 \
 	-T user/memory-test/linker.ld
 
 KERNEL_C_SOURCES := \
+	kernel/core/memory.c \
 	kernel/core/acpi_s5.c \
 	kernel/core/acpi.c \
 	kernel/core/system_control.c \
