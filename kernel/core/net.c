@@ -52,10 +52,6 @@
 #define NET_IPV4_BROADCAST 0xffffffffU
 #define NET_IPV4_ZERO 0U
 #define NET_RTT_TIMEOUT UINT32_MAX
-#define NET_PIT_CHANNEL0_DATA 0x40U
-#define NET_PIT_COMMAND 0x43U
-#define NET_PIT_LATCH_CHANNEL0 0x00U
-
 struct net_arp_entry {
     bool valid;
     uint32_t address;
@@ -81,10 +77,8 @@ struct net_udp_view {
 };
 
 struct net_clock {
-    uint32_t input_frequency_hz;
-    uint16_t divisor;
-    uint16_t previous_count;
-    uint64_t elapsed_counts;
+    uint64_t start_ticks;
+    uint32_t frequency_millihz;
 };
 
 struct dhcp_offer {
@@ -326,78 +320,49 @@ bool net_dns_skip_name(const uint8_t *packet, size_t length, size_t offset,
     }
 }
 
-static bool pit_read_count(uint16_t *count) {
-    uint8_t low;
-    uint8_t high;
-
-    if (count == NULL) {
-        return false;
-    }
-    x86_64_out8((uint16_t)NET_PIT_COMMAND,
-                 (uint8_t)NET_PIT_LATCH_CHANNEL0);
-    low = x86_64_in8((uint16_t)NET_PIT_CHANNEL0_DATA);
-    high = x86_64_in8((uint16_t)NET_PIT_CHANNEL0_DATA);
-    *count = (uint16_t)((uint16_t)low | ((uint16_t)high << 8U));
-    return true;
-}
-
 static bool net_clock_start(struct net_clock *clock) {
     struct timer_stats stats;
-    uint16_t count;
 
     if ((clock == NULL) || !timer_get_stats(&stats) ||
-        (stats.input_frequency_hz == 0U) || (stats.divisor == 0U) ||
-        !pit_read_count(&count) || (count > stats.divisor)) {
+        (stats.effective_frequency_millihz == 0U)) {
         return false;
     }
-    clock->input_frequency_hz = stats.input_frequency_hz;
-    clock->divisor = stats.divisor;
-    clock->previous_count = count;
-    clock->elapsed_counts = 0ULL;
+    clock->start_ticks = timer_ticks();
+    clock->frequency_millihz = stats.effective_frequency_millihz;
     return true;
 }
 
-static bool net_clock_sample(struct net_clock *clock) {
-    uint16_t count;
+static uint64_t net_clock_elapsed_us(const struct net_clock *clock) {
+    uint64_t elapsed_ticks;
 
-    if ((clock == NULL) || (clock->divisor == 0U) ||
-        !pit_read_count(&count) || (count > clock->divisor)) {
-        return false;
+    if ((clock == NULL) || (clock->frequency_millihz == 0U)) {
+        return UINT64_MAX;
     }
-    if (clock->previous_count >= count) {
-        clock->elapsed_counts +=
-            (uint64_t)(clock->previous_count - count);
-    } else {
-        clock->elapsed_counts += (uint64_t)clock->previous_count +
-            (uint64_t)(clock->divisor - count);
+    elapsed_ticks = timer_ticks() - clock->start_ticks;
+    if (elapsed_ticks > (UINT64_MAX / 1000000ULL)) {
+        return UINT64_MAX;
     }
-    clock->previous_count = count;
-    return true;
+    return (elapsed_ticks * 1000000ULL) /
+           (uint64_t)clock->frequency_millihz;
 }
 
 static bool net_clock_expired(struct net_clock *clock, uint32_t milliseconds) {
-    uint64_t target_counts;
+    const uint64_t elapsed_us = net_clock_elapsed_us(clock);
+    uint64_t target_us;
 
-    if ((clock == NULL) || !net_clock_sample(clock)) {
+    if ((uint64_t)milliseconds > (UINT64_MAX / 1000ULL)) {
         return true;
     }
-    target_counts = ((uint64_t)clock->input_frequency_hz *
-                     (uint64_t)milliseconds + 999ULL) / 1000ULL;
-    return clock->elapsed_counts >= target_counts;
+    target_us = (uint64_t)milliseconds * 1000ULL;
+    return elapsed_us >= target_us;
 }
 
 static uint32_t net_clock_elapsed_ms(struct net_clock *clock) {
-    uint64_t milliseconds;
+    const uint64_t elapsed_us = net_clock_elapsed_us(clock);
+    const uint64_t elapsed_ms = elapsed_us / 1000ULL;
 
-    if ((clock == NULL) || (clock->input_frequency_hz == 0U) ||
-        !net_clock_sample(clock) ||
-        (clock->elapsed_counts > (UINT64_MAX / 1000ULL))) {
-        return UINT32_MAX;
-    }
-    milliseconds = (clock->elapsed_counts * 1000ULL) /
-                   (uint64_t)clock->input_frequency_hz;
-    return (milliseconds > (uint64_t)UINT32_MAX) ?
-        UINT32_MAX : (uint32_t)milliseconds;
+    return (elapsed_ms > (uint64_t)UINT32_MAX) ?
+        UINT32_MAX : (uint32_t)elapsed_ms;
 }
 
 static void ethernet_header(uint8_t *frame, const uint8_t destination[6],
