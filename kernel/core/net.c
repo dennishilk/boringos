@@ -24,6 +24,7 @@
 #define NET_DHCP_SERVER_PORT 67U
 #define NET_DNS_PORT 53U
 #define NET_DHCP_FIXED 240U
+#define NET_DHCP_MIN_MESSAGE 300U
 #define NET_DHCP_MAGIC 0x63825363U
 #define NET_DHCP_DISCOVER 1U
 #define NET_DHCP_OFFER 2U
@@ -855,6 +856,15 @@ static size_t build_dhcp(uint8_t *packet, size_t capacity, uint32_t xid,
     packet[offset++] = NET_DHCP_OPTION_DNS;
     packet[offset++] = NET_DHCP_OPTION_LEASE;
     packet[offset++] = NET_DHCP_OPTION_END;
+    /*
+     * Preserve the classic BOOTP/DHCP minimum message size. Some DHCP
+     * servers, including QEMU user networking, validate the fixed BOOTP
+     * packet footprint rather than accepting a short options tail.
+     * The buffer was zeroed above, so the bounded remainder is padding.
+     */
+    if (offset < (size_t)NET_DHCP_MIN_MESSAGE) {
+        offset = (size_t)NET_DHCP_MIN_MESSAGE;
+    }
     return offset;
 }
 
