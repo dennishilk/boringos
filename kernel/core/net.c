@@ -350,9 +350,6 @@ static bool net_clock_expired(struct net_clock *clock, uint32_t milliseconds) {
     const uint64_t elapsed_us = net_clock_elapsed_us(clock);
     uint64_t target_us;
 
-    if ((uint64_t)milliseconds > (UINT64_MAX / 1000ULL)) {
-        return true;
-    }
     target_us = (uint64_t)milliseconds * 1000ULL;
     return elapsed_us >= target_us;
 }
