@@ -216,7 +216,6 @@ static bool find_device(struct pci_device *selected) {
                 selected->device_id = device_id;
                 selected->class_code = class_code;
                 selected->subclass = subclass;
-                selected->prog_if = (uint8_t)((class_revision >> 8U) & 0xffU);
                 selected->revision = (uint8_t)(class_revision & 0xffU);
                 selected->header_type = current_header;
                 runtime.info.vendor_id = current_vendor;
