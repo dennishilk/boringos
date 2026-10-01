@@ -8,11 +8,17 @@
 #include <boring/elf_boot.h>
 #include <boring/elf_loader.h>
 #include <boring/process.h>
+#if defined(BORING_M69_NETWORK_ACCEPTANCE)
+#include <boring/irq.h>
+#endif
 #include <boring/ramfs.h>
 #include <boring/ring3_memory.h>
 #include <boring/serial.h>
 #include <boring/shell_test.h>
 #include <boring/syscall.h>
+#if defined(BORING_M69_NETWORK_ACCEPTANCE)
+#include <boring/timer.h>
+#endif
 #include <boring/vfs.h>
 #include <boring/vmm.h>
 
@@ -40,6 +46,15 @@ void x86_64_enter_ring3(uintptr_t user_rip,
                         uint16_t user_ss,
                         uintptr_t result_address)
     __attribute__((noreturn));
+#if defined(BORING_M69_NETWORK_ACCEPTANCE)
+void x86_64_enter_ring3_argv(uintptr_t user_rip,
+                             uintptr_t user_rsp,
+                             uint16_t user_cs,
+                             uint16_t user_ss,
+                             uint64_t argc,
+                             uintptr_t argv)
+    __attribute__((noreturn));
+#endif
 
 static void shell_test_fail(const char *check) __attribute__((noreturn));
 static void shell_test_fail(const char *check) {
@@ -216,6 +231,18 @@ void shell_test_run(void) {
         shell_test_fail("process-syscall-init");
     }
     shell_test_pass("process-syscall-init");
+#if defined(BORING_M69_NETWORK_ACCEPTANCE)
+    /*
+     * M69 exercises real DHCP/ARP/ICMP waits from Ring 3. The historical
+     * shell acceptance deliberately enters userspace with IF clear and never
+     * initializes IRQ0; keep that contract unchanged for TEST_MODE=shell,
+     * while giving the dedicated network acceptance the production timer.
+     */
+    if (!irq_init() || !timer_init(100U)) {
+        shell_test_fail("network-timer-init");
+    }
+    shell_test_pass("network-timer-init");
+#endif
 
     if ((ramfs_create_filesystem(SHELL_ROOT_FILESYSTEM_ID, &root_ramfs) !=
          VFS_RESULT_OK) || (root_ramfs == NULL)) {
@@ -312,9 +339,17 @@ void shell_test_run(void) {
     }
 
     serial_write_string("Entering boring-init at CPL3.\n");
+#if defined(BORING_M69_NETWORK_ACCEPTANCE)
+    x86_64_enter_ring3_argv(init_image.entry,
+                            init_image.stack_top,
+                            (uint16_t)X86_64_GDT_USER_CODE_SELECTOR,
+                            (uint16_t)X86_64_GDT_USER_DATA_SELECTOR,
+                            0ULL, 0U);
+#else
     x86_64_enter_ring3(init_image.entry,
                        init_image.stack_top,
                        (uint16_t)X86_64_GDT_USER_CODE_SELECTOR,
                        (uint16_t)X86_64_GDT_USER_DATA_SELECTOR,
                        0U);
+#endif
 }

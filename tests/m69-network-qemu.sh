@@ -62,7 +62,7 @@ wait_for_prompt() {
     fail_dump "timed out waiting for prompt ${target}"
 }
 
-make -C "${ROOT}" TEST_MODE=shell
+make -C "${ROOT}" TEST_MODE=m69-network
 
 mkfifo "${SERIAL_IN}" "${SERIAL_OUT}"
 exec 3<> "${SERIAL_IN}"

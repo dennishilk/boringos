@@ -177,6 +177,15 @@ BOOT_USER_NAME := boring-init.elf
 BOOT_EXTRA_USER_ELF := $(SHELL_ELF)
 BOOT_EXTRA_USER_NAME := boring-shell.elf
 BOOT_LIMINE_CONF := limine-shell.conf
+else ifeq ($(TEST_MODE),m69-network)
+TEST_MODE_VALUE := 10
+TEST_CPPFLAGS := -DBORING_M69_NETWORK_ACCEPTANCE=1
+TEST_HARNESS_C := kernel/core/shell_test.c
+BOOT_USER_ELF := $(SHELL_INIT_ELF)
+BOOT_USER_NAME := boring-init.elf
+BOOT_EXTRA_USER_ELF := $(SHELL_ELF)
+BOOT_EXTRA_USER_NAME := boring-shell.elf
+BOOT_LIMINE_CONF := limine-shell.conf
 else ifeq ($(TEST_MODE),block)
 TEST_MODE_VALUE := 11
 TEST_HARNESS_C := kernel/core/block_device_test.c
@@ -265,7 +274,7 @@ BOOT_EXTRA3_USER_ELF := $(USER_BUILD_DIR)/wm-client-b.elf
 BOOT_EXTRA4_USER_ELF := $(USER_BUILD_DIR)/wm-client-c.elf
 BOOT_LIMINE_CONF := limine-wm.conf
 else
-$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, block, virtio-block, boringfs-ro, boringfs-rw, persistent-root, m33-ipc, m34-display, m35-wm, m35-wm-death, m36-spawn, m36-desktop, m48-xhci, m64-multi-xhci, or m49-xhci-address)
+$(error unsupported TEST_MODE '$(TEST_MODE)'; use normal, divide, pagefault, ring3, syscall, elf, runtime, console, vfs, ramfs, init, shell, m69-network, block, virtio-block, boringfs-ro, boringfs-rw, persistent-root, m33-ipc, m34-display, m35-wm, m35-wm-death, m36-spawn, m36-desktop, m48-xhci, m64-multi-xhci, or m49-xhci-address)
 endif
 
 LIMINE_VERSION := 12.5.2
